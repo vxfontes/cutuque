@@ -70,3 +70,98 @@ func TestLoadProdEmptyTokenStaysEmpty(t *testing.T) {
 		t.Errorf("Token = %q, quero vazio (prod exige token explícito)", c.Token)
 	}
 }
+
+// clearAPNSEnv zera todas as env vars de APNs para o teste não herdar valores
+// reais do ambiente (config/apns.env pode estar sourced no shell da dev).
+func clearAPNSEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{
+		"CUTUQUE_APNS_KEY_PATH", "CUTUQUE_APNS_KEY_ID",
+		"CUTUQUE_APNS_TEAM_ID", "CUTUQUE_APNS_TOPIC", "CUTUQUE_APNS_HOST",
+	} {
+		t.Setenv(k, "")
+	}
+}
+
+func TestLoadAPNSFromEnv(t *testing.T) {
+	clearAPNSEnv(t)
+	t.Setenv("CUTUQUE_APNS_KEY_PATH", "config/key.p8")
+	t.Setenv("CUTUQUE_APNS_KEY_ID", "ABC123")
+	t.Setenv("CUTUQUE_APNS_TEAM_ID", "TEAM99")
+	t.Setenv("CUTUQUE_APNS_TOPIC", "com.vxfontes.cutuque")
+
+	c := Load()
+
+	if c.APNSKeyPath != "config/key.p8" {
+		t.Errorf("APNSKeyPath = %q", c.APNSKeyPath)
+	}
+	if c.APNSKeyID != "ABC123" {
+		t.Errorf("APNSKeyID = %q", c.APNSKeyID)
+	}
+	if c.APNSTeamID != "TEAM99" {
+		t.Errorf("APNSTeamID = %q", c.APNSTeamID)
+	}
+	if c.APNSTopic != "com.vxfontes.cutuque" {
+		t.Errorf("APNSTopic = %q", c.APNSTopic)
+	}
+}
+
+func TestAPNSHostDefaultsSandboxInDev(t *testing.T) {
+	clearAPNSEnv(t)
+	t.Setenv("CUTUQUE_ENV", "dev")
+
+	if c := Load(); c.APNSHost != "api.sandbox.push.apple.com" {
+		t.Errorf("APNSHost = %q, quero sandbox em dev", c.APNSHost)
+	}
+}
+
+func TestAPNSHostDefaultsProdInProd(t *testing.T) {
+	clearAPNSEnv(t)
+	t.Setenv("CUTUQUE_ENV", "prod")
+
+	if c := Load(); c.APNSHost != "api.push.apple.com" {
+		t.Errorf("APNSHost = %q, quero prod em prod", c.APNSHost)
+	}
+}
+
+func TestAPNSHostExplicitOverrides(t *testing.T) {
+	clearAPNSEnv(t)
+	t.Setenv("CUTUQUE_ENV", "prod")
+	t.Setenv("CUTUQUE_APNS_HOST", "api.sandbox.push.apple.com")
+
+	if c := Load(); c.APNSHost != "api.sandbox.push.apple.com" {
+		t.Errorf("APNSHost = %q, quero override explícito", c.APNSHost)
+	}
+}
+
+func TestAPNSEnabledRequiresAllFields(t *testing.T) {
+	clearAPNSEnv(t)
+	t.Setenv("CUTUQUE_APNS_KEY_PATH", "config/key.p8")
+	t.Setenv("CUTUQUE_APNS_KEY_ID", "ABC123")
+	t.Setenv("CUTUQUE_APNS_TEAM_ID", "TEAM99")
+	// falta o topic
+
+	if c := Load(); c.APNSEnabled() {
+		t.Error("APNSEnabled() = true faltando o topic; quero false")
+	}
+}
+
+func TestAPNSEnabledTrueWhenComplete(t *testing.T) {
+	clearAPNSEnv(t)
+	t.Setenv("CUTUQUE_APNS_KEY_PATH", "config/key.p8")
+	t.Setenv("CUTUQUE_APNS_KEY_ID", "ABC123")
+	t.Setenv("CUTUQUE_APNS_TEAM_ID", "TEAM99")
+	t.Setenv("CUTUQUE_APNS_TOPIC", "com.vxfontes.cutuque")
+
+	if c := Load(); !c.APNSEnabled() {
+		t.Error("APNSEnabled() = false com todos os campos; quero true")
+	}
+}
+
+func TestAPNSDisabledByDefault(t *testing.T) {
+	clearAPNSEnv(t)
+
+	if c := Load(); c.APNSEnabled() {
+		t.Error("APNSEnabled() = true sem nenhuma env APNs; quero false (hub sobe sem APNs)")
+	}
+}
