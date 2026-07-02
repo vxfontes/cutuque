@@ -12,6 +12,11 @@
 
 Herda anteriores. Credencial APNs `.p8` **só no hub** (nunca no app, nunca versionada). Payload do push **não** contém código-fonte — só `{sessionId, machine, agent, state}`.
 
+> **Credenciais já provisionadas (2026-07-02):** a key mora em `config/key.p8` e as env vars
+> (`CUTUQUE_APNS_KEY_PATH`, `CUTUQUE_APNS_KEY_ID`, `CUTUQUE_APNS_TEAM_ID`, `CUTUQUE_APNS_TOPIC`)
+> em `config/apns.env` — diretório `/config/` inteiro no `.gitignore`. Valores também na nota
+> "credenciais" do Maestri. Carregar com `set -a; source config/apns.env; set +a` antes de subir o hub.
+
 ## Tasks (a expandir)
 
 - [ ] **Task 1 — Cliente APNs no hub** — conexão HTTP/2 + JWT (ES256) a partir do `.p8`; enviar push a um device token. Testes com mock do endpoint APNs.

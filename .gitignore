@@ -16,3 +16,6 @@ secrets/
 /app/**/xcuserdata/
 /app/**/*.xcuserstate
 DerivedData/
+
+# Credenciais locais (APNs .p8 etc)
+/config/
