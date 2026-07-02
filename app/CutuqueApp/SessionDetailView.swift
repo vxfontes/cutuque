@@ -8,6 +8,10 @@ final class SessionDetailViewModel: ObservableObject {
     @Published var session: Session
     /// Linhas de output acumuladas (histórico + chunks ao vivo).
     @Published var lines: [String] = []
+    /// Uma ação (aprovar/negar/enviar) está em andamento — desabilita botões.
+    @Published var actionInProgress = false
+    /// Aviso transitório para a UI (ex.: estado mudou no 409).
+    @Published var notice: String?
 
     private let api = APIClient()
     private var liveTask: Task<Void, Never>?
@@ -65,27 +69,174 @@ final class SessionDetailViewModel: ObservableObject {
         liveTask?.cancel()
         liveTask = nil
     }
+
+    // MARK: Ações (aprovar / negar / responder)
+
+    func approve() async {
+        await runAction { try await self.api.approve(sessionID: self.session.id) }
+    }
+
+    func deny() async {
+        await runAction { try await self.api.deny(sessionID: self.session.id) }
+    }
+
+    /// Envia texto livre ao agente. Retorna `true` se enviou (para limpar o campo).
+    func sendInput(_ text: String) async -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return await runAction { try await self.api.sendInput(sessionID: self.session.id, text: trimmed) }
+    }
+
+    /// Executa uma ação com loading; no 409 recarrega a sessão e avisa "o estado mudou".
+    @discardableResult
+    private func runAction(_ perform: @escaping () async throws -> Void) async -> Bool {
+        actionInProgress = true
+        defer { actionInProgress = false }
+        do {
+            try await perform()
+            return true
+        } catch CutuqueError.staleState {
+            await reloadSession()
+            notice = "o estado mudou"
+            return false
+        } catch {
+            notice = error.localizedDescription
+            return false
+        }
+    }
+
+    /// Sem GET de sessão única no contrato: recarrega a lista e recupera a sessão aberta.
+    private func reloadSession() async {
+        if let list = try? await api.sessions(),
+           let mine = list.first(where: { $0.id == session.id }) {
+            session = mine
+        }
+    }
 }
 
 // MARK: - Tela de detalhe
 
 struct SessionDetailView: View {
     @StateObject private var model: SessionDetailViewModel
+    @State private var draft = ""
+    @State private var showScrollToBottom = false
 
     init(session: Session) {
         _model = StateObject(wrappedValue: SessionDetailViewModel(session: session))
+    }
+
+    /// Texto do pedido de permissão, se houver, quando a sessão precisa de você.
+    private var permissionPrompt: String? {
+        guard model.session.state == .needsYou,
+              let prompt = model.session.pendingPrompt,
+              !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return prompt
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
+            // Card de permissão acima do terminal (invariante docs/04: sempre exibe o texto).
+            if let prompt = permissionPrompt {
+                permissionCard(prompt)
+            }
             outputTerminal
+            // Barra para responder ao agente quando ele espera por você.
+            if model.session.state == .needsYou {
+                inputBar
+            }
         }
         .navigationTitle(model.session.title)
         .navigationBarTitleDisplayMode(.inline)
         .task { await model.start() }
         .onDisappear { model.stop() }
+        .alert(
+            "Aviso",
+            isPresented: Binding(
+                get: { model.notice != nil },
+                set: { if !$0 { model.notice = nil } }
+            ),
+            presenting: model.notice
+        ) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { notice in
+            Text(notice)
+        }
+    }
+
+    // MARK: Card de permissão (needs_you com pending_prompt)
+
+    private func permissionCard(_ prompt: String) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Precisa de você", systemImage: "exclamationmark.triangle.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.orange)
+
+            // Texto COMPLETO do pedido — nunca aprovar às cegas.
+            Text(prompt)
+                .font(.callout)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 12) {
+                Button {
+                    Task { await model.approve() }
+                } label: {
+                    Label("Aprovar", systemImage: "checkmark")
+                        .frame(maxWidth: .infinity)
+                }
+                .tint(.green)
+                .accessibilityLabel("Aprovar o pedido")
+
+                Button {
+                    Task { await model.deny() }
+                } label: {
+                    Label("Negar", systemImage: "xmark")
+                        .frame(maxWidth: .infinity)
+                }
+                .tint(.red)
+                .accessibilityLabel("Negar o pedido")
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(model.actionInProgress)
+            .overlay {
+                if model.actionInProgress {
+                    ProgressView()
+                }
+            }
+        }
+        .padding()
+        .background(Color.orange.opacity(0.12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.orange.opacity(0.4), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding()
+    }
+
+    // MARK: Barra de resposta ao agente
+
+    private var inputBar: some View {
+        HStack(spacing: 8) {
+            TextField("responder ao agente...", text: $draft, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(1...4)
+
+            Button {
+                let text = draft
+                Task {
+                    if await model.sendInput(text) { draft = "" }
+                }
+            } label: {
+                Image(systemName: "paperplane.fill")
+            }
+            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.actionInProgress)
+        }
+        .padding()
+        .background(.bar)
     }
 
     // MARK: Cabeçalho (título, máquina · agente, badge de estado)
@@ -99,7 +250,7 @@ struct SessionDetailView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
-                StateBadge(state: model.session.state)
+                StateChip(state: model.session.state)
             }
         }
         .padding()
@@ -107,56 +258,117 @@ struct SessionDetailView: View {
 
     // MARK: Output ao vivo estilo terminal
 
+    private var isRunning: Bool { model.session.state == .running }
+
     private var outputTerminal: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                if model.lines.isEmpty {
-                    Text("sem output ainda")
-                        .font(.system(.footnote, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.top, 40)
-                } else {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(model.lines.enumerated()), id: \.offset) { index, line in
-                            Text(line)
-                                .font(.system(.footnote, design: .monospaced))
-                                .foregroundStyle(.green)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .id(index)
+        GeometryReader { outer in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    if model.lines.isEmpty && !isRunning {
+                        Text("sem output ainda")
+                            .font(.system(.footnote, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.top, 40)
+                    } else {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(Array(model.lines.enumerated()), id: \.offset) { index, line in
+                                lineView(line, isLast: index == model.lines.count - 1)
+                                    .id(index)
+                            }
+                            // Cursor sozinho quando ainda não há output mas está rodando.
+                            if model.lines.isEmpty && isRunning {
+                                BlinkingCursor()
+                            }
+                            // Âncora invisível para o auto-scroll e para medir o fim.
+                            Color.clear.frame(height: 1)
+                                .id("bottom")
+                                .background(bottomProbe)
                         }
-                        // Âncora invisível para o auto-scroll até o fim.
-                        Color.clear.frame(height: 1).id("bottom")
+                        .padding(16)
                     }
-                    .padding(12)
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(Color.black)
-            // Rola até o fim quando chega novo output.
-            .onChange(of: model.lines.count) { _, _ in
-                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                .coordinateSpace(name: "term")
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background(Color.black)
+                // Botão flutuante "descer": aparece quando o fim não está visível.
+                .overlay(alignment: .bottomTrailing) {
+                    if showScrollToBottom {
+                        Button {
+                            withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                        } label: {
+                            Image(systemName: "arrow.down")
+                                .font(.headline)
+                                .padding(12)
+                                .background(.ultraThinMaterial, in: Circle())
+                        }
+                        .padding()
+                        .transition(.opacity.combined(with: .scale))
+                        .accessibilityLabel("Descer para o fim")
+                    }
+                }
+                .onChange(of: model.lines.count) { _, _ in
+                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
+                // Fim visível quando sua posição cai dentro da altura do viewport.
+                .onPreferenceChange(BottomOffsetKey.self) { bottomY in
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showScrollToBottom = bottomY > outer.size.height + 40
+                    }
+                }
             }
         }
     }
+
+    /// Mede a posição do fim do conteúdo no espaço de coordenadas do scroll.
+    private var bottomProbe: some View {
+        GeometryReader { geo in
+            Color.clear.preference(
+                key: BottomOffsetKey.self,
+                value: geo.frame(in: .named("term")).minY
+            )
+        }
+    }
+
+    /// Uma linha do terminal; a última ganha o cursor pulsante quando running.
+    @ViewBuilder
+    private func lineView(_ line: String, isLast: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 2) {
+            Text(line)
+            if isLast && isRunning {
+                BlinkingCursor()
+            }
+        }
+        .font(.system(.footnote, design: .monospaced))
+        .foregroundStyle(.green)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
 }
 
-// MARK: - Badge de estado
+// MARK: - Cursor pulsante do terminal
 
-private struct StateBadge: View {
-    let state: SessionState
+private struct BlinkingCursor: View {
+    @State private var visible = true
 
     var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(state.color)
-                .frame(width: 8, height: 8)
-            Text(state.label)
-                .font(.caption.weight(.medium))
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(state.color.opacity(0.15), in: Capsule())
-        .foregroundStyle(state.color)
+        Text("▌")
+            .font(.system(.footnote, design: .monospaced))
+            .foregroundStyle(.green)
+            .opacity(visible ? 1 : 0)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
+                    visible = false
+                }
+            }
+            .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Preferência para detectar o fim do scroll
+
+private struct BottomOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }

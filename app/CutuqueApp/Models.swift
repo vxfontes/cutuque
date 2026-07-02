@@ -75,6 +75,9 @@ struct Session: Codable, Identifiable, Equatable, Hashable {
     let state: SessionState
     let createdAt: Date
     let updatedAt: Date
+    /// Texto do pedido de permissão/pergunta quando `state == .needsYou`.
+    /// Opcional: pode faltar no payload (decode de `pending_prompt` via snake_case).
+    let pendingPrompt: String?
 }
 
 // MARK: - Mensagens do WebSocket

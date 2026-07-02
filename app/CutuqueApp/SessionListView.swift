@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - ViewModel
 
@@ -10,6 +11,10 @@ final class SessionListViewModel: ObservableObject {
     private let api = APIClient()
     private let health = HealthClient()
     private var liveTask: Task<Void, Never>?
+
+    // Haptics locais: "gostinho do cutucão" antes do push da Fase 4.
+    private let haptics = UINotificationFeedbackGenerator()
+    private var lastHapticAt: Date?
 
     // MARK: Carga inicial e pull-to-refresh
 
@@ -38,8 +43,10 @@ final class SessionListViewModel: ObservableObject {
                 guard let self else { break }
                 switch message {
                 case .snapshot(let all):
-                    // Snapshot substitui todo o estado local.
-                    self.sessions = self.sortedByRecent(all)
+                    // Snapshot substitui todo o estado local (sem haptic — carga inicial).
+                    withAnimation(.snappy) {
+                        self.sessions = self.sortedByRecent(all)
+                    }
                 case .sessionUpdated(let session):
                     // Upsert: substitui a existente ou insere a nova.
                     self.upsert(session)
@@ -63,11 +70,32 @@ final class SessionListViewModel: ObservableObject {
 
     private func upsert(_ session: Session) {
         if let index = sessions.firstIndex(where: { $0.id == session.id }) {
-            sessions[index] = session
+            let previous = sessions[index].state
+            // Só dispara haptic em transição REAL de estado (não em re-render).
+            if previous != session.state {
+                fireHaptic(for: session.state)
+            }
+            withAnimation(.snappy) { sessions[index] = session }
         } else {
-            sessions.append(session)
+            withAnimation(.snappy) { sessions.append(session) }
         }
-        sessions = sortedByRecent(sessions)
+        withAnimation(.snappy) { sessions = sortedByRecent(sessions) }
+    }
+
+    /// Haptic conforme o novo estado, com debounce de no máx. 1 por segundo.
+    private func fireHaptic(for state: SessionState) {
+        let now = Date()
+        if let last = lastHapticAt, now.timeIntervalSince(last) < 1 { return }
+        let type: UINotificationFeedbackGenerator.FeedbackType
+        switch state {
+        case .needsYou: type = .warning
+        case .done:     type = .success
+        case .error:    type = .error
+        default:        return // running/idle não vibram
+        }
+        haptics.prepare()
+        haptics.notificationOccurred(type)
+        lastHapticAt = now
     }
 
     /// Mais recentes primeiro (por updated_at).
@@ -80,26 +108,62 @@ final class SessionListViewModel: ObservableObject {
 
 struct SessionListView: View {
     @StateObject private var model = SessionListViewModel()
+    @State private var showingNew = false
+    @State private var createdSession: Session?
+
+    // Sessões que precisam de você sobem para uma seção destacada no topo.
+    private var needsYou: [Session] { model.sessions.filter { $0.state == .needsYou } }
+    private var others: [Session] { model.sessions.filter { $0.state != .needsYou } }
 
     var body: some View {
-        List(model.sessions) { session in
-            NavigationLink(value: session) {
-                SessionRow(session: session)
+        List {
+            if !needsYou.isEmpty {
+                Section {
+                    ForEach(needsYou) { sessionLink($0) }
+                } header: {
+                    Label("Precisa de você", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .textCase(nil)
+                }
+            }
+            if !others.isEmpty {
+                Section("Sessões") {
+                    ForEach(others) { sessionLink($0) }
+                }
             }
         }
-        .listStyle(.plain)
+        .listStyle(.insetGrouped)
         .navigationDestination(for: Session.self) { session in
+            SessionDetailView(session: session)
+        }
+        // Navegação programática para a sessão recém-criada.
+        .navigationDestination(item: $createdSession) { session in
             SessionDetailView(session: session)
         }
         .overlay {
             if model.sessions.isEmpty {
-                ContentUnavailableView("Nenhuma sessão", systemImage: "terminal")
+                emptyState
             }
         }
         .navigationTitle("Sessões")
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .topBarLeading) {
                 HubStatusIndicator(status: model.hubStatus)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showingNew = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .accessibilityLabel("Nova tarefa")
+            }
+        }
+        .sheet(isPresented: $showingNew) {
+            NewSessionView { session in
+                // Sucesso: fecha a sheet e navega pro detalhe da sessão criada.
+                showingNew = false
+                createdSession = session
             }
         }
         .refreshable { await model.refresh() }
@@ -108,6 +172,30 @@ struct SessionListView: View {
             model.startLiveUpdates()
         }
         .onDisappear { model.stopLiveUpdates() }
+    }
+
+    // MARK: Subviews
+
+    private func sessionLink(_ session: Session) -> some View {
+        NavigationLink(value: session) {
+            SessionRow(session: session)
+        }
+    }
+
+    // Empty state convidativo: ícone + texto + atalho para nova tarefa.
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Label("Nenhuma sessão", systemImage: "terminal")
+        } description: {
+            Text("Dispare uma tarefa para acompanhar seus agentes por aqui.")
+        } actions: {
+            Button {
+                showingNew = true
+            } label: {
+                Label("Nova tarefa", systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
+        }
     }
 }
 
@@ -122,22 +210,44 @@ private struct SessionRow: View {
             Circle()
                 .fill(session.state.color)
                 .frame(width: 12, height: 12)
+                .accessibilityLabel(session.state.label)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.title)
                     .font(.body)
-                Text("\(session.machine) · \(session.agent)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Text("\(session.machine) · \(session.agent)")
+                    Text("·")
+                    RelativeTime(date: session.updatedAt)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             Spacer()
 
-            Text(session.state.label)
-                .font(.caption)
-                .foregroundStyle(session.state.color)
+            StateChip(state: session.state)
         }
         .padding(.vertical, 4)
+    }
+}
+
+// MARK: - Timestamp relativo (atualiza sozinho a cada 30s)
+
+private struct RelativeTime: View {
+    let date: Date
+
+    private static let formatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.locale = Locale(identifier: "pt_BR")
+        f.unitsStyle = .abbreviated // ex.: "há 2 min"
+        return f
+    }()
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            Text(Self.formatter.localizedString(for: date, relativeTo: context.date))
+        }
     }
 }
 
@@ -147,19 +257,30 @@ private struct HubStatusIndicator: View {
     let status: HealthStatus
 
     var body: some View {
+        icon
+            .labelStyle(.iconOnly)
+            .accessibilityLabel(accessibilityText)
+    }
+
+    @ViewBuilder private var icon: some View {
         switch status {
         case .unknown:
             Label("verificando", systemImage: "circle.dotted")
-                .labelStyle(.iconOnly)
                 .foregroundStyle(.secondary)
         case .online:
             Label("hub online", systemImage: "circle.fill")
-                .labelStyle(.iconOnly)
                 .foregroundStyle(.green)
         case .offline:
             Label("hub offline", systemImage: "circle.fill")
-                .labelStyle(.iconOnly)
                 .foregroundStyle(.red)
+        }
+    }
+
+    private var accessibilityText: String {
+        switch status {
+        case .unknown: return "verificando o hub"
+        case .online:  return "hub online"
+        case .offline: return "hub offline"
         }
     }
 }

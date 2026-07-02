@@ -1,5 +1,26 @@
 import Foundation
 
+/// Erros tipados do hub Cutuque, com mensagem amigável para a UI.
+enum CutuqueError: LocalizedError, Equatable {
+    /// 400/504 — carrega o status HTTP e a mensagem devolvida pelo servidor.
+    case server(status: Int, message: String)
+    /// 409 — o estado da sessão mudou entre a leitura e a ação.
+    case staleState
+    /// 404 — sessão inexistente.
+    case notFound
+    /// Qualquer outro status inesperado.
+    case unexpected(status: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .server(_, let message): return message
+        case .staleState:             return "o estado mudou"
+        case .notFound:               return "sessão não encontrada"
+        case .unexpected(let status): return "erro inesperado (\(status))"
+        }
+    }
+}
+
 /// Cliente do hub Cutuque (REST + WebSocket).
 /// `baseURL` e `token` são constantes fáceis de trocar (dev → Tailscale na Fase 5).
 struct APIClient {
@@ -50,6 +71,91 @@ struct APIClient {
 
     private struct OutputEnvelope: Decodable {
         let chunks: [String]
+    }
+
+    // MARK: - Ações (Fase 3)
+
+    /// Dispara uma nova sessão. `201` → Session; `400`/`504` → `CutuqueError.server`.
+    func createSession(machine: String, agent: String, prompt: String) async throws -> Session {
+        var request = URLRequest(url: baseURL.appendingPathComponent("sessions"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([
+            "machine": machine, "agent": agent, "prompt": prompt,
+        ])
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        switch http.statusCode {
+        case 201:
+            return try JSONDecoder.cutuque.decode(SessionEnvelope.self, from: data).session
+        case 400, 504:
+            // Ex.: {"error":"unknown_machine"} ou {"error":"launch_timeout"}.
+            let message = Self.errorMessage(from: data) ?? "erro do servidor"
+            throw CutuqueError.server(status: http.statusCode, message: message)
+        default:
+            throw CutuqueError.unexpected(status: http.statusCode)
+        }
+    }
+
+    /// Aprova o pedido de permissão pendente da sessão.
+    func approve(sessionID: String) async throws {
+        try await postAction(sessionID: sessionID, action: "approve")
+    }
+
+    /// Nega o pedido de permissão pendente da sessão.
+    func deny(sessionID: String) async throws {
+        try await postAction(sessionID: sessionID, action: "deny")
+    }
+
+    /// Envia texto livre como resposta ao agente.
+    func sendInput(sessionID: String, text: String) async throws {
+        let url = baseURL
+            .appendingPathComponent("sessions")
+            .appendingPathComponent(sessionID)
+            .appendingPathComponent("input")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["text": text])
+        try await send(request)
+    }
+
+    // MARK: Helpers das ações
+
+    private func postAction(sessionID: String, action: String) async throws {
+        let url = baseURL
+            .appendingPathComponent("sessions")
+            .appendingPathComponent(sessionID)
+            .appendingPathComponent(action)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        try await send(request)
+    }
+
+    /// Dispara o request e mapeia status → erro tipado (200 = sucesso silencioso).
+    private func send(_ request: URLRequest) async throws {
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        switch http.statusCode {
+        case 200:  return
+        case 404:  throw CutuqueError.notFound
+        case 409:  throw CutuqueError.staleState
+        default:   throw CutuqueError.unexpected(status: http.statusCode)
+        }
+    }
+
+    private struct SessionEnvelope: Decodable {
+        let session: Session
+    }
+
+    /// Extrai `{"error":"..."}` de uma resposta de erro, se presente.
+    private static func errorMessage(from data: Data) -> String? {
+        struct ErrorBody: Decodable { let error: String }
+        return (try? JSONDecoder().decode(ErrorBody.self, from: data))?.error
     }
 
     // MARK: - WebSocket ao vivo
