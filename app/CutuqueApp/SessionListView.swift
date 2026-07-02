@@ -39,6 +39,9 @@ final class SessionListViewModel: ObservableObject {
                 case .sessionUpdated(let session):
                     // Upsert: substitui a existente ou insere a nova.
                     self.upsert(session)
+                case .outputChunk:
+                    // A lista não exibe output; chunks são tratados na tela de detalhe.
+                    break
                 }
                 // Qualquer mensagem recebida confirma que o hub está online.
                 self.hubStatus = .online
@@ -76,9 +79,14 @@ struct SessionListView: View {
 
     var body: some View {
         List(model.sessions) { session in
-            SessionRow(session: session)
+            NavigationLink(value: session) {
+                SessionRow(session: session)
+            }
         }
         .listStyle(.plain)
+        .navigationDestination(for: Session.self) { session in
+            SessionDetailView(session: session)
+        }
         .overlay {
             if model.sessions.isEmpty {
                 ContentUnavailableView("Nenhuma sessão", systemImage: "terminal")

@@ -67,7 +67,7 @@ enum SessionState: String, Codable {
 
 /// Uma sessão de agente reportada pelo hub.
 /// Chaves em snake_case são resolvidas via `convertFromSnakeCase` no decoder compartilhado.
-struct Session: Codable, Identifiable, Equatable {
+struct Session: Codable, Identifiable, Equatable, Hashable {
     let id: String
     let machine: String
     let agent: String
@@ -82,12 +82,14 @@ struct Session: Codable, Identifiable, Equatable {
 /// Mensagens recebidas pelo canal /ws.
 /// - `snapshot`: lista completa recebida ao conectar (substitui o estado local).
 /// - `sessionUpdated`: uma sessão mudou (upsert na lista).
+/// - `outputChunk`: um pedaço de output de uma sessão (usado na tela de detalhe).
 enum WSMessage: Decodable {
     case snapshot([Session])
     case sessionUpdated(Session)
+    case outputChunk(sessionID: String, data: String)
 
     private enum CodingKeys: String, CodingKey {
-        case type, sessions, session
+        case type, sessions, session, sessionId, data
     }
 
     init(from decoder: Decoder) throws {
@@ -100,6 +102,11 @@ enum WSMessage: Decodable {
         case "session_updated":
             let session = try container.decode(Session.self, forKey: .session)
             self = .sessionUpdated(session)
+        case "output_chunk":
+            // `session_id` vira `sessionId` via convertFromSnakeCase no decoder compartilhado.
+            let sessionID = try container.decode(String.self, forKey: .sessionId)
+            let data = try container.decode(String.self, forKey: .data)
+            self = .outputChunk(sessionID: sessionID, data: data)
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type,

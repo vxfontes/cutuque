@@ -27,6 +27,31 @@ struct APIClient {
         let sessions: [Session]
     }
 
+    /// Busca o histórico de output de uma sessão (últimos ~200 chunks).
+    /// Se o endpoint ainda não existir (adapter em construção), devolve `[]` graciosamente.
+    func output(sessionID: String) async throws -> [String] {
+        let url = baseURL
+            .appendingPathComponent("sessions")
+            .appendingPathComponent(sessionID)
+            .appendingPathComponent("output")
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        // Endpoint ainda não implementado no hub → sem output (estado vazio gracioso).
+        guard http.statusCode == 200 else { return [] }
+
+        let envelope = try JSONDecoder.cutuque.decode(OutputEnvelope.self, from: data)
+        return envelope.chunks
+    }
+
+    private struct OutputEnvelope: Decodable {
+        let chunks: [String]
+    }
+
     // MARK: - WebSocket ao vivo
 
     /// Stream de mensagens do /ws com reconexão automática.
