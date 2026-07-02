@@ -93,6 +93,40 @@ func (r *Registry) UpdateState(id string, st session.State) error {
 	return nil
 }
 
+// SetPendingPrompt define o texto do pedido pendente de uma sessão e notifica
+// os subscribers (o app precisa exibir o texto antes de a usuária aprovar).
+// No-op se o id não existir ou se o texto já for o atual (evita broadcast à
+// toa). Não mexe em UpdatedAt: a transição de estado é quem marca o tempo.
+func (r *Registry) SetPendingPrompt(id, text string) {
+	r.mu.Lock()
+	s, ok := r.byID[id]
+	if !ok || s.PendingPrompt == text {
+		r.mu.Unlock()
+		return
+	}
+	s.PendingPrompt = text
+	r.byID[id] = s
+	r.mu.Unlock()
+
+	r.broadcast(s)
+}
+
+// ClearPendingPrompt limpa o pedido pendente e notifica os subscribers. No-op
+// se o id não existir ou se já estiver vazio (idempotente, sem broadcast à toa).
+func (r *Registry) ClearPendingPrompt(id string) {
+	r.mu.Lock()
+	s, ok := r.byID[id]
+	if !ok || s.PendingPrompt == "" {
+		r.mu.Unlock()
+		return
+	}
+	s.PendingPrompt = ""
+	r.byID[id] = s
+	r.mu.Unlock()
+
+	r.broadcast(s)
+}
+
 // Subscribe cria uma inscrição nas mudanças do Registry. Cada Add/UpdateState
 // envia a sessão afetada para C.
 func (r *Registry) Subscribe() *Subscription {

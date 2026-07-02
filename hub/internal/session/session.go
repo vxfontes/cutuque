@@ -18,12 +18,18 @@ const (
 
 // Session é uma sessão de agente conhecida pelo hub.
 // Os timestamps são serializados em RFC3339 (padrão do time.Time em JSON).
+//
+// PendingPrompt é o texto do pedido pendente quando a sessão está em needs_you
+// (resumo do permission_requested ou a pergunta do needs_input). O app o exibe
+// antes de a usuária aprovar — invariante de segurança: nunca aprovar às cegas
+// (docs/03). Fica vazio nos demais estados; o Engine o mantém (único escritor).
 type Session struct {
-	ID        string    `json:"id"`
-	Machine   string    `json:"machine"`
-	Agent     string    `json:"agent"`
-	Title     string    `json:"title"`
-	State     State     `json:"state"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID            string    `json:"id"`
+	Machine       string    `json:"machine"`
+	Agent         string    `json:"agent"`
+	Title         string    `json:"title"`
+	State         State     `json:"state"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	PendingPrompt string    `json:"pending_prompt,omitempty"`
 }

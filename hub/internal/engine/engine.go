@@ -27,7 +27,8 @@ func New(reg *registry.Registry) *Engine {
 //     running (novo disparo sobre idle/done/error).
 //   - output_chunk: mantém o estado (a sessão segue running); o armazenamento
 //     do output é feito à parte (ver registry.AppendOutput).
-//   - needs_input / permission_requested: → needs_you.
+//   - needs_input / permission_requested: → needs_you (e guarda o PendingPrompt).
+//   - user_responded: → running (a usuária aprovou/respondeu).
 //   - finished: → done.
 //   - errored: → error.
 //
@@ -57,10 +58,26 @@ func (e *Engine) Apply(ev event.Event) {
 	if !exists {
 		return // sessão desconhecida: ignora
 	}
+	// user_responded só faz sentido saindo de needs_you (a usuária respondeu ao
+	// pedido). De qualquer outro estado é no-op: evita regredir done→running numa
+	// corrida entre a resposta (goroutine HTTP) e o evento terminal do stream
+	// (goroutine do Runner) — ambos chamam Apply.
+	if ev.Type == event.UserResponded && cur.State != session.StateNeedsYou {
+		return
+	}
 	if cur.State == target {
 		return // redundante: no-op (não mexe em UpdatedAt nem faz broadcast)
 	}
 	_ = e.reg.UpdateState(ev.SessionID, target)
+
+	// PendingPrompt (o texto que o app exibe): entra em needs_you com o resumo
+	// do pedido; some ao sair de needs_you (aprovou/terminou/errou). O Engine
+	// segue o único escritor do Registry.
+	if target == session.StateNeedsYou {
+		e.reg.SetPendingPrompt(ev.SessionID, ev.Data)
+	} else {
+		e.reg.ClearPendingPrompt(ev.SessionID)
+	}
 }
 
 // ensureRunning garante que a sessão exista e esteja em running. Na criação,
@@ -92,6 +109,8 @@ func targetState(t event.Type) (session.State, bool) {
 	switch t {
 	case event.NeedsInput, event.PermissionRequested:
 		return session.StateNeedsYou, true
+	case event.UserResponded:
+		return session.StateRunning, true
 	case event.Finished:
 		return session.StateDone, true
 	case event.Errored:

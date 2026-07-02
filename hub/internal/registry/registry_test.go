@@ -61,6 +61,81 @@ func TestListOrderedByCreatedAt(t *testing.T) {
 	}
 }
 
+func TestSetPendingPromptBroadcasts(t *testing.T) {
+	r := New()
+	r.Add(mkSession("a", time.Now()))
+
+	sub := r.Subscribe()
+	defer r.Unsubscribe(sub)
+
+	r.SetPendingPrompt("a", "Bash: rm -rf / — apagar tudo")
+
+	got, _ := r.Get("a")
+	if got.PendingPrompt != "Bash: rm -rf / — apagar tudo" {
+		t.Errorf("PendingPrompt = %q, quero o texto definido", got.PendingPrompt)
+	}
+	select {
+	case s := <-sub.C:
+		if s.PendingPrompt == "" {
+			t.Errorf("broadcast sem PendingPrompt, quero o texto")
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("SetPendingPrompt não fez broadcast")
+	}
+}
+
+func TestSetPendingPromptSameTextNoBroadcast(t *testing.T) {
+	r := New()
+	r.Add(mkSession("a", time.Now()))
+	r.SetPendingPrompt("a", "x")
+
+	sub := r.Subscribe()
+	defer r.Unsubscribe(sub)
+	r.SetPendingPrompt("a", "x") // mesmo texto: no-op
+
+	select {
+	case <-sub.C:
+		t.Errorf("SetPendingPrompt com mesmo texto fez broadcast, quero no-op")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestClearPendingPromptBroadcastsAndIsIdempotent(t *testing.T) {
+	r := New()
+	r.Add(mkSession("a", time.Now()))
+	r.SetPendingPrompt("a", "algo")
+
+	sub := r.Subscribe()
+	defer r.Unsubscribe(sub)
+
+	r.ClearPendingPrompt("a")
+	if got, _ := r.Get("a"); got.PendingPrompt != "" {
+		t.Errorf("PendingPrompt = %q, quero vazio após clear", got.PendingPrompt)
+	}
+	select {
+	case <-sub.C:
+	case <-time.After(time.Second):
+		t.Fatalf("ClearPendingPrompt não fez broadcast")
+	}
+
+	// Segundo clear: já vazio, não deve fazer broadcast.
+	r.ClearPendingPrompt("a")
+	select {
+	case <-sub.C:
+		t.Errorf("ClearPendingPrompt idempotente fez broadcast, quero no-op")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestPendingPromptOnMissingSessionIsNoOp(t *testing.T) {
+	r := New()
+	r.SetPendingPrompt("nada", "x") // não deve panicar nem criar sessão
+	r.ClearPendingPrompt("nada")
+	if _, ok := r.Get("nada"); ok {
+		t.Errorf("sessão inexistente foi criada, quero no-op")
+	}
+}
+
 func TestUpdateStateChangesStateAndUpdatedAt(t *testing.T) {
 	r := New()
 	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)

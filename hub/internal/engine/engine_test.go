@@ -43,6 +43,7 @@ func TestApplyTransitionsTable(t *testing.T) {
 		{"running+finished => done", session.StateRunning, event.Finished, session.StateDone},
 		{"running+errored => error", session.StateRunning, event.Errored, session.StateError},
 		{"needs_you+finished => done", session.StateNeedsYou, event.Finished, session.StateDone},
+		{"needs_you+user_responded => running", session.StateNeedsYou, event.UserResponded, session.StateRunning},
 		{"done+session_started => running", session.StateDone, event.SessionStarted, session.StateRunning},
 		{"idle+session_started => running", session.StateIdle, event.SessionStarted, session.StateRunning},
 		{"error+session_started => running", session.StateError, event.SessionStarted, session.StateRunning},
@@ -112,6 +113,64 @@ func TestApplyUnknownSessionIsIgnored(t *testing.T) {
 
 	if _, ok := reg.Get("fantasma"); ok {
 		t.Errorf("sessão fantasma não deveria existir")
+	}
+}
+
+func TestApplyPermissionSetsPendingPrompt(t *testing.T) {
+	reg := registry.New()
+	eng := New(reg)
+	seed(reg, "s", session.StateRunning)
+
+	eng.Apply(event.Event{SessionID: "s", Type: event.PermissionRequested, Data: "Bash: touch x.txt — Create empty probe file", ControlID: "req-1"})
+
+	got, _ := reg.Get("s")
+	if got.State != session.StateNeedsYou {
+		t.Fatalf("State = %q, quero \"needs_you\"", got.State)
+	}
+	if got.PendingPrompt != "Bash: touch x.txt — Create empty probe file" {
+		t.Errorf("PendingPrompt = %q, quero o resumo do pedido", got.PendingPrompt)
+	}
+}
+
+func TestApplyNeedsInputSetsPendingPrompt(t *testing.T) {
+	reg := registry.New()
+	eng := New(reg)
+	seed(reg, "s", session.StateRunning)
+
+	eng.Apply(event.Event{SessionID: "s", Type: event.NeedsInput, Data: "posso continuar?"})
+
+	if got, _ := reg.Get("s"); got.PendingPrompt != "posso continuar?" {
+		t.Errorf("PendingPrompt = %q, quero a pergunta", got.PendingPrompt)
+	}
+}
+
+func TestApplyUserRespondedClearsPendingPrompt(t *testing.T) {
+	reg := registry.New()
+	eng := New(reg)
+	seed(reg, "s", session.StateRunning)
+	eng.Apply(event.Event{SessionID: "s", Type: event.PermissionRequested, Data: "algo perigoso"})
+
+	eng.Apply(event.Event{SessionID: "s", Type: event.UserResponded})
+
+	got, _ := reg.Get("s")
+	if got.State != session.StateRunning {
+		t.Errorf("State = %q, quero \"running\" após user_responded", got.State)
+	}
+	if got.PendingPrompt != "" {
+		t.Errorf("PendingPrompt = %q, quero vazio ao sair de needs_you", got.PendingPrompt)
+	}
+}
+
+func TestApplyFinishedClearsPendingPrompt(t *testing.T) {
+	reg := registry.New()
+	eng := New(reg)
+	seed(reg, "s", session.StateRunning)
+	eng.Apply(event.Event{SessionID: "s", Type: event.NeedsInput, Data: "pergunta"})
+
+	eng.Apply(event.Event{SessionID: "s", Type: event.Finished})
+
+	if got, _ := reg.Get("s"); got.PendingPrompt != "" {
+		t.Errorf("PendingPrompt = %q, quero vazio após finished", got.PendingPrompt)
 	}
 }
 
