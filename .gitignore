@@ -19,3 +19,4 @@ DerivedData/
 
 # Credenciais locais (APNs .p8 etc)
 /config/
+/app/build/
