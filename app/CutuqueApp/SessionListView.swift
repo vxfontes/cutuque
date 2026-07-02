@@ -108,70 +108,97 @@ final class SessionListViewModel: ObservableObject {
 
 struct SessionListView: View {
     @StateObject private var model = SessionListViewModel()
+    // Router de deep-link vindo de uma notificação (Fase 4).
+    @EnvironmentObject private var router: Router
     @State private var showingNew = false
-    @State private var createdSession: Session?
+    // Pilha de navegação; empurramos a sessão (criada ou deep-link) programaticamente.
+    // Um único destino `for: Session.self` serve tanto o NavigationLink quanto os pushes.
+    @State private var path: [Session] = []
 
     // Sessões que precisam de você sobem para uma seção destacada no topo.
     private var needsYou: [Session] { model.sessions.filter { $0.state == .needsYou } }
     private var others: [Session] { model.sessions.filter { $0.state != .needsYou } }
 
     var body: some View {
-        List {
-            if !needsYou.isEmpty {
-                Section {
-                    ForEach(needsYou) { sessionLink($0) }
-                } header: {
-                    Label("Precisa de você", systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .textCase(nil)
+        NavigationStack(path: $path) {
+            List {
+                if !needsYou.isEmpty {
+                    Section {
+                        ForEach(needsYou) { sessionLink($0) }
+                    } header: {
+                        Label("Precisa de você", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .textCase(nil)
+                    }
+                }
+                if !others.isEmpty {
+                    Section("Sessões") {
+                        ForEach(others) { sessionLink($0) }
+                    }
                 }
             }
-            if !others.isEmpty {
-                Section("Sessões") {
-                    ForEach(others) { sessionLink($0) }
+            .listStyle(.insetGrouped)
+            // Destino único para navegação por valor (NavigationLink) e por push (path).
+            .navigationDestination(for: Session.self) { session in
+                SessionDetailView(session: session)
+            }
+            .overlay {
+                if model.sessions.isEmpty {
+                    emptyState
                 }
             }
-        }
-        .listStyle(.insetGrouped)
-        .navigationDestination(for: Session.self) { session in
-            SessionDetailView(session: session)
-        }
-        // Navegação programática para a sessão recém-criada.
-        .navigationDestination(item: $createdSession) { session in
-            SessionDetailView(session: session)
-        }
-        .overlay {
-            if model.sessions.isEmpty {
-                emptyState
-            }
-        }
-        .navigationTitle("Sessões")
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                HubStatusIndicator(status: model.hubStatus)
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showingNew = true
-                } label: {
-                    Image(systemName: "plus")
+            .navigationTitle("Sessões")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    HubStatusIndicator(status: model.hubStatus)
                 }
-                .accessibilityLabel("Nova tarefa")
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showingNew = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel("Nova tarefa")
+                }
+            }
+            .sheet(isPresented: $showingNew) {
+                NewSessionView { session in
+                    // Sucesso: fecha a sheet e navega pro detalhe da sessão criada.
+                    showingNew = false
+                    path.append(session)
+                }
+            }
+            .refreshable { await model.refresh() }
+            .task {
+                await model.refresh()
+                model.startLiveUpdates()
+                resolveDeepLink() // pode haver um push pendente antes da lista carregar
+            }
+            .onDisappear { model.stopLiveUpdates() }
+            // Deep-link do push: quando o Router aponta uma sessão, navega até ela.
+            .onChange(of: router.pendingSessionID) { _, _ in resolveDeepLink() }
+            // A sessão do push pode chegar só depois da lista carregar via WS/REST.
+            .onChange(of: model.sessions) { _, _ in resolveDeepLink() }
+            // Ao fechar a sheet de nova tarefa, resolve um deep-link que tenha
+            // chegado enquanto ela estava aberta (evita navegar por baixo dela).
+            .onChange(of: showingNew) { _, isShowing in
+                if !isShowing { resolveDeepLink() }
             }
         }
-        .sheet(isPresented: $showingNew) {
-            NewSessionView { session in
-                // Sucesso: fecha a sheet e navega pro detalhe da sessão criada.
-                showingNew = false
-                createdSession = session
+    }
+
+    /// Resolve o deep-link pendente: se a sessão já está na lista, navega e limpa.
+    /// Se ainda não chegou (lista carregando), mantém pendente para tentar de novo.
+    /// Não navega com a sheet de nova tarefa aberta — adia até ela fechar.
+    private func resolveDeepLink() {
+        guard !showingNew, let id = router.pendingSessionID else { return }
+        if let session = model.sessions.first(where: { $0.id == id }) {
+            // Evita empurrar duas vezes o mesmo detalhe.
+            if path.last?.id != session.id {
+                path.append(session)
             }
+            router.pendingSessionID = nil
         }
-        .refreshable { await model.refresh() }
-        .task {
-            await model.refresh()
-            model.startLiveUpdates()
-        }
-        .onDisappear { model.stopLiveUpdates() }
     }
 
     // MARK: Subviews

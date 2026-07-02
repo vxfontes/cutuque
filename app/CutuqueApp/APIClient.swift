@@ -73,6 +73,25 @@ struct APIClient {
         let chunks: [String]
     }
 
+    // MARK: - Push (Fase 4)
+
+    /// Registra o device token de APNs no hub. `POST /devices` (Bearer).
+    /// Body: {"token":"<hex>","platform":"ios"}. Espera 200 {"ok":true}.
+    func registerDevice(token deviceToken: String) async throws {
+        var request = URLRequest(url: baseURL.appendingPathComponent("devices"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([
+            "token": deviceToken, "platform": "ios",
+        ])
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+    }
+
     // MARK: - Ações (Fase 3)
 
     /// Dispara uma nova sessão. `201` → Session; `400`/`504` → `CutuqueError.server`.

@@ -8,6 +8,13 @@ targets:
     type: application
     platform: iOS
     sources: [CutuqueApp]
+    # Entitlements de push (Fase 4). aps-environment=development para APNs de dev.
+    # No simulador, com CODE_SIGNING_ALLOWED=NO, o arquivo não é embutido, mas o
+    # build segue funcionando e o push simulado (xcrun simctl push) dispensa APNs real.
+    entitlements:
+      path: CutuqueApp/CutuqueApp.entitlements
+      properties:
+        aps-environment: development
     info:
       path: CutuqueApp/Info.plist
       properties:
