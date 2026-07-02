@@ -30,8 +30,12 @@ final class SessionListViewModel: ObservableObject {
     func startLiveUpdates() {
         guard liveTask == nil else { return }
         liveTask = Task { [weak self] in
-            guard let self else { return }
-            for await message in self.api.liveUpdates() {
+            // Não reter self pela vida do loop: desembrulha a cada iteração e
+            // encerra quando o ViewModel morrer (evita ciclo self→task→self
+            // que vazaria a conexão WS — review F2, achado #2).
+            guard let stream = self?.api.liveUpdates() else { return }
+            for await message in stream {
+                guard let self else { break }
                 switch message {
                 case .snapshot(let all):
                     // Snapshot substitui todo o estado local.

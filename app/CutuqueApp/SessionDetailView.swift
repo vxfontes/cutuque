@@ -31,15 +31,23 @@ final class SessionDetailViewModel: ObservableObject {
     private func startLiveUpdates() {
         guard liveTask == nil else { return }
         liveTask = Task { [weak self] in
-            guard let self else { return }
-            for await message in self.api.liveUpdates() {
+            // Não reter self pela vida do loop: desembrulha a cada iteração e
+            // encerra quando o ViewModel morrer (evita ciclo self→task→self
+            // que vazaria a conexão WS — review F2, achado #2).
+            guard let stream = self?.api.liveUpdates() else { return }
+            for await message in stream {
+                guard let self else { break }
                 switch message {
                 case .sessionUpdated(let updated) where updated.id == self.session.id:
                     // Só interessa a sessão aberta; atualiza a badge de estado.
                     self.session = updated
                 case .outputChunk(let sessionID, let data) where sessionID == self.session.id:
-                    // Appenda apenas chunks da sessão aberta.
+                    // Appenda apenas chunks da sessão aberta, espelhando o teto
+                    // de 200 do hub para não crescer sem limite (review F2, #6).
                     self.lines.append(data)
+                    if self.lines.count > 200 {
+                        self.lines.removeFirst(self.lines.count - 200)
+                    }
                 case .snapshot(let all):
                     // Um snapshot pode trazer estado mais recente da sessão aberta.
                     if let mine = all.first(where: { $0.id == self.session.id }) {
