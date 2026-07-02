@@ -27,16 +27,20 @@ type Subscription struct {
 
 // Registry guarda as sessões em memória de forma thread-safe.
 type Registry struct {
-	mu   sync.RWMutex
-	byID map[string]session.Session
-	subs map[*Subscription]struct{}
+	mu      sync.RWMutex
+	byID    map[string]session.Session
+	subs    map[*Subscription]struct{}
+	outputs map[string][]string
+	outSubs map[*OutputSub]struct{}
 }
 
 // New cria um Registry vazio.
 func New() *Registry {
 	return &Registry{
-		byID: make(map[string]session.Session),
-		subs: make(map[*Subscription]struct{}),
+		byID:    make(map[string]session.Session),
+		subs:    make(map[*Subscription]struct{}),
+		outputs: make(map[string][]string),
+		outSubs: make(map[*OutputSub]struct{}),
 	}
 }
 
