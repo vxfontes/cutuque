@@ -13,6 +13,34 @@
 
 Herda anteriores. Este é o **único** momento em que se mexe no servidor do Hub (decisão #13). Em `prod`, o hub escuta **apenas** na interface Tailscale.
 
+## Reconhecimento do servidor (2026-07-02, via agente "macmini" no Maestri)
+
+O servidor `192.0.2.10` (hostname `macmini`) roda **ZimaOS** (Linux/amd64, 4 cores,
+15GB RAM):
+
+- **Apps** = docker compose em `/var/lib/casaos/apps/<app>/docker-compose.yml` (instalar
+  via App Store → "Install a customized app" para aparecer no dashboard); dados em
+  `/DATA/AppData/<app>/`.
+- **Porta 8787 livre**; `network_mode: host` suportado → hub binda direto na interface
+  Tailscale.
+- **Egress APNs verificado** (TLS 1.3 com `api.push.apple.com` OK).
+- **`/` (1.2GB) fica 100% cheio POR DESIGN** (imagem de sistema appliance) — nunca
+  escrever fora de `/DATA` (904GB, ~434GB livres).
+- **Sem Go** no host → build multi-stage Docker ou cross-compile (`GOOS=linux GOARCH=amd64`).
+- **Imagem base**: alpine + openssh-client (o SSHTarget precisa de `ssh`; scratch/distroless
+  não servem). Chaves em `/DATA/AppData/cutuque/ssh/`.
+- **Postgres 16** já roda (app acme) — v2 cria DB/usuário dedicado nessa instância.
+- **claude CLI 2.1.198 instalado no servidor** → o ZimaOS pode virar também um ALVO
+  ("machine: zimaos") no v1/v2, além de hub.
+- Tailscale peers vistos: `example-macbook-air` (online, direct), `example-desktop` e
+  `iphone-15` (offline no momento do recon).
+- Sessão de gerência opera como `root` com `HOME=/DATA` (padrão da plataforma);
+  `/var/lib/casaos/apps` pertence a `vxfontes`.
+
+**Trabalho novo identificado para esta fase:** implementar o **SSHTarget** (hub no Zima →
+`ssh` → `claude` no MacBook). O `Handle` é stdin/stdout, então `exec.Command("ssh", ...)`
+tem o mesmo shape do LocalTarget já testado.
+
 ## Tasks (a expandir)
 
 - [ ] **Task 1 — Alvo offline** — Registry marca sessões como indisponíveis quando o alvo cai; app mostra estado degradado sem travar. Testes.
