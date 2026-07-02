@@ -8,9 +8,9 @@ skill writing-plans) antes de executar cada uma.
 
 | Plano | Versão | Status |
 |-------|:------:|--------|
-| [Fase 0 — Fundações](2026-07-02-fase-0-fundacoes.md) | v0 | **Detalhado, pronto pra executar** |
-| [Fase 1 — Registry + Command API](2026-07-02-fase-1-registry-command-api.md) | v0 | Esboço |
-| [Fase 2 — Adapter Claude (observar)](2026-07-02-fase-2-adapter-claude-observar.md) | v0 | Esboço |
+| [Fase 0 — Fundações](2026-07-02-fase-0-fundacoes.md) | v0 | ✅ **Concluída** (2026-07-02) |
+| [Fase 1 — Registry + Command API](2026-07-02-fase-1-registry-command-api.md) | v0 | ✅ **Concluída** (2026-07-02, review ludmilla aplicada) |
+| [Fase 2 — Adapter Claude (observar)](2026-07-02-fase-2-adapter-claude-observar.md) | v0 | ✅ **Concluída** (2026-07-02; runner ainda não exposto no cmd/hub — entra na Fase 3 junto do launch) |
 | [Fase 3 — Adapter Claude (lançar + aprovar)](2026-07-02-fase-3-adapter-claude-lancar-aprovar.md) | v0 | Esboço |
 | [Fase 4 — Notifier APNs + haptic](2026-07-02-fase-4-notifier-apns-haptic.md) | v0 | Esboço |
 | [Fase 5 — Endurecimento + Deploy no Hub](2026-07-02-fase-5-endurecimento-deploy.md) | v0 | Esboço (fecha o v0) |
