@@ -16,6 +16,10 @@ type hookPayload struct {
 	Message       string `json:"message"`
 }
 
+// maxHookBody limita o corpo do hook: payloads reais têm poucos KB; qualquer
+// coisa maior é lixo ou abuso (DoS por buffer em memória — review F2, achado #3).
+const maxHookBody = 64 * 1024
+
 // HookHandler recebe hooks do Claude Code e os traduz em eventos para o engine:
 //
 //   - Notification → needs_input (Data = message): o agente pediu algo.
@@ -25,6 +29,7 @@ type hookPayload struct {
 // detecção complementar ao stream-json do Runner (docs/02, docs/03).
 func HookHandler(eng *engine.Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxHookBody)
 		var p hookPayload
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil || p.SessionID == "" {
 			w.Header().Set("Content-Type", "application/json")
