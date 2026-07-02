@@ -43,3 +43,30 @@ func TestLoadExplicitBindOverrides(t *testing.T) {
 		t.Errorf("BindAddr = %q, quero \"0.0.0.0\"", c.BindAddr)
 	}
 }
+
+func TestLoadDevDefaultsToken(t *testing.T) {
+	t.Setenv("CUTUQUE_ENV", "dev")
+	t.Setenv("CUTUQUE_TOKEN", "")
+
+	if c := Load(); c.Token != "dev-token" {
+		t.Errorf("Token = %q, quero \"dev-token\"", c.Token)
+	}
+}
+
+func TestLoadDevRespectsExplicitToken(t *testing.T) {
+	t.Setenv("CUTUQUE_ENV", "dev")
+	t.Setenv("CUTUQUE_TOKEN", "meu-token")
+
+	if c := Load(); c.Token != "meu-token" {
+		t.Errorf("Token = %q, quero \"meu-token\"", c.Token)
+	}
+}
+
+func TestLoadProdEmptyTokenStaysEmpty(t *testing.T) {
+	t.Setenv("CUTUQUE_ENV", "prod")
+	t.Setenv("CUTUQUE_TOKEN", "")
+
+	if c := Load(); c.Token != "" {
+		t.Errorf("Token = %q, quero vazio (prod exige token explícito)", c.Token)
+	}
+}
