@@ -27,7 +27,7 @@
 ## SEC-004 — POST /hooks/claude sem limite de tamanho de body (DoS)
 **Severidade:** R3 | **OWASP:** A04:2021 (Insecure Design) / API4:2023 (Unrestricted Resource Consumption)
 **Localização:** `internal/server/hooks.go:28-29`
-**Detectado:** 2026-07-02 | **Status:** open
+**Detectado:** 2026-07-02 | **Status:** resolved (2026-07-02, commit `79aca41`, `MaxBytesReader` de 64KB aplicado; `internal/server/launch.go` replica o mesmo padrão para os novos endpoints de comando)
 **Descrição:** `HookHandler` faz `json.NewDecoder(r.Body).Decode(&p)` sem nenhum `http.MaxBytesReader` ou limite de tamanho de corpo. É o único endpoint de escrita (POST) do hub e já está roteado em produção (`server.go:28`, atrás de auth). Qualquer chamador com o token válido — inclusive um token vazado via SEC-003, ou um script/hook mal configurado — pode enviar um body arbitrariamente grande e forçar o hub (processo único, sem isolamento) a bufferizar tudo em memória antes de rejeitar. Mesmo autenticado, é uma superfície de DoS trivial e barata de fechar.
 **Fix recomendado:** `r.Body = http.MaxBytesReader(w, r.Body, 64*1024)` (ou limite equivalente) antes do `Decode`, respondendo 400/413 quando excedido. Considerar aplicar um limite default para qualquer POST futuro do hub (ex. middleware genérico), não só neste handler.
 
@@ -37,3 +37,17 @@
 **Detectado:** 2026-07-02 | **Status:** accepted
 **Descrição:** `POST /hooks/claude` só exige o token bearer compartilhado; não há nenhuma checagem de que quem está mandando o hook é realmente a máquina/processo dono daquele `session_id`. Um payload forjado (mas com token válido) pode forçar qualquer sessão conhecida para `needs_you` ou `done` arbitrariamente. Isso é consistente com o modelo de confiança documentado (token único por device pessoal, tráfego só dentro da Tailscale, sem multi-tenant) — a mesma fronteira de confiança do SEC-003 — mas agrava o impacto de um eventual vazamento de token: não seria só leitura de estado, mas também injeção de transições falsas (ex.: silenciar um "needs_you" real marcando a sessão como `done`).
 **Fix recomendado:** Nenhuma ação imediata dado o modelo de uso pessoal atual. Se o hub algum dia suportar múltiplos usuários/devices com tokens diferentes, associar sessão a um token/device de origem e validar posse antes de aplicar o hook.
+
+## SEC-006 — Processo `claude` herda todo o ambiente do hub (token e futuros segredos)
+**Severidade:** R1 | **OWASP:** A05:2021 (Security Misconfiguration) / A01:2021 (Broken Access Control por vazamento de credencial)
+**Localização:** `internal/adapter/claudecode/target.go:134-152` (`LocalTarget.Start`, `exec.CommandContext` sem `cmd.Env`)
+**Detectado:** 2026-07-02 | **Status:** open
+**Descrição:** `LocalTarget.Start` cria o `exec.Cmd` sem definir `cmd.Env`, então o processo `claude` herda **todo** o ambiente do hub — inclusive `CUTUQUE_TOKEN`, o único segredo que protege toda a superfície HTTP/WS do hub (launch, approve/deny, leitura de todas as sessões). O próprio docs/10 (armadilha #2) documenta que comandos considerados "seguros" (ex. `echo`) executam **sem passar pelo `control_request`** — ou seja, sem chance de veto do hub. Isso significa que um `env`/`printenv` (ou qualquer comando na allowlist do usuário, ou induzido por prompt injection a partir de conteúdo externo que o agente processe) pode capturar `CUTUQUE_TOKEN` e fazê-lo aparecer no `tool_result` → `output_chunk` normal, ou ser exfiltrado por um comando de rede subsequente — sem nunca passar pelo gate de aprovação. Docs/05 já prevê que credenciais futuras (APNs `.p8`) "ficam só no hub" — se esse segredo também virar env var do processo hub, o mesmo vazamento se aplica a ele.
+**Fix recomendado:** Construir um `cmd.Env` explícito (allowlist) em vez de herdar `os.Environ()` — só o necessário para o `claude` CLI rodar (`PATH`, `HOME`, locale, e a credencial de API do próprio Claude Code se for via env). Nunca deixar `CUTUQUE_TOKEN`/segredos do hub entrarem no env do processo filho. Vale um teste que rode `LocalTarget.Start` e assert que uma env var sentinela setada no processo do hub NÃO aparece no ambiente do filho.
+
+## SEC-007 — Sem limite de sessões/processos concorrentes lançados
+**Severidade:** R3 | **OWASP:** API4:2023 (Unrestricted Resource Consumption)
+**Localização:** `internal/launcher/launcher.go:83-121` (`Launch`, sem checagem de `len(handles)` ou qualquer teto)
+**Detectado:** 2026-07-02 | **Status:** open
+**Descrição:** Cada `POST /sessions` autenticado spawna um processo `claude` real (custo de API real, não só CPU/memória local). Não há nenhum teto de sessões/processos vivos simultâneos — um cliente com bug (retry em loop), um double-tap sem debounce eficaz, ou um token vazado (SEC-003) pode disparar lançamentos ilimitados, e cada um custa dinheiro de verdade além de recursos do host. Diferente das Fases 1/2 (sessões só eram metadado), a Fase 3 introduz esse custo real pela primeira vez.
+**Fix recomendado:** `Launcher` rejeitar `Launch` acima de um teto configurável (ex. 5-10 para uma máquina pessoal) com um erro tipado (`ErrTooManyLaunches` → 429/503), contando `len(l.handles)` sob o mesmo mutex já existente.
