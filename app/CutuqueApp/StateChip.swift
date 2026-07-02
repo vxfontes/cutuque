@@ -14,11 +14,14 @@ struct StateChip: View {
                 .frame(width: 7, height: 7)
             Text(state.label)
                 .font(.caption.weight(.medium))
+                .lineLimit(1)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(state.color.opacity(0.15), in: Capsule())
         .foregroundStyle(state.color)
+        // Nunca quebra: hugga o conteúdo e deixa a largura sobrando para o texto da row.
+        .fixedSize(horizontal: true, vertical: false)
         // Leitor de tela anuncia só o rótulo do estado (ex.: "precisa de você").
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(state.label)

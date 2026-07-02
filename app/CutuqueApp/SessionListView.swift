@@ -215,6 +215,7 @@ private struct SessionRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.title)
                     .font(.body)
+                    .lineLimit(1)
                 HStack(spacing: 4) {
                     Text("\(session.machine) · \(session.agent)")
                     Text("·")
@@ -222,9 +223,12 @@ private struct SessionRow: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
             }
+            // Prioridade de layout para o texto: o chip hugga, o texto trunca se faltar espaço.
+            .layoutPriority(1)
 
-            Spacer()
+            Spacer(minLength: 8)
 
             StateChip(state: session.state)
         }
@@ -246,8 +250,15 @@ private struct RelativeTime: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            Text(Self.formatter.localizedString(for: date, relativeTo: context.date))
+            Text(label(relativeTo: context.date))
         }
+    }
+
+    /// "agora" para o passado/futuro recente (evita "em 0 seg."); relativo caso contrário.
+    private func label(relativeTo now: Date) -> String {
+        let delta = now.timeIntervalSince(date)
+        if delta < 10 { return "agora" }
+        return Self.formatter.localizedString(for: date, relativeTo: now)
     }
 }
 
