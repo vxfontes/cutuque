@@ -5,7 +5,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/vxfontes/cutuque/hub/internal/config"
+	"github.com/vxfontes/cutuque/hub/internal/registry"
 )
+
+// testDeps monta config (dev, com token) e um registry vazio para os testes.
+func testDeps() (config.Config, *registry.Registry) {
+	return config.Config{Env: "dev", Token: "secret"}, registry.New()
+}
 
 func TestHealthHandlerReturnsOK(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
@@ -33,12 +41,25 @@ func TestHealthHandlerReturnsOK(t *testing.T) {
 }
 
 func TestRouterServesHealth(t *testing.T) {
+	cfg, reg := testDeps()
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
 
-	Router().ServeHTTP(rec, req)
+	Router(cfg, reg).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /health via Router = %d, quero 200", rec.Code)
+	}
+}
+
+func TestHealthNeedsNoAuth(t *testing.T) {
+	cfg, reg := testDeps() // token "secret", mas /health não exige
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+
+	Router(cfg, reg).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /health sem token = %d, quero 200", rec.Code)
 	}
 }
