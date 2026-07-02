@@ -111,6 +111,7 @@ struct SessionListView: View {
     // Router de deep-link vindo de uma notificação (Fase 4).
     @EnvironmentObject private var router: Router
     @State private var showingNew = false
+    @State private var showingSettings = false
     // Pilha de navegação; empurramos a sessão (criada ou deep-link) programaticamente.
     // Um único destino `for: Session.self` serve tanto o NavigationLink quanto os pushes.
     @State private var path: [Session] = []
@@ -160,6 +161,14 @@ struct SessionListView: View {
                     }
                     .accessibilityLabel("Nova tarefa")
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("Ajustes do hub")
+                }
             }
             .sheet(isPresented: $showingNew) {
                 NewSessionView { session in
@@ -167,6 +176,9 @@ struct SessionListView: View {
                     showingNew = false
                     path.append(session)
                 }
+            }
+            .sheet(isPresented: $showingSettings) {
+                HubSettingsView()
             }
             .refreshable { await model.refresh() }
             .task {

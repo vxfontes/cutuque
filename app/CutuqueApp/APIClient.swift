@@ -22,11 +22,12 @@ enum CutuqueError: LocalizedError, Equatable {
 }
 
 /// Cliente do hub Cutuque (REST + WebSocket).
-/// `baseURL` e `token` são constantes fáceis de trocar (dev → Tailscale na Fase 5).
+/// `baseURL` e `token` vêm dos Ajustes (UserDefaults) — sem rebuild quando o
+/// hub muda de casa (dev local → Tailscale → ZimaOS na Fase 5).
 struct APIClient {
-    // Em dev o hub roda local; no simulador 127.0.0.1 = localhost do Mac.
-    var baseURL = URL(string: "http://127.0.0.1:8787")!
-    var token = "dev-token"
+    // Lidos por request para refletir mudanças da tela de Ajustes na hora.
+    var baseURL: URL { HubSettings.baseURL }
+    var token: String { HubSettings.token }
 
     // MARK: - REST
 

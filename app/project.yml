@@ -24,10 +24,12 @@ targets:
       properties:
         UILaunchScreen: {}
         CFBundleDisplayName: Cutuque
-        # Dev: hub roda local (127.0.0.1). Permite só rede local, não arbitrary loads.
-        # Revisar na Fase 5 (IP Tailscale do Hub).
+        # Dev: HTTP liberado — o hub fala HTTP puro na Tailscale (que já cifra o
+        # túnel) e a faixa CGNAT 100.64/10 do Tailscale NÃO é coberta por
+        # NSAllowsLocalNetworking. Apertar antes de App Store (Fase 5+).
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+          NSAllowsArbitraryLoads: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vxfontes.cutuque
