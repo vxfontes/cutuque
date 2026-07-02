@@ -1,0 +1,18 @@
+# Go
+/hub/bin/
+*.test
+*.out
+
+# Segredos — nunca versionar
+*.p8
+*.pem
+*.key
+secrets/
+.env
+.env.*
+
+# macOS / Xcode
+.DS_Store
+/app/**/xcuserdata/
+/app/**/*.xcuserstate
+DerivedData/
