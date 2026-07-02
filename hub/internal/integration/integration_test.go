@@ -86,7 +86,7 @@ func TestRunnerToRegistryToWebSocket(t *testing.T) {
 	}()
 
 	// Roda o Runner com a fixture real do Claude Code.
-	r := claudecode.NewRunner(eng, reg)
+	r := claudecode.NewRunner(eng)
 	tgt := fileTarget{
 		name: "macbook",
 		path: filepath.Join("..", "adapter", "claudecode", "testdata", "fixture-tooluse.jsonl"),

@@ -19,9 +19,17 @@ const (
 )
 
 // Event é um evento normalizado emitido por um adapter.
+//
+// Machine, Agent e Title são metadados de criação da sessão: os adapters os
+// preenchem no session_started e o State Engine — único escritor de estado —
+// cria a sessão com eles (ver hub/review/log.md, achado #1 da Fase 2). Nos
+// demais tipos de evento ficam vazios.
 type Event struct {
 	SessionID string    `json:"session_id"`
 	Type      Type      `json:"type"`
 	Data      string    `json:"data"`
 	At        time.Time `json:"at"`
+	Machine   string    `json:"machine,omitempty"`
+	Agent     string    `json:"agent,omitempty"`
+	Title     string    `json:"title,omitempty"`
 }

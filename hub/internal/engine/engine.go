@@ -38,7 +38,7 @@ func New(reg *registry.Registry) *Engine {
 func (e *Engine) Apply(ev event.Event) {
 	switch ev.Type {
 	case event.SessionStarted:
-		e.ensureRunning(ev.SessionID)
+		e.ensureRunning(ev)
 		return
 	case event.OutputChunk:
 		// Mantém o estado (a sessão segue running); só guarda o output para o
@@ -63,13 +63,18 @@ func (e *Engine) Apply(ev event.Event) {
 	_ = e.reg.UpdateState(ev.SessionID, target)
 }
 
-// ensureRunning garante que a sessão exista e esteja em running.
-func (e *Engine) ensureRunning(id string) {
-	cur, exists := e.reg.Get(id)
+// ensureRunning garante que a sessão exista e esteja em running. Na criação,
+// usa os metadados (Machine/Agent/Title) vindos do adapter no session_started —
+// mantendo o Engine como único escritor do Registry.
+func (e *Engine) ensureRunning(ev event.Event) {
+	cur, exists := e.reg.Get(ev.SessionID)
 	if !exists {
 		now := time.Now()
 		e.reg.Add(session.Session{
-			ID:        id,
+			ID:        ev.SessionID,
+			Machine:   ev.Machine,
+			Agent:     ev.Agent,
+			Title:     ev.Title,
 			State:     session.StateRunning,
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -77,7 +82,7 @@ func (e *Engine) ensureRunning(id string) {
 		return
 	}
 	if cur.State != session.StateRunning {
-		_ = e.reg.UpdateState(id, session.StateRunning)
+		_ = e.reg.UpdateState(ev.SessionID, session.StateRunning)
 	}
 }
 

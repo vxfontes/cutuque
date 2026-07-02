@@ -39,7 +39,7 @@ func (b bytesTarget) Start(ctx context.Context, prompt string) (io.ReadCloser, e
 func TestRunnerProcessesFixtureToDone(t *testing.T) {
 	reg := registry.New()
 	eng := engine.New(reg)
-	r := NewRunner(eng, reg)
+	r := NewRunner(eng)
 
 	tgt := fileTarget{name: "macbook", path: filepath.Join("testdata", "fixture-simple.jsonl")}
 	if err := r.Run(context.Background(), tgt, "explique a arquitetura do projeto em detalhes técnicos"); err != nil {
@@ -76,7 +76,7 @@ func TestRunnerProcessesFixtureToDone(t *testing.T) {
 func TestRunnerEOFWithoutFinishedErrors(t *testing.T) {
 	reg := registry.New()
 	eng := engine.New(reg)
-	r := NewRunner(eng, reg)
+	r := NewRunner(eng)
 
 	stream := `{"type":"system","subtype":"init","session_id":"sem-fim"}
 {"type":"assistant","message":{"content":[{"type":"text","text":"trabalhando..."}]}}
@@ -100,7 +100,7 @@ func TestRunnerHandlesLongLines(t *testing.T) {
 	// quebrar o parsing.
 	reg := registry.New()
 	eng := engine.New(reg)
-	r := NewRunner(eng, reg)
+	r := NewRunner(eng)
 
 	big := strings.Repeat("x", 200_000)
 	// Como no stream real, toda linha carrega session_id.
@@ -123,7 +123,7 @@ func TestRunnerHandlesLongLines(t *testing.T) {
 func TestRunnerFillsSessionIDForSingleSessionStream(t *testing.T) {
 	reg := registry.New()
 	eng := engine.New(reg)
-	r := NewRunner(eng, reg)
+	r := NewRunner(eng)
 
 	stream := `{"type":"system","subtype":"init","session_id":"unica"}
 {"type":"assistant","message":{"content":[{"type":"text","text":"produzindo"}]}}
