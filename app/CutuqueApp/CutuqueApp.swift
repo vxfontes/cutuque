@@ -4,7 +4,10 @@ import SwiftUI
 struct CutuqueApp: App {
     var body: some Scene {
         WindowGroup {
-            HealthView()
+            // Lista de sessões é a tela raiz da Fase 1.
+            NavigationStack {
+                SessionListView()
+            }
         }
     }
 }
