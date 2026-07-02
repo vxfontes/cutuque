@@ -106,6 +106,86 @@ func TestWSNewSessionBroadcasts(t *testing.T) {
 	}
 }
 
+// Garante que o heartbeat de ping não quebra o stream: com um intervalo curto,
+// vários pings disparam e o cliente ainda recebe session_updated normalmente.
+func TestWSSurvivesPingTicks(t *testing.T) {
+	saved := wsPingInterval
+	wsPingInterval = 20 * time.Millisecond
+	defer func() { wsPingInterval = saved }()
+
+	cfg, reg := testDeps()
+	base := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	reg.Add(session.Session{ID: "a", Machine: "macbook", Agent: "claude-code", Title: "t1", State: session.StateRunning, CreatedAt: base, UpdatedAt: base})
+
+	srv := httptest.NewServer(Router(cfg, reg))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	c, _, err := websocket.Dial(ctx, wsURL(srv.URL), nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.CloseNow()
+
+	var snap map[string]any
+	if err := wsjson.Read(ctx, c, &snap); err != nil {
+		t.Fatalf("lendo snapshot: %v", err)
+	}
+
+	// Deixa vários ciclos de ping passarem antes de gerar um evento.
+	time.Sleep(100 * time.Millisecond)
+	if err := reg.UpdateState("a", session.StateDone); err != nil {
+		t.Fatalf("UpdateState: %v", err)
+	}
+
+	var upd struct {
+		Type    string          `json:"type"`
+		Session session.Session `json:"session"`
+	}
+	if err := wsjson.Read(ctx, c, &upd); err != nil {
+		t.Fatalf("lendo session_updated após pings: %v", err)
+	}
+	if upd.Type != "session_updated" || upd.Session.State != session.StateDone {
+		t.Errorf("recebido %+v, quero session_updated done", upd)
+	}
+}
+
+func TestWSSendsOutputChunk(t *testing.T) {
+	cfg, reg := testDeps()
+	srv := httptest.NewServer(Router(cfg, reg))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	c, _, err := websocket.Dial(ctx, wsURL(srv.URL), nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.CloseNow()
+
+	var snap map[string]any
+	if err := wsjson.Read(ctx, c, &snap); err != nil {
+		t.Fatalf("lendo snapshot: %v", err)
+	}
+
+	reg.AppendOutput("s1", "saída ao vivo")
+
+	var msg struct {
+		Type      string `json:"type"`
+		SessionID string `json:"session_id"`
+		Data      string `json:"data"`
+	}
+	if err := wsjson.Read(ctx, c, &msg); err != nil {
+		t.Fatalf("lendo output_chunk: %v", err)
+	}
+	if msg.Type != "output_chunk" || msg.SessionID != "s1" || msg.Data != "saída ao vivo" {
+		t.Errorf("msg = %+v, quero output_chunk s1 \"saída ao vivo\"", msg)
+	}
+}
+
 func TestWSRequiresAuth(t *testing.T) {
 	cfg, reg := testDeps()
 	srv := httptest.NewServer(Router(cfg, reg))
