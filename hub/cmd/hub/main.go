@@ -5,9 +5,12 @@ import (
 	"os"
 
 	"github.com/vxfontes/cutuque/hub/internal/adapter/claudecode"
+	"github.com/vxfontes/cutuque/hub/internal/apns"
 	"github.com/vxfontes/cutuque/hub/internal/config"
+	"github.com/vxfontes/cutuque/hub/internal/devices"
 	"github.com/vxfontes/cutuque/hub/internal/engine"
 	"github.com/vxfontes/cutuque/hub/internal/launcher"
+	"github.com/vxfontes/cutuque/hub/internal/notifier"
 	"github.com/vxfontes/cutuque/hub/internal/registry"
 	"github.com/vxfontes/cutuque/hub/internal/server"
 )
@@ -33,7 +36,27 @@ func main() {
 	}
 	lch := launcher.New(eng, reg, targets)
 
-	srv := server.New(cfg, reg, lch)
+	// APNs (Fase 4): opcional. Se configurado, sobe o Notifier e habilita a rota
+	// de registro de devices; senão, o hub segue normalmente sem push. O
+	// encerramento do Notifier acompanha o processo (graceful shutdown segue
+	// como dívida — ver review/log.md).
+	var serverOpts []server.RouterOption
+	if cfg.APNSEnabled() {
+		client, err := apns.NewClient(cfg)
+		if err != nil {
+			logger.Error("apns configurado mas a chave não carregou; seguindo sem push", "err", err)
+		} else {
+			store := devices.New()
+			ntf := notifier.New(client, store, reg, logger)
+			ntf.Start()
+			serverOpts = append(serverOpts, server.WithDevices(store))
+			logger.Info("apns habilitado", "host", cfg.APNSHost, "topic", cfg.APNSTopic)
+		}
+	} else {
+		logger.Info("apns desabilitado (credenciais não configuradas); hub sobe sem push")
+	}
+
+	srv := server.New(cfg, reg, lch, serverOpts...)
 
 	logger.Info("cutuque hub subindo", "env", cfg.Env, "addr", cfg.Addr())
 	if err := srv.ListenAndServe(); err != nil {
