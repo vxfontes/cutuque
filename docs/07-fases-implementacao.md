@@ -7,6 +7,10 @@ adicionam alcance e polimento.
 O v0 é intencionalmente enxuto: **MacBook + Claude Code**, app iOS mínimo, e a vibração no
 Watch via notificação espelhada do iPhone.
 
+> **Estratégia de ambiente:** durante o desenvolvimento, o hub roda **local** (na máquina de
+> dev). Subir para o servidor do Hub (`192.0.2.10`) na Tailscale é um passo **único e
+> no fim** (Fase 5), não um deploy contínuo. Um passo de cada vez.
+
 ---
 
 ## Fase 0 — Fundações e infraestrutura
@@ -16,14 +20,14 @@ agente ainda).
 
 **Entregáveis**
 - Repositório Go do hub (estrutura de pastas, lint, CI local, `Makefile`/`taskfile`).
-- Hub sobe e escuta **apenas na interface Tailscale** em `192.0.2.10`.
-- Healthcheck REST (`GET /health`) acessível do celular via Tailscale.
+- Hub roda **local** (na máquina de dev) e serve um healthcheck REST (`GET /health`).
+- Configuração de bind por ambiente (`dev` = localhost; `prod` = interface Tailscale) —
+  usada só na Fase 5 para o deploy.
 - `.gitignore` cobrindo segredos (APNs `.p8`, chaves ssh).
 - Projeto Xcode do app iOS (SwiftUI) que faz um request ao `/health` e mostra "online".
 
 **Critérios de aceite**
-- App no iPhone lê `/health` do hub pela Tailscale, de dentro e fora de casa.
-- Nada do hub responde fora da Tailscale.
+- Hub sobe localmente e o app (simulador ou device na mesma rede/Tailscale) lê `/health`.
 
 ---
 
@@ -104,11 +108,15 @@ agente ainda).
 - Tratamento de erros de [05](05-seguranca-e-erros.md): alvo offline, perda de push,
   aprovação obsoleta, reconciliação do Registry no restart do hub.
 - Suíte de testes de [06](06-testes.md) para hub e fluxos principais do app.
-- Hub roda como serviço persistente no servidor (auto-start, restart em falha).
+- **Deploy único no Hub:** subir o binário para o servidor `192.0.2.10`, bind na
+  interface Tailscale (`prod`), e rodar como serviço persistente (auto-start, restart em
+  falha). App passa a apontar para o Hub em vez do local.
 
 **Critérios de aceite**
 - E2E do v0 passa: disparar → acompanhar → aprovar → ser avisado.
 - Hub sobrevive a reinício sem perder sessões vivas.
+- Após o deploy, o app fala com o Hub na Tailscale, de dentro e fora de casa, e nada
+  responde fora da Tailscale.
 
 > ✅ **Fim do v0** — Cutuque usável todo dia com MacBook + Claude Code.
 

@@ -16,6 +16,7 @@
 | 10 | **Cliente: app nativo iOS + watchOS (SwiftUI)** | Único caminho para haptics de verdade; publicável. |
 | 11 | **Windows como alvo via WSL2** | tmux + Tailscale + sshd no WSL2 = alvo idêntico ao Mac. |
 | 12 | **Transporte: WebSocket/REST (ao vivo) + APNs (background)** | Cada um no que é bom. |
+| 13 | **Desenvolver local; deploy no Hub só no fim (Fase 5)** | Um passo de cada vez; evitar deploy contínuo no servidor durante o dev. |
 
 ## Pendências (a decidir)
 
