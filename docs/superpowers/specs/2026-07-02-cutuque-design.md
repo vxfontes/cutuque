@@ -3,6 +3,9 @@
 **Data:** 2026-07-02
 **Status:** Design aprovado (aguardando revisão final do spec)
 
+> Este é o snapshot consolidado. A documentação de trabalho, dividida por tema (incluindo
+> as fases de construção e implementação), está em [`../../README.md`](../../README.md).
+
 ## Resumo
 
 Cutuque é um painel de controle remoto, com notificações hápticas, para agentes de
