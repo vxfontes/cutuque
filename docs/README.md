@@ -18,6 +18,8 @@ Apple Watch, via Tailscale, sem nuvem de terceiros.
 | [06 — Testes](06-testes.md) | Estratégia de testes |
 | [07 — Fases de implementação](07-fases-implementacao.md) | Roadmap de construção em fases (v0 → v2) |
 | [08 — Decisões e pendências](08-decisoes-e-pendencias.md) | Log de decisões e questões em aberto |
+| [09 — Configurar hooks](09-configurar-hooks.md) | Hooks do Claude Code apontando para o hub |
+| [10 — Protocolo de controle](10-protocolo-controle-claude.md) | Aprovação nativa via control_request/response (verificado empiricamente) |
 
 ## Documento canônico
 
