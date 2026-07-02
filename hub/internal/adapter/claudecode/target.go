@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 )
@@ -21,21 +22,30 @@ type Handle struct {
 	Stdin   io.WriteCloser
 	closer  func() error
 	writeMu sync.Mutex
+
+	// closeOnce garante um único cmd.Wait(): Close pode ser chamado em corrida
+	// pelo timeout do Launch e pelo fim natural do Runner, e Wait concorrente é
+	// data race na stdlib (review F3, achado #1).
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // Close fecha o stdin (sinaliza EOF ao agente) e espera o processo terminar,
-// para não deixar zumbis. É seguro chamar mais de uma vez.
+// para não deixar zumbis. É seguro (e idempotente) chamar de várias goroutines:
+// só a primeira executa; as demais recebem o mesmo resultado.
 func (h *Handle) Close() error {
-	if h.Stdin != nil {
-		_ = h.Stdin.Close()
-	}
-	if h.Stdout != nil {
-		_ = h.Stdout.Close()
-	}
-	if h.closer != nil {
-		return h.closer()
-	}
-	return nil
+	h.closeOnce.Do(func() {
+		if h.Stdin != nil {
+			_ = h.Stdin.Close()
+		}
+		if h.Stdout != nil {
+			_ = h.Stdout.Close()
+		}
+		if h.closer != nil {
+			h.closeErr = h.closer()
+		}
+	})
+	return h.closeErr
 }
 
 // userMessage é a mensagem de usuário no formato stream-json que o CLI aceita
@@ -133,6 +143,11 @@ func (t *LocalTarget) Name() string { return t.name }
 // recursos.
 func (t *LocalTarget) Start(ctx context.Context) (*Handle, error) {
 	cmd := exec.CommandContext(ctx, t.prog, t.buildArgs()...)
+	// Ambiente mínimo explícito: o filho NÃO herda o ambiente do hub, que
+	// carrega CUTUQUE_TOKEN (e, no futuro, credenciais APNs). Sem isso, um
+	// `printenv` — que roda sem passar pelo gate de aprovação (docs/10,
+	// armadilha #2) — exfiltraria o token no output (review F3, SEC-006).
+	cmd.Env = childEnv()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -149,6 +164,20 @@ func (t *LocalTarget) Start(ctx context.Context) (*Handle, error) {
 		Stdin:  stdin,
 		closer: cmd.Wait,
 	}, nil
+}
+
+// childEnv monta o ambiente mínimo do processo do agente: só o necessário para
+// o `claude` funcionar (HOME p/ config/credenciais, PATH p/ binários, locale).
+// Allowlist, nunca herança de os.Environ() (review F3, SEC-006).
+func childEnv() []string {
+	keep := []string{"HOME", "PATH", "USER", "LANG", "LC_ALL", "TERM", "TMPDIR"}
+	env := make([]string, 0, len(keep))
+	for _, k := range keep {
+		if v, ok := os.LookupEnv(k); ok {
+			env = append(env, k+"="+v)
+		}
+	}
+	return env
 }
 
 // SSHTarget observará uma sessão numa máquina remota via `tailscale ssh`.
