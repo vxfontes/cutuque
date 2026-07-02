@@ -10,10 +10,12 @@
 - Segredos do hub (token do APNs, chaves ssh) ficam fora do controle de versão
   (`.gitignore`) e com permissões restritas no servidor.
 
-### A decidir
+### Sobre mTLS (decidido: fora do v0)
 
-- **mTLS** além do token bearer — avaliar custo/benefício, dado que já é Tailscale-only.
-  Recomendação: não no v0; reavaliar em v1. Ver [08 — Decisões e pendências](08-decisoes-e-pendencias.md).
+**Sem mTLS no v0.** O Tailscale já faz autenticação mútua criptografada na camada de rede,
+e há token bearer por device na camada do app — mTLS seria uma terceira camada redundante
+para um uso pessoal Tailscale-only. Reavaliar em v1 caso algo precise ser exposto fora da
+Tailscale. Ver [08 — Decisões e pendências](08-decisoes-e-pendencias.md).
 
 ## Tratamento de erros
 

@@ -17,13 +17,12 @@
 | 11 | **Windows como alvo via WSL2** | tmux + Tailscale + sshd no WSL2 = alvo idêntico ao Mac. |
 | 12 | **Transporte: WebSocket/REST (ao vivo) + APNs (background)** | Cada um no que é bom. |
 | 13 | **Desenvolver local; deploy no Hub só no fim (Fase 5)** | Um passo de cada vez; evitar deploy contínuo no servidor durante o dev. |
+| 14 | **App watchOS nativo fica no v1** (depois do deploy no Hub) | No v0, a notificação espelhada do iPhone já vibra o Watch; app nativo é polimento. |
+| 15 | **Sem mTLS no v0** | Tailscale já faz auth mútua na rede + token bearer no app; mTLS seria 3ª camada redundante. Reavaliar em v1 se expor algo fora da Tailscale. |
 
 ## Pendências (a decidir)
 
-| # | Questão | Recomendação atual |
-|---|---------|--------------------|
-| A | **mTLS** além do token bearer? | Não no v0 (já é Tailscale-only); reavaliar em v1. |
-| B | **App watchOS nativo** no v0 ou v1? | v1; no v0 a notificação espelhada do iPhone já vibra o Watch. |
+Nenhuma pendência aberta. Design pronto para o plano de implementação da Fase 0.
 
 ## Alternativas consideradas e descartadas
 
