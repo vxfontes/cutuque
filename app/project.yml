@@ -15,6 +15,10 @@ targets:
       path: CutuqueApp/CutuqueApp.entitlements
       properties:
         aps-environment: development
+        # Sem esta entitlement a Apple rebaixa o interruption-level time-sensitive
+        # do needs_you e o cutucão não fura Focus/DND (review F4, bloqueante #2).
+        # É self-service — não exige aprovação da Apple.
+        com.apple.developer.usernotifications.time-sensitive: true
     info:
       path: CutuqueApp/Info.plist
       properties:

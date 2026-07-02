@@ -55,7 +55,10 @@ final class PushManager {
     func requestAuthorization() async {
         let center = UNUserNotificationCenter.current()
         do {
-            let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+            // .timeSensitive: sem ela (e sem a entitlement correspondente) a Apple
+        // rebaixa o interruption-level do needs_you e o cutucão não fura
+        // Focus/DND (review F4, bloqueante #2).
+        let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge, .timeSensitive])
             guard granted else {
                 print("[Push] autorização negada pelo usuário")
                 return
@@ -119,14 +122,59 @@ final class PushManager {
 
         switch response.actionIdentifier {
         case PushAction.approve:
-            if let id = sessionID { try? await api.approve(sessionID: id) }
+            if let id = sessionID { await decide(sessionID: id, approve: true) }
+            else { print("[Push] ação Aprovar sem session_id no userInfo") }
         case PushAction.deny:
-            if let id = sessionID { try? await api.deny(sessionID: id) }
+            if let id = sessionID { await decide(sessionID: id, approve: false) }
+            else { print("[Push] ação Negar sem session_id no userInfo") }
         case PushAction.open, UNNotificationDefaultActionIdentifier:
             if let id = sessionID { router.openSession(id) }
         default:
             break
         }
+    }
+
+    /// Aprova/nega com 1 retry (mesmo padrão best-effort de sendDeviceToken).
+    /// A pior falha aqui é a silenciosa: a usuária acreditar que aprovou e o
+    /// agente seguir preso esperando (review F4, bloqueante #1). Em falha
+    /// definitiva, agenda uma notificação local orientando a abrir o app.
+    private func decide(sessionID: String, approve: Bool) async {
+        for attempt in 1...2 {
+            do {
+                if approve {
+                    try await api.approve(sessionID: sessionID)
+                } else {
+                    try await api.deny(sessionID: sessionID)
+                }
+                return
+            } catch CutuqueError.staleState {
+                // Estado já mudou (ex.: sessão concluiu antes do tap) — nada a refazer.
+                print("[Push] decisão obsoleta para \(sessionID) — estado já mudou")
+                return
+            } catch {
+                print("[Push] falha ao \(approve ? "aprovar" : "negar") (tentativa \(attempt)): \(error.localizedDescription)")
+                if attempt == 1 {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000) // 2s antes do retry
+                }
+            }
+        }
+        await notifyActionFailure(sessionID: sessionID, approve: approve)
+    }
+
+    /// Notificação local de falha definitiva da ação — o feedback que evita a
+    /// falsa sensação de "aprovado".
+    private func notifyActionFailure(sessionID: String, approve: Bool) async {
+        let content = UNMutableNotificationContent()
+        content.title = "Falha ao \(approve ? "aprovar" : "negar")"
+        content.body = "Não consegui falar com o hub — abra o app para decidir."
+        content.sound = .default
+        content.categoryIdentifier = PushCategory.error
+        content.userInfo = ["session_id": sessionID]
+        let request = UNNotificationRequest(
+            identifier: "action-failure-\(sessionID)",
+            content: content,
+            trigger: nil)
+        try? await UNUserNotificationCenter.current().add(request)
     }
 }
 
