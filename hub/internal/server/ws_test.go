@@ -23,7 +23,7 @@ func TestWSSendsSnapshotThenUpdates(t *testing.T) {
 	base := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
 	reg.Add(session.Session{ID: "a", Machine: "macbook", Agent: "claude-code", Title: "t1", State: session.StateRunning, CreatedAt: base, UpdatedAt: base})
 
-	srv := httptest.NewServer(Router(cfg, reg))
+	srv := httptest.NewServer(Router(cfg, reg, nil))
 	defer srv.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -72,7 +72,7 @@ func TestWSSendsSnapshotThenUpdates(t *testing.T) {
 
 func TestWSNewSessionBroadcasts(t *testing.T) {
 	cfg, reg := testDeps()
-	srv := httptest.NewServer(Router(cfg, reg))
+	srv := httptest.NewServer(Router(cfg, reg, nil))
 	defer srv.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -117,7 +117,7 @@ func TestWSSurvivesPingTicks(t *testing.T) {
 	base := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
 	reg.Add(session.Session{ID: "a", Machine: "macbook", Agent: "claude-code", Title: "t1", State: session.StateRunning, CreatedAt: base, UpdatedAt: base})
 
-	srv := httptest.NewServer(Router(cfg, reg))
+	srv := httptest.NewServer(Router(cfg, reg, nil))
 	defer srv.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -154,7 +154,7 @@ func TestWSSurvivesPingTicks(t *testing.T) {
 
 func TestWSSendsOutputChunk(t *testing.T) {
 	cfg, reg := testDeps()
-	srv := httptest.NewServer(Router(cfg, reg))
+	srv := httptest.NewServer(Router(cfg, reg, nil))
 	defer srv.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -188,7 +188,7 @@ func TestWSSendsOutputChunk(t *testing.T) {
 
 func TestWSRequiresAuth(t *testing.T) {
 	cfg, reg := testDeps()
-	srv := httptest.NewServer(Router(cfg, reg))
+	srv := httptest.NewServer(Router(cfg, reg, nil))
 	defer srv.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

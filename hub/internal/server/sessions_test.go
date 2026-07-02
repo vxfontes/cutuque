@@ -20,7 +20,7 @@ func TestSessionsHandlerReturnsList(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 
-	Router(cfg, reg).ServeHTTP(rec, req)
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, quero 200", rec.Code)
@@ -50,7 +50,7 @@ func TestSessionsHandlerEmptyListIsArray(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 
-	Router(cfg, reg).ServeHTTP(rec, req)
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
 
 	// Sem sessões, "sessions" deve ser [] e não null.
 	var raw map[string]json.RawMessage
@@ -67,7 +67,7 @@ func TestSessionsRequiresAuth(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/sessions", nil) // sem token
 	rec := httptest.NewRecorder()
 
-	Router(cfg, reg).ServeHTTP(rec, req)
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, quero 401", rec.Code)

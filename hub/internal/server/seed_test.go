@@ -64,7 +64,7 @@ func TestSeedHandlerDevReturnsFourSessions(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 
-	Router(cfg, reg).ServeHTTP(rec, req)
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, quero 200", rec.Code)
@@ -110,7 +110,7 @@ func TestSeedHandlerProdReturns404(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer secret") // auth ok; deve cair no 404
 	rec := httptest.NewRecorder()
 
-	Router(cfg, reg).ServeHTTP(rec, req)
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, quero 404 (seed é dev-only)", rec.Code)
@@ -123,7 +123,7 @@ func TestSeedRequiresAuth(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/dev/seed", nil) // sem token
 	rec := httptest.NewRecorder()
 
-	Router(cfg, reg).ServeHTTP(rec, req)
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, quero 401", rec.Code)

@@ -20,7 +20,7 @@ func TestHookNotificationSetsNeedsYou(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 
-	Router(cfg, reg).ServeHTTP(rec, req)
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, quero 200", rec.Code)
@@ -40,7 +40,7 @@ func TestHookStopSetsDone(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 
-	Router(cfg, reg).ServeHTTP(rec, req)
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, quero 200", rec.Code)
@@ -60,7 +60,7 @@ func TestHookUnknownEventIsNoOp(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 
-	Router(cfg, reg).ServeHTTP(rec, req)
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, quero 200", rec.Code)
@@ -78,7 +78,7 @@ func TestHookBadRequest(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer secret")
 		rec := httptest.NewRecorder()
 
-		Router(cfg, reg).ServeHTTP(rec, req)
+		Router(cfg, reg, nil).ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("body %q => status %d, quero 400", body, rec.Code)
@@ -92,7 +92,7 @@ func TestHookRequiresAuth(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/hooks/claude", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
-	Router(cfg, reg).ServeHTTP(rec, req)
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, quero 401", rec.Code)

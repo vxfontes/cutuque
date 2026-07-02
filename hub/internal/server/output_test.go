@@ -27,7 +27,7 @@ func TestSessionOutputReturnsChunks(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 
-	Router(cfg, reg).ServeHTTP(rec, req)
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, quero 200", rec.Code)
@@ -51,7 +51,7 @@ func TestSessionOutputEmptyIsArray(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 
-	Router(cfg, reg).ServeHTTP(rec, req)
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
 
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
@@ -69,7 +69,7 @@ func TestSessionOutputUnknownReturns404(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 
-	Router(cfg, reg).ServeHTTP(rec, req)
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, quero 404", rec.Code)
@@ -83,7 +83,7 @@ func TestSessionOutputRequiresAuth(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/sessions/s/output", nil)
 	rec := httptest.NewRecorder()
 
-	Router(cfg, reg).ServeHTTP(rec, req)
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, quero 401", rec.Code)

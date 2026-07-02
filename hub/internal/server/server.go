@@ -10,8 +10,9 @@ import (
 )
 
 // Router registra as rotas do hub. As rotas protegidas passam pelo middleware
-// de token; /health fica aberto para healthcheck.
-func Router(cfg config.Config, reg *registry.Registry) *http.ServeMux {
+// de token; /health fica aberto para healthcheck. lch pode ser nil quando os
+// comandos de lançamento/aprovação não são necessários (ex.: alguns testes).
+func Router(cfg config.Config, reg *registry.Registry, lch Launcher) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// O engine é sem estado próprio (só encapsula o registry), então instanciá-lo
@@ -27,17 +28,25 @@ func Router(cfg config.Config, reg *registry.Registry) *http.ServeMux {
 	mux.Handle("GET /ws", requireAuth(cfg.Token, WSHandler(reg)))
 	mux.Handle("POST /hooks/claude", requireAuth(cfg.Token, HookHandler(eng)))
 
+	// Comandos (Fase 3): lançar, aprovar/negar e enviar texto.
+	if lch != nil {
+		mux.Handle("POST /sessions", requireAuth(cfg.Token, LaunchHandler(lch)))
+		mux.Handle("POST /sessions/{id}/approve", requireAuth(cfg.Token, ApproveHandler(lch)))
+		mux.Handle("POST /sessions/{id}/deny", requireAuth(cfg.Token, DenyHandler(lch)))
+		mux.Handle("POST /sessions/{id}/input", requireAuth(cfg.Token, InputHandler(lch)))
+	}
+
 	// Dev-only: seed de dados fake. Em prod o handler responde 404.
 	mux.Handle("POST /dev/seed", requireAuth(cfg.Token, SeedHandler(cfg, reg)))
 
 	return mux
 }
 
-// New monta o *http.Server do hub a partir da config e do registry.
-func New(cfg config.Config, reg *registry.Registry) *http.Server {
+// New monta o *http.Server do hub a partir da config, do registry e do launcher.
+func New(cfg config.Config, reg *registry.Registry, lch Launcher) *http.Server {
 	return &http.Server{
 		Addr:              cfg.Addr(),
-		Handler:           Router(cfg, reg),
+		Handler:           Router(cfg, reg, lch),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 }

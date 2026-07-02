@@ -45,7 +45,7 @@ func TestRouterServesHealth(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
 
-	Router(cfg, reg).ServeHTTP(rec, req)
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /health via Router = %d, quero 200", rec.Code)
@@ -57,7 +57,7 @@ func TestHealthNeedsNoAuth(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
 
-	Router(cfg, reg).ServeHTTP(rec, req)
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /health sem token = %d, quero 200", rec.Code)
