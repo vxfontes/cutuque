@@ -75,6 +75,34 @@ func TestRequireAuthRejectsWrongToken(t *testing.T) {
 	}
 }
 
+// Regressão SEC-001: um token configurado vazio (ex.: prod sem CUTUQUE_TOKEN)
+// NUNCA pode ser aceito — nem com token ausente, nem com ?token= vazio.
+func TestRequireAuthEmptyConfiguredTokenAlwaysRejects(t *testing.T) {
+	h := requireAuth("", okHandler())
+
+	cases := []struct {
+		name  string
+		setup func(*http.Request)
+	}{
+		{"sem token", func(r *http.Request) {}},
+		{"query token vazio", func(r *http.Request) { r.URL.RawQuery = "token=" }},
+		{"bearer vazio", func(r *http.Request) { r.Header.Set("Authorization", "Bearer ") }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/x", nil)
+			c.setup(req)
+			rec := httptest.NewRecorder()
+
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, quero 401 (token configurado vazio nunca é válido)", rec.Code)
+			}
+		})
+	}
+}
+
 func TestRequireAuthRejectsMalformedHeader(t *testing.T) {
 	h := requireAuth("secret", okHandler())
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)

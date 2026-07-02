@@ -12,6 +12,14 @@ import (
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	cfg := config.Load()
+
+	// Fail-fast: em prod o token é obrigatório. Sem ele, toda rota protegida
+	// ficaria aberta (ver review/security.md#SEC-001).
+	if cfg.Env == "prod" && cfg.Token == "" {
+		logger.Error("CUTUQUE_TOKEN é obrigatório em prod; defina a variável de ambiente")
+		os.Exit(1)
+	}
+
 	reg := registry.New()
 	srv := server.New(cfg, reg)
 
