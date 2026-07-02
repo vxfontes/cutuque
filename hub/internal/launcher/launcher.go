@@ -138,19 +138,26 @@ func (l *Launcher) respond(id string, allow bool) error {
 		return ErrStaleState // ação obsoleta: a sessão não está mais pedindo
 	}
 
+	// Reivindicação ATÔMICA do pendente: ler E remover na mesma seção crítica.
+	// Sem isso, Approve/Deny concorrentes passam ambos pela validação e escrevem
+	// dois control_response para o MESMO request_id (review F3, achado #2).
 	l.mu.Lock()
 	p, hasPending := l.pending[id]
 	h, hasHandle := l.handles[id]
+	if hasPending && hasHandle {
+		delete(l.pending, id) // só o vencedor da corrida chega à escrita
+	}
 	l.mu.Unlock()
 	if !hasPending || !hasHandle {
 		return ErrStaleState // needs_you sem permissão viva (ex.: era só uma pergunta)
 	}
 
 	if err := h.WriteJSON(buildControlResponse(p, allow)); err != nil {
+		// Falha de I/O: devolve o pendente para permitir nova tentativa.
+		l.setPending(id, p)
 		return err
 	}
 	l.eng.Apply(event.Event{SessionID: id, Type: event.UserResponded, At: time.Now()})
-	l.clearPending(id)
 	return nil
 }
 
