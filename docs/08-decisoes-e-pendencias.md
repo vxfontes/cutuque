@@ -19,6 +19,8 @@
 | 13 | **Desenvolver local; deploy no Hub só no fim (Fase 5)** | Um passo de cada vez; evitar deploy contínuo no servidor durante o dev. |
 | 14 | **App watchOS nativo fica no v1** (depois do deploy no Hub) | No v0, a notificação espelhada do iPhone já vibra o Watch; app nativo é polimento. |
 | 15 | **Sem mTLS no v0** | Tailscale já faz auth mútua na rede + token bearer no app; mTLS seria 3ª camada redundante. Reavaliar em v1 se expor algo fora da Tailscale. |
+| 16 | **Módulo Go: `github.com/vxfontes/cutuque/hub`** | GitHub pessoal da usuária é `vxfontes`. |
+| 17 | **Persistência (v2) no Postgres já existente** | Servidor local já tem Postgres com as bases da usuária; criar base/schema dedicada `cutuque`, sem novo servidor de banco. v0/v1 seguem em memória (sem banco). |
 
 ## Pendências (a decidir)
 
