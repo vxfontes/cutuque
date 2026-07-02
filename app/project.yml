@@ -1,0 +1,24 @@
+name: CutuqueApp
+options:
+  bundleIdPrefix: com.vxfontes
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  CutuqueApp:
+    type: application
+    platform: iOS
+    sources: [CutuqueApp]
+    info:
+      path: CutuqueApp/Info.plist
+      properties:
+        UILaunchScreen: {}
+        CFBundleDisplayName: Cutuque
+        # Dev: hub roda local (127.0.0.1). Permite só rede local, não arbitrary loads.
+        # Revisar na Fase 5 (IP Tailscale do Hub).
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vxfontes.cutuque
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
