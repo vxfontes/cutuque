@@ -17,12 +17,23 @@ const maxSummary = 120
 
 // streamLine é uma linha do stream-json do Claude Code. Só os campos usados.
 type streamLine struct {
-	Type      string         `json:"type"`
-	Subtype   string         `json:"subtype"`
-	SessionID string         `json:"session_id"`
-	IsError   bool           `json:"is_error"`
-	Result    string         `json:"result"`
-	Message   *streamMessage `json:"message"`
+	Type      string          `json:"type"`
+	Subtype   string          `json:"subtype"`
+	SessionID string          `json:"session_id"`
+	IsError   bool            `json:"is_error"`
+	Result    string          `json:"result"`
+	Message   *streamMessage  `json:"message"`
+	RequestID string          `json:"request_id"` // control_request: alvo do control_response
+	Request   *controlRequest `json:"request"`    // control_request: detalhes do pedido
+}
+
+// controlRequest é o pedido de permissão nativo (can_use_tool): o CLI o emite no
+// stdout e aguarda um control_response no stdin (verificado na CLI 2.1.198).
+type controlRequest struct {
+	Subtype     string          `json:"subtype"`
+	ToolName    string          `json:"tool_name"`
+	Input       json.RawMessage `json:"input"`
+	Description string          `json:"description"`
 }
 
 type streamMessage struct {
@@ -64,10 +75,66 @@ func ParseLine(line []byte) ([]event.Event, error) {
 	case "result":
 		return resultEvent(l, at), nil
 
+	case "control_request":
+		return controlRequestEvent(l, at), nil
+
 	default:
 		// rate_limit_event e quaisquer tipos desconhecidos: ignorar.
 		return nil, nil
 	}
+}
+
+// controlRequestEvent traduz um control_request/can_use_tool em um
+// permission_requested. Guarda o request_id (ControlID) e o input original
+// (Input) que o Launcher devolve ao aprovar; Data é um resumo humano para o
+// app. Outros subtypes de control_request são ignorados.
+func controlRequestEvent(l streamLine, at time.Time) []event.Event {
+	if l.Request == nil || l.Request.Subtype != "can_use_tool" {
+		return nil
+	}
+	return []event.Event{{
+		SessionID: l.SessionID, // vazio no stream; o Runner preenche com a sessão corrente
+		Type:      event.PermissionRequested,
+		Data:      permissionSummary(l.Request),
+		ControlID: l.RequestID,
+		Input:     l.Request.Input,
+		At:        at,
+	}}
+}
+
+// permissionSummary monta o resumo humano do pedido a partir do tool_name e do
+// input.command (quando houver) ou da description. Ex.:
+// "Bash: touch x.txt — Create empty probe file".
+func permissionSummary(req *controlRequest) string {
+	tool := req.ToolName
+	if tool == "" {
+		tool = "ferramenta"
+	}
+	var detail string
+	if cmd := commandField(req.Input); cmd != "" {
+		detail = truncate(cmd, maxSummary)
+		if req.Description != "" {
+			detail += " — " + req.Description
+		}
+	} else if req.Description != "" {
+		detail = req.Description
+	}
+	if detail == "" {
+		return tool
+	}
+	return tool + ": " + detail
+}
+
+// commandField extrai input.command de um input de ferramenta, se presente.
+func commandField(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var in struct {
+		Command string `json:"command"`
+	}
+	_ = json.Unmarshal(raw, &in)
+	return in.Command
 }
 
 // assistantEvents extrai output_chunks de uma mensagem do assistente: texto vira

@@ -2,6 +2,7 @@ package claudecode
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,6 +110,67 @@ func TestParseResultErrorEmitsErrored(t *testing.T) {
 	evs, _ := ParseLine([]byte(`{"type":"result","subtype":"error_during_execution","is_error":true,"result":"falhou"}`))
 	if len(evs) != 1 || evs[0].Type != event.Errored {
 		t.Fatalf("evs = %+v, quero errored", evs)
+	}
+}
+
+func TestParseControlRequestEmitsPermission(t *testing.T) {
+	line := []byte(`{"type":"control_request","request_id":"req-abc","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"touch x.txt","description":"Create empty probe file"},"description":"Create empty probe file"}}`)
+	evs, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("ParseLine: %v", err)
+	}
+	if len(evs) != 1 || evs[0].Type != event.PermissionRequested {
+		t.Fatalf("evs = %+v, quero um permission_requested", evs)
+	}
+	e := evs[0]
+	if e.ControlID != "req-abc" {
+		t.Errorf("ControlID = %q, quero \"req-abc\"", e.ControlID)
+	}
+	if !strings.HasPrefix(e.Data, "Bash: touch x.txt") || !strings.Contains(e.Data, "Create empty probe file") {
+		t.Errorf("Data = %q, quero resumo \"Bash: touch x.txt — Create empty probe file\"", e.Data)
+	}
+	// Input original preservado para o updatedInput do allow.
+	var in struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(e.Input, &in); err != nil || in.Command != "touch x.txt" {
+		t.Errorf("Input = %s, quero conter o command original", e.Input)
+	}
+}
+
+func TestParseControlRequestOtherSubtypeIgnored(t *testing.T) {
+	line := []byte(`{"type":"control_request","request_id":"r","request":{"subtype":"initialize"}}`)
+	evs, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("ParseLine: %v", err)
+	}
+	if len(evs) != 0 {
+		t.Errorf("evs = %+v, quero vazio (subtype não-permissão)", evs)
+	}
+}
+
+func TestParseControlFixtureHasPermission(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "fixture-control.jsonl"))
+	if err != nil {
+		t.Fatalf("lendo fixture: %v", err)
+	}
+	evs := parseAll(t, data)
+
+	var perm *event.Event
+	for i := range evs {
+		if evs[i].Type == event.PermissionRequested {
+			perm = &evs[i]
+			break
+		}
+	}
+	if perm == nil {
+		t.Fatalf("fixture-control não produziu permission_requested: %+v", evs)
+	}
+	if perm.ControlID != "553dacfc-a6e3-45f6-b37d-98f5cf4d258b" {
+		t.Errorf("ControlID = %q, quero o request_id da fixture", perm.ControlID)
+	}
+	if !strings.HasPrefix(perm.Data, "Bash:") {
+		t.Errorf("Data = %q, quero prefixo \"Bash:\"", perm.Data)
 	}
 }
 

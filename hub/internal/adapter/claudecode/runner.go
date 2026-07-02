@@ -8,37 +8,46 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/vxfontes/cutuque/hub/internal/engine"
 	"github.com/vxfontes/cutuque/hub/internal/event"
 )
 
 // maxTitle é o tamanho do título da sessão (prompt truncado).
 const maxTitle = 60
 
-// Runner observa uma sessão do Claude Code: lê o stream-json do Target, converte
-// em eventos e alimenta o State Engine — único escritor do Registry (a criação
-// da sessão viaja como metadados no evento session_started).
+// Applier consome eventos normalizados. O State Engine o satisfaz; o Launcher
+// o decora para interceptar pedidos de permissão antes de delegar ao Engine —
+// o Runner não conhece nenhum dos dois concretamente (só a interface), e o
+// Engine segue o único escritor do Registry.
+type Applier interface {
+	Apply(event.Event)
+}
+
+// Meta são os metadados de criação da sessão que o Runner injeta no evento
+// session_started (o Engine cria a sessão com eles).
+type Meta struct {
+	Machine string // máquina-alvo (nome do Target)
+	Prompt  string // prompt inicial, para derivar o Title
+}
+
+// Runner observa uma sessão do Claude Code: lê o stream-json de um Handle,
+// converte em eventos e alimenta um Applier. O Handle é aberto e fechado por
+// quem lança (o Launcher), que também precisa do stdin para aprovar/negar.
 type Runner struct {
-	eng *engine.Engine
+	app Applier
 }
 
-// NewRunner cria um Runner sobre o engine dado.
-func NewRunner(eng *engine.Engine) *Runner {
-	return &Runner{eng: eng}
+// NewRunner cria um Runner sobre o Applier dado.
+func NewRunner(app Applier) *Runner {
+	return &Runner{app: app}
 }
 
-// Run lança/observa a sessão até o stream terminar. Ao ver session_started,
-// registra a sessão com os metadados do alvo (machine, agent, title). Se o
-// stream terminar (EOF) sem um evento terminal (finished/errored), marca a
-// sessão como errored — não deixar o usuário esperando por um fim que não veio.
-func (r *Runner) Run(ctx context.Context, target Target, prompt string) error {
-	rc, err := target.Start(ctx, prompt)
-	if err != nil {
-		return err
-	}
-	defer rc.Close()
-
-	reader := bufio.NewReader(rc)
+// Run observa a sessão lendo h.Stdout até o stream terminar. Ao ver
+// session_started, injeta os metadados (machine, agent, title). Se o stream
+// terminar (EOF) sem um evento terminal (finished/errored), marca a sessão como
+// errored — não deixar a usuária esperando por um fim que não veio. Não fecha o
+// Handle: isso é responsabilidade de quem o abriu.
+func (r *Runner) Run(ctx context.Context, h *Handle, meta Meta) error {
+	reader := bufio.NewReader(h.Stdout)
 	var sessionID string
 	sawTerminal := false
 
@@ -55,15 +64,15 @@ func (r *Runner) Run(ctx context.Context, target Target, prompt string) error {
 				case e.Type == event.SessionStarted:
 					sessionID = e.SessionID
 					// Metadados de criação: o Engine cria a sessão com eles.
-					e.Machine = target.Name()
+					e.Machine = meta.Machine
 					e.Agent = "claude-code"
-					e.Title = truncate(prompt, maxTitle)
+					e.Title = truncate(meta.Prompt, maxTitle)
 				case e.SessionID == "":
 					// Um Runner observa UMA sessão; eventos sem session_id
 					// pertencem à sessão corrente do stream.
 					e.SessionID = sessionID
 				}
-				r.eng.Apply(e)
+				r.app.Apply(e)
 				if e.Type == event.Finished || e.Type == event.Errored {
 					sawTerminal = true
 				}
@@ -79,7 +88,7 @@ func (r *Runner) Run(ctx context.Context, target Target, prompt string) error {
 
 	// EOF sem finished/errored: a sessão morreu sem conclusão → errored.
 	if !sawTerminal && sessionID != "" {
-		r.eng.Apply(event.Event{SessionID: sessionID, Type: event.Errored, At: time.Now()})
+		r.app.Apply(event.Event{SessionID: sessionID, Type: event.Errored, At: time.Now()})
 	}
 	return nil
 }

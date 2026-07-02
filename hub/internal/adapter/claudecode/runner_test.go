@@ -3,6 +3,7 @@ package claudecode
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,26 +15,30 @@ import (
 	"github.com/vxfontes/cutuque/hub/internal/session"
 )
 
-// fileTarget é um Target fake que "roda" fazendo cat de uma fixture.
-type fileTarget struct {
-	name string
-	path string
+// nopWriteCloser é um io.WriteCloser que descarta o que recebe (stdin ignorado
+// nos testes de leitura pura do Runner).
+type nopWriteCloser struct{ w io.Writer }
+
+func (n nopWriteCloser) Write(p []byte) (int, error) { return n.w.Write(p) }
+func (n nopWriteCloser) Close() error                { return nil }
+
+// handleFromReader monta um *Handle cujo Stdout é o reader dado e cujo Stdin é
+// descartado — para exercitar o Runner sem um processo real.
+func handleFromReader(r io.Reader) *Handle {
+	return &Handle{
+		Stdout: io.NopCloser(r),
+		Stdin:  nopWriteCloser{w: io.Discard},
+	}
 }
 
-func (f fileTarget) Name() string { return f.name }
-func (f fileTarget) Start(ctx context.Context, prompt string) (io.ReadCloser, error) {
-	return os.Open(f.path)
-}
-
-// bytesTarget é um Target fake que devolve bytes fixos.
-type bytesTarget struct {
-	name string
-	data []byte
-}
-
-func (b bytesTarget) Name() string { return b.name }
-func (b bytesTarget) Start(ctx context.Context, prompt string) (io.ReadCloser, error) {
-	return io.NopCloser(bytes.NewReader(b.data)), nil
+// handleFromFile abre uma fixture do disco como Stdout do Handle.
+func handleFromFile(t *testing.T, path string) *Handle {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("abrindo fixture: %v", err)
+	}
+	return &Handle{Stdout: f, Stdin: nopWriteCloser{w: io.Discard}}
 }
 
 func TestRunnerProcessesFixtureToDone(t *testing.T) {
@@ -41,8 +46,9 @@ func TestRunnerProcessesFixtureToDone(t *testing.T) {
 	eng := engine.New(reg)
 	r := NewRunner(eng)
 
-	tgt := fileTarget{name: "macbook", path: filepath.Join("testdata", "fixture-simple.jsonl")}
-	if err := r.Run(context.Background(), tgt, "explique a arquitetura do projeto em detalhes técnicos"); err != nil {
+	h := handleFromFile(t, filepath.Join("testdata", "fixture-simple.jsonl"))
+	defer h.Close()
+	if err := r.Run(context.Background(), h, Meta{Machine: "macbook", Prompt: "explique a arquitetura do projeto em detalhes técnicos"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -81,8 +87,8 @@ func TestRunnerEOFWithoutFinishedErrors(t *testing.T) {
 	stream := `{"type":"system","subtype":"init","session_id":"sem-fim"}
 {"type":"assistant","message":{"content":[{"type":"text","text":"trabalhando..."}]}}
 `
-	tgt := bytesTarget{name: "desktop-win", data: []byte(stream)}
-	if err := r.Run(context.Background(), tgt, "faça algo"); err != nil {
+	h := handleFromReader(bytes.NewReader([]byte(stream)))
+	if err := r.Run(context.Background(), h, Meta{Machine: "desktop-win", Prompt: "faça algo"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -108,8 +114,8 @@ func TestRunnerHandlesLongLines(t *testing.T) {
 {"type":"assistant","session_id":"grande","message":{"content":[{"type":"text","text":"` + big + `"}]}}
 {"type":"result","session_id":"grande","subtype":"success","is_error":false,"result":"ok"}
 `
-	tgt := bytesTarget{name: "macbook", data: []byte(stream)}
-	if err := r.Run(context.Background(), tgt, "p"); err != nil {
+	h := handleFromReader(bytes.NewReader([]byte(stream)))
+	if err := r.Run(context.Background(), h, Meta{Machine: "macbook", Prompt: "p"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	s, _ := reg.Get("grande")
@@ -129,8 +135,8 @@ func TestRunnerFillsSessionIDForSingleSessionStream(t *testing.T) {
 {"type":"assistant","message":{"content":[{"type":"text","text":"produzindo"}]}}
 {"type":"result","subtype":"success","is_error":false,"result":"fim"}
 `
-	tgt := bytesTarget{name: "macbook", data: []byte(stream)}
-	if err := r.Run(context.Background(), tgt, "p"); err != nil {
+	h := handleFromReader(bytes.NewReader([]byte(stream)))
+	if err := r.Run(context.Background(), h, Meta{Machine: "macbook", Prompt: "p"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	s, _ := reg.Get("unica")
@@ -142,24 +148,52 @@ func TestRunnerFillsSessionIDForSingleSessionStream(t *testing.T) {
 	}
 }
 
+// Fixture de permissão real: o Runner deve emitir needs_you com o resumo do
+// pedido no PendingPrompt e depois done (a fixture-control contém um allow).
+func TestRunnerControlFixtureReachesNeedsYouThenDone(t *testing.T) {
+	reg := registry.New()
+	eng := engine.New(reg)
+	r := NewRunner(eng)
+
+	// A fixture já contém a permissão respondida (allow) seguida do result.
+	// Aqui o Runner só lê o stream; a resposta de aprovação é papel do Launcher.
+	h := handleFromFile(t, filepath.Join("testdata", "fixture-control.jsonl"))
+	defer h.Close()
+	if err := r.Run(context.Background(), h, Meta{Machine: "macbook", Prompt: "crie um arquivo de prova"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	s, ok := reg.Get("6ec0028b-73ec-4717-8670-fc4a6ffba3f3")
+	if !ok {
+		t.Fatalf("sessão da fixture-control não foi criada")
+	}
+	// O stream termina em result success → done, e ao sair de needs_you o
+	// PendingPrompt é limpo.
+	if s.State != session.StateDone {
+		t.Errorf("State = %q, quero \"done\"", s.State)
+	}
+	if s.PendingPrompt != "" {
+		t.Errorf("PendingPrompt = %q, quero vazio ao terminar", s.PendingPrompt)
+	}
+}
+
 func TestLocalTargetExecsCommand(t *testing.T) {
 	// LocalTarget genérico rodando `cat` sobre a fixture prova que a execução
 	// de comando local e o pipe de stdout funcionam.
 	path := filepath.Join("testdata", "fixture-simple.jsonl")
-	tgt := newLocalCommand("macbook", "cat", func(prompt string) []string {
+	tgt := newLocalCommand("macbook", "cat", func() []string {
 		return []string{path}
 	})
 	if tgt.Name() != "macbook" {
 		t.Errorf("Name() = %q, quero \"macbook\"", tgt.Name())
 	}
 
-	rc, err := tgt.Start(context.Background(), "ignorado")
+	h, err := tgt.Start(context.Background())
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer rc.Close()
+	defer h.Close()
 
-	data, err := io.ReadAll(rc)
+	data, err := io.ReadAll(h.Stdout)
 	if err != nil {
 		t.Fatalf("ReadAll: %v", err)
 	}
@@ -168,12 +202,45 @@ func TestLocalTargetExecsCommand(t *testing.T) {
 	}
 }
 
+func TestSendUserMessageWritesStreamJSON(t *testing.T) {
+	var buf bytes.Buffer
+	h := &Handle{Stdout: io.NopCloser(strings.NewReader("")), Stdin: nopWriteCloser{w: &buf}}
+
+	if err := h.SendUserMessage("rode o echo cutuque"); err != nil {
+		t.Fatalf("SendUserMessage: %v", err)
+	}
+
+	line := buf.Bytes()
+	if !bytes.HasSuffix(line, []byte("\n")) {
+		t.Errorf("mensagem não termina em newline: %q", line)
+	}
+	var msg struct {
+		Type    string `json:"type"`
+		Message struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(line), &msg); err != nil {
+		t.Fatalf("mensagem não é JSON válido: %v (%q)", err, line)
+	}
+	if msg.Type != "user" || msg.Message.Role != "user" {
+		t.Errorf("shape errado: %+v", msg)
+	}
+	if len(msg.Message.Content) != 1 || msg.Message.Content[0].Type != "text" || msg.Message.Content[0].Text != "rode o echo cutuque" {
+		t.Errorf("content errado: %+v", msg.Message.Content)
+	}
+}
+
 func TestSSHTargetIsStub(t *testing.T) {
 	tgt := NewSSHTarget("remote")
 	if tgt.Name() != "remote" {
 		t.Errorf("Name() = %q, quero \"remote\"", tgt.Name())
 	}
-	if _, err := tgt.Start(context.Background(), "p"); err == nil {
+	if _, err := tgt.Start(context.Background()); err == nil {
 		t.Errorf("SSHTarget.Start err = nil, quero erro de não-implementado")
 	}
 }
