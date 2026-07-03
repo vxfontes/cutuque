@@ -354,7 +354,36 @@ struct SessionDetailView: View {
     /// Barra moderna: campo que cresce com o texto + botão circular de enviar.
     /// A mensagem enviada aparece como bolha no transcrito via o eco do
     /// hub (WS `output_chunk` kind=user) — não fazemos eco otimista aqui.
+    /// Respostas rápidas de um toque — enviam o texto na hora (sem digitar).
+    private static let quickReplies = [
+        "Sim, prossiga", "Continua", "Rode os testes", "Commita", "Explica melhor", "Não, cancela",
+    ]
+
+    @ViewBuilder private var quickRepliesBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Self.quickReplies, id: \.self) { reply in
+                    Button {
+                        Task { _ = await model.sendInput(reply) }
+                    } label: {
+                        Text(reply)
+                            .font(.footnote)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+                            .foregroundStyle(.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.actionInProgress)
+                }
+            }
+            .padding(.horizontal, 12)
+        }
+    }
+
     private var interactionBar: some View {
+      VStack(spacing: 8) {
+        quickRepliesBar
         HStack(alignment: .bottom, spacing: 10) {
             TextField(
                 isLive ? "Responda ao agente…" : "Continue a conversa…",
@@ -394,8 +423,9 @@ struct SessionDetailView: View {
             .accessibilityLabel("Enviar mensagem")
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(.bar)
+      }
+      .padding(.vertical, 10)
+      .background(.bar)
     }
 
     // MARK: Cabeçalho (título, máquina · agente, badge de estado)
