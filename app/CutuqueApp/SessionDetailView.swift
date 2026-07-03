@@ -6,8 +6,9 @@ import SwiftUI
 final class SessionDetailViewModel: ObservableObject {
     /// Sessão exibida; o estado é atualizado ao vivo via `session_updated`.
     @Published var session: Session
-    /// Linhas de output acumuladas (histórico + chunks ao vivo).
-    @Published var lines: [String] = []
+    /// Chunks de output acumulados (histórico + chunks ao vivo), já
+    /// classificados por `kind` para o transcrito estilo chat.
+    @Published var chunks: [OutputChunk] = []
     /// Uma ação (aprovar/negar/enviar) está em andamento — desabilita botões.
     @Published var actionInProgress = false
     /// Aviso transitório para a UI (ex.: estado mudou no 409).
@@ -26,7 +27,7 @@ final class SessionDetailViewModel: ObservableObject {
     func start() async {
         // Histórico via REST (pode vir vazio se o adapter ainda não implementou o endpoint).
         if let history = try? await api.output(sessionID: session.id) {
-            lines = history
+            chunks = history
         }
         startLiveUpdates()
     }
@@ -45,12 +46,14 @@ final class SessionDetailViewModel: ObservableObject {
                 case .sessionUpdated(let updated) where updated.id == self.session.id:
                     // Só interessa a sessão aberta; atualiza a badge de estado.
                     self.session = updated
-                case .outputChunk(let sessionID, let data) where sessionID == self.session.id:
+                case .outputChunk(let sessionID, let kind, let text) where sessionID == self.session.id:
                     // Appenda apenas chunks da sessão aberta, espelhando o teto
                     // de 200 do hub para não crescer sem limite (review F2, #6).
-                    self.lines.append(data)
-                    if self.lines.count > 200 {
-                        self.lines.removeFirst(self.lines.count - 200)
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        self.chunks.append(OutputChunk(kind: kind, text: text))
+                    }
+                    if self.chunks.count > 200 {
+                        self.chunks.removeFirst(self.chunks.count - 200)
                     }
                 case .snapshot(let all):
                     // Um snapshot pode trazer estado mais recente da sessão aberta.
@@ -146,6 +149,10 @@ struct SessionDetailView: View {
     @State private var showScrollToBottom = false
     @State private var renaming = false
     @State private var renameText = ""
+    // Foco do campo de digitação — a barra sobe corretamente com o teclado
+    // porque só o transcrito (ScrollView) ignora a safe area do teclado;
+    // a VStack externa, essa sim, empurra a barra pra cima normalmente.
+    @FocusState private var inputFocused: Bool
 
     init(session: Session) {
         _model = StateObject(wrappedValue: SessionDetailViewModel(session: session))
@@ -153,6 +160,12 @@ struct SessionDetailView: View {
 
     /// Título a exibir (apelido local, se houver, senão o original).
     private var displayTitle: String { namer.displayTitle(for: model.session) }
+
+    /// Chunks crus agrupados em itens de chat: linhas consecutivas do mesmo
+    /// papel (usuário/assistente) se fundem num só bloco; tool + tool_result
+    /// viram um grupo recolhível — é o que resolve a reclamação de tool call
+    /// "competindo" visualmente com a resposta do agente.
+    private var chatItems: [ChatItem] { ChatItem.grouping(model.chunks) }
 
     /// Texto do pedido de permissão, se houver, quando a sessão precisa de você.
     private var permissionPrompt: String? {
@@ -171,7 +184,7 @@ struct SessionDetailView: View {
             if let prompt = permissionPrompt {
                 permissionCard(prompt)
             }
-            outputTerminal
+            transcript
             // Barra de digitação SEMPRE visível. Em sessão viva, o texto responde
             // ao agente em andamento; em sessão encerrada (sem processo vivo), o
             // texto lança uma nova tarefa na mesma máquina (relançar).
@@ -257,10 +270,10 @@ struct SessionDetailView: View {
         .padding()
         .background(Color.orange.opacity(0.12))
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(Color.orange.opacity(0.4), lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .padding()
     }
 
@@ -271,14 +284,25 @@ struct SessionDetailView: View {
         model.session.state == .running || model.session.state == .needsYou
     }
 
+    private var canSend: Bool {
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.actionInProgress
+    }
+
+    /// Barra moderna: campo que cresce com o texto + botão circular de enviar.
+    /// A mensagem enviada aparece como bolha no transcrito via o eco do
+    /// hub (WS `output_chunk` kind=user) — não fazemos eco otimista aqui.
     private var interactionBar: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .bottom, spacing: 10) {
             TextField(
-                isLive ? "responder ao agente..." : "continuar a conversa...",
+                isLive ? "Responda ao agente…" : "Continue a conversa…",
                 text: $draft, axis: .vertical
             )
-            .textFieldStyle(.roundedBorder)
-            .lineLimit(1...4)
+            .font(.body)
+            .lineLimit(1...6)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 11)
+            .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+            .focused($inputFocused)
 
             Button {
                 let text = draft
@@ -289,12 +313,25 @@ struct SessionDetailView: View {
                     if await model.sendInput(text) { draft = "" }
                 }
             } label: {
-                Image(systemName: "paperplane.fill")
+                Group {
+                    if model.actionInProgress {
+                        ProgressView()
+                            .tint(.white)
+                    } else {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 15, weight: .bold))
+                    }
+                }
+                .frame(width: 36, height: 36)
+                .foregroundStyle(.white)
+                .background(canSend ? Color.accentColor : Color.gray.opacity(0.35), in: Circle())
             }
-            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.actionInProgress)
+            .disabled(!canSend)
+            .animation(.snappy, value: canSend)
             .accessibilityLabel("Enviar mensagem")
         }
-        .padding()
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .background(.bar)
     }
 
@@ -317,29 +354,26 @@ struct SessionDetailView: View {
         .padding()
     }
 
-    // MARK: Output ao vivo estilo terminal
+    // MARK: Transcrito estilo chat
 
     private var isRunning: Bool { model.session.state == .running }
 
-    private var outputTerminal: some View {
+    private var transcript: some View {
         GeometryReader { outer in
             ScrollViewReader { proxy in
                 ScrollView {
-                    if model.lines.isEmpty && !isRunning {
-                        Text("sem output ainda")
-                            .font(.system(.footnote, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.top, 40)
+                    if chatItems.isEmpty && !isRunning {
+                        emptyTranscript
                     } else {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(Array(model.lines.enumerated()), id: \.offset) { index, line in
-                                lineView(line, isLast: index == model.lines.count - 1)
+                        LazyVStack(alignment: .leading, spacing: 14) {
+                            ForEach(Array(chatItems.enumerated()), id: \.offset) { index, item in
+                                chatItemView(item)
                                     .id(index)
+                                    .transition(.opacity.combined(with: .move(edge: .bottom)))
                             }
-                            // Cursor sozinho quando ainda não há output mas está rodando.
-                            if model.lines.isEmpty && isRunning {
-                                BlinkingCursor()
+                            // Indicador discreto de "digitando" enquanto o agente roda.
+                            if isRunning {
+                                TypingIndicator()
                             }
                             // Âncora invisível para o auto-scroll e para medir o fim.
                             Color.clear.frame(height: 1)
@@ -347,11 +381,18 @@ struct SessionDetailView: View {
                                 .background(bottomProbe)
                         }
                         .padding(16)
+                        .animation(.easeOut(duration: 0.25), value: chatItems.count)
                     }
                 }
+                .scrollDismissesKeyboard(.interactively)
                 .coordinateSpace(name: "term")
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .background(Color.black)
+                .background(Color(.systemGroupedBackground))
+                // Só o transcrito ignora a safe area do teclado: assim ele não
+                // tenta compensar a altura do teclado por conta própria (o que
+                // causaria um "pulo" duplo), enquanto a VStack externa continua
+                // empurrando a interactionBar pra cima normalmente.
+                .ignoresSafeArea(.keyboard, edges: .bottom)
                 // Botão flutuante "descer": aparece quando o fim não está visível.
                 .overlay(alignment: .bottomTrailing) {
                     if showScrollToBottom {
@@ -362,13 +403,17 @@ struct SessionDetailView: View {
                                 .font(.headline)
                                 .padding(12)
                                 .background(.ultraThinMaterial, in: Circle())
+                                .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
                         }
                         .padding()
                         .transition(.opacity.combined(with: .scale))
                         .accessibilityLabel("Descer para o fim")
                     }
                 }
-                .onChange(of: model.lines.count) { _, _ in
+                .onChange(of: chatItems.count) { _, _ in
+                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
+                .onChange(of: isRunning) { _, _ in
                     withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
                 // Fim visível quando sua posição cai dentro da altura do viewport.
@@ -381,6 +426,20 @@ struct SessionDetailView: View {
         }
     }
 
+    /// Estado vazio convidativo antes do primeiro chunk chegar.
+    private var emptyTranscript: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.system(size: 34))
+                .foregroundStyle(.tertiary)
+            Text("sem mensagens ainda")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 72)
+    }
+
     /// Mede a posição do fim do conteúdo no espaço de coordenadas do scroll.
     private var bottomProbe: some View {
         GeometryReader { geo in
@@ -391,37 +450,189 @@ struct SessionDetailView: View {
         }
     }
 
-    /// Uma linha do terminal; a última ganha o cursor pulsante quando running.
+    /// Desenha um item do transcrito conforme seu papel.
     @ViewBuilder
-    private func lineView(_ line: String, isLast: Bool) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 2) {
-            Text(line)
-            if isLast && isRunning {
-                BlinkingCursor()
-            }
+    private func chatItemView(_ item: ChatItem) -> some View {
+        switch item {
+        case .user(let text):
+            userBubble(text)
+        case .assistant(let text):
+            assistantBlock(text)
+        case .tool(let command, let result):
+            ToolGroupView(command: command, result: result)
         }
-        .font(.system(.footnote, design: .monospaced))
-        .foregroundStyle(.green)
+    }
+
+    /// Mensagem que VOCÊ enviou — bolha à direita, cor de destaque.
+    private func userBubble(_ text: String) -> some View {
+        HStack {
+            Spacer(minLength: 48)
+            Text(text)
+                .font(.body)
+                .foregroundStyle(.white)
+                .textSelection(.enabled)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    /// Resposta do agente — texto à esquerda, legível, com um avatarzinho.
+    private func assistantBlock(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            AgentAvatar()
+            Text(text)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .padding(.top, 3)
+            Spacer(minLength: 48)
+        }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-// MARK: - Cursor pulsante do terminal
+// MARK: - Avatar discreto do agente
 
-private struct BlinkingCursor: View {
-    @State private var visible = true
+private struct AgentAvatar: View {
+    var body: some View {
+        Image(systemName: "sparkles")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 26, height: 26)
+            .background(Color.accentColor.gradient, in: Circle())
+            .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Grupo tool + tool_result (linha discreta e recolhível)
+
+/// Linha compacta e discreta pra chamadas de ferramenta — não deve competir
+/// visualmente com a resposta do agente. Toque expande o resultado, se houver.
+private struct ToolGroupView: View {
+    let command: String
+    let result: String?
+    @State private var expanded = false
 
     var body: some View {
-        Text("▌")
-            .font(.system(.footnote, design: .monospaced))
-            .foregroundStyle(.green)
-            .opacity(visible ? 1 : 0)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
-                    visible = false
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                guard result != nil else { return }
+                withAnimation(.snappy) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "gearshape.fill")
+                    Text(command)
+                        .lineLimit(expanded ? nil : 1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 8)
+                    if result != nil {
+                        Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                            .font(.caption2.weight(.semibold))
+                    }
                 }
             }
-            .accessibilityHidden(true)
+            .buttonStyle(.plain)
+            .disabled(result == nil)
+
+            if expanded, let result {
+                Text(result)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - Indicador discreto de "digitando" (cursor pulsante da Fase 2)
+
+private struct TypingIndicator: View {
+    @State private var pulse = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            AgentAvatar()
+            HStack(spacing: 4) {
+                ForEach(0..<3, id: \.self) { _ in
+                    Circle()
+                        .fill(Color.secondary)
+                        .frame(width: 6, height: 6)
+                        .opacity(pulse ? 1 : 0.25)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) {
+                pulse = true
+            }
+        }
+        .accessibilityLabel("agente digitando")
+    }
+}
+
+// MARK: - Itens do transcrito (agrupamento de chunks crus)
+
+/// Item pronto pra desenhar no transcrito: já agrupado a partir dos
+/// `OutputChunk` crus (ver `grouping(_:)`).
+private enum ChatItem {
+    case user(String)
+    case assistant(String)
+    /// Uma tool call e, se já chegou, seu resultado (tool_result).
+    case tool(command: String, result: String?)
+
+    /// Agrupa a lista crua e cronológica de chunks: linhas consecutivas do
+    /// mesmo papel se fundem (evita várias bolhas picadas pro mesmo turno);
+    /// tool + tool_result que vêm em seguida viram um único grupo recolhível.
+    static func grouping(_ chunks: [OutputChunk]) -> [ChatItem] {
+        var items: [ChatItem] = []
+        for chunk in chunks {
+            switch chunk.kind {
+            case .user:
+                if case .user(let previous) = items.last {
+                    items[items.count - 1] = .user(previous + "\n" + chunk.text)
+                } else {
+                    items.append(.user(chunk.text))
+                }
+            case .assistant:
+                if case .assistant(let previous) = items.last {
+                    items[items.count - 1] = .assistant(previous + "\n" + chunk.text)
+                } else {
+                    items.append(.assistant(chunk.text))
+                }
+            case .tool:
+                // CADA tool call é um item próprio — o Claude emite vários
+                // tool_use no mesmo turno (ex.: 2 Reads paralelos) e fundir
+                // esconderia todas menos a primeira (review UX, bloqueante).
+                items.append(.tool(command: chunk.text, result: nil))
+            case .toolResult:
+                // Pareia com a tool pendente mais ANTIGA sem resultado: os
+                // tool_result chegam na ordem das chamadas (FIFO).
+                if let idx = items.firstIndex(where: {
+                    if case .tool(_, let r) = $0 { return r == nil }
+                    return false
+                }) {
+                    if case .tool(let command, _) = items[idx] {
+                        items[idx] = .tool(command: command, result: chunk.text)
+                    }
+                } else {
+                    // Borda: tool_result sem tool anterior (histórico truncado).
+                    items.append(.tool(command: "resultado", result: chunk.text))
+                }
+            }
+        }
+        return items
     }
 }
 

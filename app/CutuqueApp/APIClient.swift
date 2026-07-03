@@ -79,9 +79,11 @@ struct APIClient {
         try await send(request)
     }
 
-    /// Busca o histórico de output de uma sessão (últimos ~200 chunks).
-    /// Se o endpoint ainda não existir (adapter em construção), devolve `[]` graciosamente.
-    func output(sessionID: String) async throws -> [String] {
+    /// Busca o histórico de output de uma sessão (últimos ~200 chunks), já
+    /// classificado por `kind` (user/assistant/tool/tool_result) para o
+    /// transcrito estilo chat. Se o endpoint ainda não existir (adapter em
+    /// construção), devolve `[]` graciosamente.
+    func output(sessionID: String) async throws -> [OutputChunk] {
         let url = baseURL
             .appendingPathComponent("sessions")
             .appendingPathComponent(sessionID)
@@ -101,7 +103,7 @@ struct APIClient {
     }
 
     private struct OutputEnvelope: Decodable {
-        let chunks: [String]
+        let chunks: [OutputChunk]
     }
 
     // MARK: - Status do hub (latência)
@@ -183,15 +185,30 @@ struct APIClient {
 
     // MARK: - Ações (Fase 3)
 
+    /// Corpo de `POST /sessions`. `cwd` é opcional (pasta onde o claude roda);
+    /// como é `Optional`, o encoder sintetizado usa `encodeIfPresent` e omite
+    /// a chave inteira do JSON quando `nil` — não manda `"cwd": null`.
+    private struct CreateSessionBody: Encodable {
+        let machine: String
+        let agent: String
+        let prompt: String
+        let cwd: String?
+    }
+
     /// Dispara uma nova sessão. `201` → Session; `400`/`504` → `CutuqueError.server`.
-    func createSession(machine: String, agent: String, prompt: String) async throws -> Session {
+    /// `cwd` opcional: pasta onde o claude roda; vazio/nil = home da máquina.
+    func createSession(machine: String, agent: String, prompt: String, cwd: String? = nil) async throws -> Session {
         var request = URLRequest(url: baseURL.appendingPathComponent("sessions"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode([
-            "machine": machine, "agent": agent, "prompt": prompt,
-        ])
+        // Pasta em branco (só espaços) conta como "não informada".
+        let trimmedCwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = CreateSessionBody(
+            machine: machine, agent: agent, prompt: prompt,
+            cwd: (trimmedCwd?.isEmpty ?? true) ? nil : trimmedCwd
+        )
+        request.httpBody = try JSONEncoder().encode(body)
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }

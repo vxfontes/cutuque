@@ -63,6 +63,43 @@ enum SessionState: String, Codable {
     }
 }
 
+// MARK: - Chunks de output (transcrito estilo chat)
+
+/// Tipo de um pedaço de output, conforme o contrato novo do hub.
+/// Determina como o chunk é desenhado no transcrito: bolha do usuário,
+/// texto do assistente, ou linha discreta de ferramenta/resultado.
+enum ChunkKind: Decodable, Equatable {
+    case user
+    case assistant
+    case tool
+    case toolResult
+
+    // O hub usa snake_case no valor (ex.: "tool_result"), então mapeamos manualmente.
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        switch raw {
+        case "user":        self = .user
+        case "assistant":   self = .assistant
+        case "tool":        self = .tool
+        case "tool_result": self = .toolResult
+        default:            self = .assistant // desconhecido cai em assistente (defensivo)
+        }
+    }
+}
+
+/// Um pedaço de output do histórico (`GET /sessions/{id}/output`), já
+/// classificado por tipo. `id` é só local (não vem do wire) — serve para
+/// identidade estável em listas SwiftUI.
+struct OutputChunk: Decodable, Identifiable, Equatable {
+    let id = UUID()
+    let kind: ChunkKind
+    let text: String
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, text
+    }
+}
+
 // MARK: - Sessão
 
 /// Uma sessão de agente reportada pelo hub.
@@ -85,16 +122,17 @@ struct Session: Codable, Identifiable, Equatable, Hashable {
 /// Mensagens recebidas pelo canal /ws.
 /// - `snapshot`: lista completa recebida ao conectar (substitui o estado local).
 /// - `sessionUpdated`: uma sessão mudou (upsert na lista).
-/// - `outputChunk`: um pedaço de output de uma sessão (usado na tela de detalhe).
+/// - `outputChunk`: um pedaço de output de uma sessão (usado na tela de detalhe),
+///   já com o `kind` (user/assistant/tool/tool_result) para o transcrito estilo chat.
 /// - `sessionRemoved`: uma sessão foi apagada no hub (remover da lista).
 enum WSMessage: Decodable {
     case snapshot([Session])
     case sessionUpdated(Session)
-    case outputChunk(sessionID: String, data: String)
+    case outputChunk(sessionID: String, kind: ChunkKind, text: String)
     case sessionRemoved(sessionID: String)
 
     private enum CodingKeys: String, CodingKey {
-        case type, sessions, session, sessionId, data
+        case type, sessions, session, sessionId, kind, data
     }
 
     init(from decoder: Decoder) throws {
@@ -109,9 +147,11 @@ enum WSMessage: Decodable {
             self = .sessionUpdated(session)
         case "output_chunk":
             // `session_id` vira `sessionId` via convertFromSnakeCase no decoder compartilhado.
+            // O texto continua na chave `data` no wire do WS (o histórico REST usa `text`).
             let sessionID = try container.decode(String.self, forKey: .sessionId)
+            let kind = try container.decode(ChunkKind.self, forKey: .kind)
             let data = try container.decode(String.self, forKey: .data)
-            self = .outputChunk(sessionID: sessionID, data: data)
+            self = .outputChunk(sessionID: sessionID, kind: kind, text: data)
         case "session_removed":
             // `session_id` vira `sessionId` via convertFromSnakeCase no decoder compartilhado.
             let sessionID = try container.decode(String.self, forKey: .sessionId)

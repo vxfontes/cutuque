@@ -30,6 +30,8 @@ struct NewSessionView: View {
     @State private var machines: [String]
     @State private var machine: String
     @State private var prompt = ""
+    /// Pasta onde o claude roda (opcional). Vazio = home da máquina.
+    @State private var cwd = ""
     @State private var isLaunching = false
     @State private var alertMessage: String?
 
@@ -42,6 +44,7 @@ struct NewSessionView: View {
             Form {
                 machineSection
                 agentSection
+                folderSection
                 promptSection
             }
             .navigationTitle("Nova tarefa")
@@ -137,6 +140,20 @@ struct NewSessionView: View {
         }
     }
 
+    /// Pasta opcional onde o claude roda (cwd). Vazia = home da máquina alvo.
+    private var folderSection: some View {
+        Section {
+            TextField("/Users/example/projeto", text: $cwd)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .font(.system(.body, design: .monospaced))
+        } header: {
+            Text("Pasta (opcional)")
+        } footer: {
+            Text("Caminho onde o claude vai rodar. Vazio = home da máquina.")
+        }
+    }
+
     private var promptSection: some View {
         Section("Prompt") {
             // Mínimo ~3 linhas de altura.
@@ -161,7 +178,7 @@ struct NewSessionView: View {
         isLaunching = true
         defer { isLaunching = false }
         do {
-            let session = try await api.createSession(machine: machine, agent: agent, prompt: prompt)
+            let session = try await api.createSession(machine: machine, agent: agent, prompt: prompt, cwd: cwd)
             onCreated(session)
         } catch let CutuqueError.server(status, message) {
             // 504 tem UX própria: a sessão pode aparecer na lista mesmo assim.
