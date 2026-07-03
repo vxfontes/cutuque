@@ -74,6 +74,40 @@ struct APIClient {
         let chunks: [String]
     }
 
+    // MARK: - Ajustes (intervalo do re-cutucão)
+
+    private struct RenudgeBody: Codable {
+        let renudge_seconds: Int
+    }
+
+    /// Lê o intervalo atual do re-cutucão (segundos). `nil` se o hub não expõe
+    /// (ex.: APNs desabilitado) — a tela usa um default nesse caso.
+    func renudgeSeconds() async throws -> Int? {
+        let url = baseURL.appendingPathComponent("settings").appendingPathComponent("renudge")
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard http.statusCode == 200 else { return nil }
+        return try JSONDecoder().decode(RenudgeBody.self, from: data).renudge_seconds
+    }
+
+    /// Ajusta o intervalo do re-cutucão (segundos) via PUT /settings/renudge.
+    func setRenudgeSeconds(_ seconds: Int) async throws {
+        let url = baseURL.appendingPathComponent("settings").appendingPathComponent("renudge")
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(RenudgeBody(renudge_seconds: seconds))
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+    }
+
     // MARK: - Push (Fase 4)
 
     /// Registra o device token de APNs no hub. `POST /devices` (Bearer).

@@ -7,8 +7,6 @@ enum HealthStatus: Equatable {
 }
 
 struct HealthClient {
-    // Em dev, o hub roda local. No simulador, localhost do Mac é acessível via 127.0.0.1.
-    // Ajustar para o IP Tailscale do hub quando testar em device / após deploy (Fase 5).
     // Mesmo endereço configurável do APIClient (tela de Ajustes).
     var baseURL: URL { HubSettings.baseURL }
 
