@@ -120,6 +120,10 @@ func (f *fakeLauncher) SendText(id, text string) error {
 	f.gotInputID, f.gotInputText = id, text
 	return f.sendErr
 }
+func (f *fakeLauncher) Reply(id, text string) error {
+	f.gotInputID, f.gotInputText = id, text
+	return f.sendErr
+}
 
 // do envia um POST autenticado e devolve o recorder.
 func do(t *testing.T, lch Launcher, method, path, body string) *httptest.ResponseRecorder {
@@ -511,6 +515,21 @@ func TestTmuxKillBadRequest(t *testing.T) {
 	rec := do(t, f, http.MethodPost, "/machines/macbook/tmux/kill", `{"target":""}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("target vazio => %d, quero 400", rec.Code)
+	}
+}
+
+func TestReplyRoutesText(t *testing.T) {
+	f := &fakeLauncher{}
+	rec := do(t, f, http.MethodPost, "/sessions/s1/reply", `{"text":"sim, prossiga"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, quero 200 (corpo: %s)", rec.Code, rec.Body.String())
+	}
+	if f.gotInputID != "s1" || f.gotInputText != "sim, prossiga" {
+		t.Errorf("Reply recebeu id=%q text=%q", f.gotInputID, f.gotInputText)
+	}
+	rec = do(t, f, http.MethodPost, "/sessions/s1/reply", `{"text":""}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("texto vazio => %d, quero 400", rec.Code)
 	}
 }
 

@@ -490,6 +490,20 @@ struct APIClient {
         try? await postAction(sessionID: sessionID, action: "history")
     }
 
+    /// Resposta em texto roteada pelo hub (tmux send-keys OU stdin) — usada pela
+    /// resposta direto da notificação. `POST /sessions/{id}/reply`.
+    func reply(sessionID: String, text: String) async throws {
+        let url = baseURL
+            .appendingPathComponent("sessions").appendingPathComponent(sessionID)
+            .appendingPathComponent("reply")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["text": text])
+        try await send(request)
+    }
+
     /// Envia texto livre como resposta ao agente.
     func sendInput(sessionID: String, text: String) async throws {
         let url = baseURL

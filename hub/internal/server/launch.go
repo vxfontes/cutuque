@@ -21,6 +21,7 @@ type Launcher interface {
 	Approve(id string) error
 	Deny(id string) error
 	SendText(id, text string) error
+	Reply(id, text string) error
 	Machines() []string
 	Remove(id string) error
 	Resolve(id string) error
@@ -109,6 +110,32 @@ func TmuxKillHandler(lch Launcher) http.HandlerFunc {
 // tmuxKillServerRequest é o corpo de POST /machines/{machine}/tmux/kill-server.
 type tmuxKillServerRequest struct {
 	Socket string `json:"socket"`
+}
+
+// ReplyHandler entrega uma resposta em texto à sessão, roteando pelo canal certo
+// (tmux send-keys se tiver pane, senão stdin/resume). É o que a resposta vinda
+// direto do push usa.
+//
+//	POST /sessions/{id}/reply {"text":"sim, prossiga"} → 200 ok | 400 | 404 | 409
+func ReplyHandler(lch Launcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		r.Body = http.MaxBytesReader(w, r.Body, maxLaunchBody)
+		var req inputRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Text == "" {
+			writeJSONError(w, http.StatusBadRequest, "bad_request")
+			return
+		}
+		err := lch.Reply(id, req.Text)
+		switch {
+		case errors.Is(err, launcher.ErrUnknownSession):
+			writeJSONError(w, http.StatusNotFound, "unknown_session")
+		case err != nil:
+			writeJSONError(w, http.StatusConflict, "reply_failed")
+		default:
+			writeOK(w)
+		}
+	}
 }
 
 // TmuxKillServerHandler encerra o servidor tmux inteiro do socket (todos os

@@ -71,6 +71,7 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		mux.Handle("POST /sessions/{id}/approve", requireAuth(cfg.Token, ApproveHandler(lch)))
 		mux.Handle("POST /sessions/{id}/deny", requireAuth(cfg.Token, DenyHandler(lch)))
 		mux.Handle("POST /sessions/{id}/input", requireAuth(cfg.Token, InputHandler(lch)))
+		mux.Handle("POST /sessions/{id}/reply", requireAuth(cfg.Token, ReplyHandler(lch)))
 		// Máquinas disponíveis (picker do app) e apagar sessão (swipe-to-delete).
 		mux.Handle("GET /targets", requireAuth(cfg.Token, TargetsHandler(lch)))
 		mux.Handle("DELETE /sessions/{id}", requireAuth(cfg.Token, DeleteSessionHandler(lch)))

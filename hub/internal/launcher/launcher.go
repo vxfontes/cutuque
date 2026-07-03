@@ -604,6 +604,21 @@ func (l *Launcher) SendText(id, text string) error {
 	return l.resume(s, text)
 }
 
+// Reply entrega uma resposta em texto à sessão, ROTEANDO pelo canal certo — é o
+// que a resposta vinda direto do push (notification action) usa, sem o app saber
+// os detalhes: sessão com pane de tmux → digita no terminal (send-keys); senão →
+// stdin/resume (SendText). ErrUnknownSession se não existir.
+func (l *Launcher) Reply(id, text string) error {
+	s, ok := l.reg.Get(id)
+	if !ok {
+		return ErrUnknownSession
+	}
+	if s.Pane != "" {
+		return l.TmuxSend(s.Machine, s.Pane, text)
+	}
+	return l.SendText(id, text)
+}
+
 // resume retoma uma conversa encerrada rodando `claude --resume <id>` na mesma
 // máquina, roteando TODO o stream para o mesmo session id (forcedID). Espelha o
 // Launch, mas não espera um novo session_started nem checa teto (é continuação).

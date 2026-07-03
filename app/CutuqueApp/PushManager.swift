@@ -16,6 +16,7 @@ enum PushAction {
     static let approve = "APPROVE_ACTION"
     static let deny = "DENY_ACTION"
     static let open = "OPEN_ACTION"
+    static let reply = "REPLY_ACTION" // resposta em texto direto da notificação
 }
 
 // MARK: - Router de deep-link
@@ -85,6 +86,11 @@ final class PushManager {
     /// - NEEDS_YOU: Aprovar / Negar (destrutiva) / Abrir (foreground)
     /// - DONE e ERROR: Abrir (foreground)
     func registerCategories() {
+        // Responder em texto direto da notificação (múltipla escolha do tmux ou
+        // resposta livre): o hub roteia (send-keys no tmux / stdin no app-launched).
+        let reply = UNTextInputNotificationAction(
+            identifier: PushAction.reply, title: "Responder", options: [],
+            textInputButtonTitle: "Enviar", textInputPlaceholder: "Responder ao agente…")
         let approve = UNNotificationAction(
             identifier: PushAction.approve, title: "Aprovar", options: [])
         let deny = UNNotificationAction(
@@ -94,7 +100,7 @@ final class PushManager {
 
         let needsYou = UNNotificationCategory(
             identifier: PushCategory.needsYou,
-            actions: [approve, deny, open],
+            actions: [reply, approve, deny, open],
             intentIdentifiers: [], options: [])
         let done = UNNotificationCategory(
             identifier: PushCategory.done,
@@ -132,6 +138,11 @@ final class PushManager {
         let sessionID = userInfo["session_id"] as? String
 
         switch response.actionIdentifier {
+        case PushAction.reply:
+            let text = (response as? UNTextInputNotificationResponse)?.userText ?? ""
+            if let id = sessionID, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                await reply(sessionID: id, text: text)
+            }
         case PushAction.approve:
             if let id = sessionID { await decide(sessionID: id, approve: true) }
             else { print("[Push] ação Aprovar sem session_id no userInfo") }
@@ -142,6 +153,20 @@ final class PushManager {
             if let id = sessionID { router.openSession(id) }
         default:
             break
+        }
+    }
+
+    /// Envia uma resposta em texto à sessão (do push), com 1 retry. O hub roteia
+    /// para o tmux (send-keys) ou stdin conforme a sessão.
+    private func reply(sessionID: String, text: String) async {
+        for attempt in 1...2 {
+            do {
+                try await api.reply(sessionID: sessionID, text: text)
+                return
+            } catch {
+                print("[Push] falha ao responder (tentativa \(attempt)): \(error.localizedDescription)")
+                if attempt == 1 { try? await Task.sleep(nanoseconds: 2_000_000_000) }
+            }
         }
     }
 
