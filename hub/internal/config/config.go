@@ -25,6 +25,12 @@ const (
 	// reenvia o push enquanto a sessão segue em needs_you. Configurável em runtime
 	// pelo app (ver /settings) e no boot via CUTUQUE_RENUDGE_SECONDS.
 	defaultRenudgeSeconds = 15
+
+	// defaultMaxSessions é o teto de sessões concorrentes vivas quando
+	// CUTUQUE_MAX_SESSIONS não é definido (SEC-007/review F3): protege contra
+	// lançamentos ilimitados de processo `claude` (bug de cliente, retry em
+	// loop, token vazado) — cada um tem custo de API real, não só de host.
+	defaultMaxSessions = 20
 )
 
 // Config é a configuração resolvida do hub.
@@ -44,6 +50,11 @@ type Config struct {
 	APNSHost    string // host APNs; default por ambiente (CUTUQUE_APNS_HOST)
 
 	RenudgeSeconds int // intervalo do re-cutucão em needs_you (CUTUQUE_RENUDGE_SECONDS)
+
+	// MaxSessions é o teto de sessões concorrentes vivas que o Launcher aceita
+	// (CUTUQUE_MAX_SESSIONS, default defaultMaxSessions). Acima disso, Launch
+	// rejeita com launcher.ErrTooManySessions (SEC-007).
+	MaxSessions int
 }
 
 // APNSEnabled indica se há credencial APNs suficiente para o Notifier subir.
@@ -59,6 +70,7 @@ func (c Config) APNSEnabled() bool {
 // CUTUQUE_PORT: porta (padrão 8787).
 // CUTUQUE_BIND: sobrescreve o BindAddr resolvido por ambiente.
 // CUTUQUE_TOKEN: bearer token dos devices. Em dev, se vazio, assume "dev-token".
+// CUTUQUE_MAX_SESSIONS: teto de sessões concorrentes vivas (padrão 20).
 func Load() Config {
 	env := os.Getenv("CUTUQUE_ENV")
 	if env == "" {
@@ -102,6 +114,13 @@ func Load() Config {
 		}
 	}
 
+	maxSessions := defaultMaxSessions
+	if m := os.Getenv("CUTUQUE_MAX_SESSIONS"); m != "" {
+		if n, err := strconv.Atoi(m); err == nil && n > 0 {
+			maxSessions = n
+		}
+	}
+
 	return Config{
 		Env:      env,
 		BindAddr: bind,
@@ -115,6 +134,8 @@ func Load() Config {
 		APNSHost:    apnsHost,
 
 		RenudgeSeconds: renudge,
+
+		MaxSessions: maxSessions,
 	}
 }
 

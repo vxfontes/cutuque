@@ -165,3 +165,30 @@ func TestAPNSDisabledByDefault(t *testing.T) {
 		t.Error("APNSEnabled() = true sem nenhuma env APNs; quero false (hub sobe sem APNs)")
 	}
 }
+
+func TestLoadMaxSessionsDefaultsTo20(t *testing.T) {
+	t.Setenv("CUTUQUE_MAX_SESSIONS", "")
+
+	if c := Load(); c.MaxSessions != 20 {
+		t.Errorf("MaxSessions = %d, quero 20 (default)", c.MaxSessions)
+	}
+}
+
+func TestLoadMaxSessionsFromEnv(t *testing.T) {
+	t.Setenv("CUTUQUE_MAX_SESSIONS", "5")
+
+	if c := Load(); c.MaxSessions != 5 {
+		t.Errorf("MaxSessions = %d, quero 5", c.MaxSessions)
+	}
+}
+
+func TestLoadMaxSessionsIgnoresInvalidOrNonPositive(t *testing.T) {
+	for _, v := range []string{"não-é-número", "0", "-3"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("CUTUQUE_MAX_SESSIONS", v)
+			if c := Load(); c.MaxSessions != 20 {
+				t.Errorf("MaxSessions = %d com CUTUQUE_MAX_SESSIONS=%q, quero default 20", c.MaxSessions, v)
+			}
+		})
+	}
+}
