@@ -57,7 +57,8 @@ func writeOK(w http.ResponseWriter) {
 // LaunchHandler dispara uma nova sessão. O contexto da sessão é desacoplado do
 // request (a sessão precisa sobreviver à resposta HTTP).
 //
-//	201 {"session":{...}} | 400 unknown_machine|unknown_agent|bad_request | 504 launch_timeout
+//	201 {"session":{...}} | 400 unknown_machine|unknown_agent|bad_request |
+//	429 too_many_sessions | 504 launch_timeout
 func LaunchHandler(lch Launcher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxLaunchBody)
@@ -73,8 +74,15 @@ func LaunchHandler(lch Launcher) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "unknown_machine")
 		case errors.Is(err, launcher.ErrUnknownAgent):
 			writeJSONError(w, http.StatusBadRequest, "unknown_agent")
+		case errors.Is(err, launcher.ErrTooManySessions):
+			// SEC-007: teto de sessões concorrentes atingido — 429, o cliente
+			// pode tentar de novo mais tarde (não é um erro do pedido em si).
+			writeJSONError(w, http.StatusTooManyRequests, "too_many_sessions")
 		case errors.Is(err, launcher.ErrLaunchTimeout):
 			writeJSONError(w, http.StatusGatewayTimeout, "launch_timeout")
+		case errors.Is(err, launcher.ErrShuttingDown):
+			// Hub encerrando: 503, o cliente tenta de novo quando voltar.
+			writeJSONError(w, http.StatusServiceUnavailable, "shutting_down")
 		case err != nil:
 			writeJSONError(w, http.StatusBadRequest, "bad_request")
 		default:

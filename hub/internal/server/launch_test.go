@@ -79,6 +79,7 @@ func TestLaunchErrorStatuses(t *testing.T) {
 	}{
 		{"unknown_machine", launcher.ErrUnknownMachine, http.StatusBadRequest, "unknown_machine"},
 		{"unknown_agent", launcher.ErrUnknownAgent, http.StatusBadRequest, "unknown_agent"},
+		{"too_many_sessions", launcher.ErrTooManySessions, http.StatusTooManyRequests, "too_many_sessions"},
 		{"launch_timeout", launcher.ErrLaunchTimeout, http.StatusGatewayTimeout, "launch_timeout"},
 	}
 	for _, c := range cases {
