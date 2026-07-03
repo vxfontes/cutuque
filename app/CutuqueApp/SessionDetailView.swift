@@ -478,16 +478,15 @@ struct SessionDetailView: View {
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
-    /// Resposta do agente — texto à esquerda, legível, com um avatarzinho.
+    /// Resposta do agente — markdown renderizado à esquerda, com um avatarzinho.
     private func assistantBlock(_ text: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             AgentAvatar()
-            Text(text)
-                .font(.body)
+            MarkdownText(text: text)
                 .foregroundStyle(.primary)
                 .textSelection(.enabled)
                 .padding(.top, 3)
-            Spacer(minLength: 48)
+            Spacer(minLength: 24)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

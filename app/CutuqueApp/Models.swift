@@ -117,6 +117,47 @@ struct Session: Codable, Identifiable, Equatable, Hashable {
     let pendingPrompt: String?
 }
 
+// MARK: - Sessão descoberta (acompanhar sessões do Mac)
+
+/// Uma sessão do Claude Code já existente numa máquina, lida de
+/// `~/.claude/projects` lá (`GET /machines/{machine}/sessions`), inclusive as
+/// não lançadas pelo Cutuque. É "descoberta" (ainda não adotada): ao tocar,
+/// o app a adota (registra no hub) e abre para continuar a conversa.
+struct DiscoveredSession: Decodable, Identifiable, Equatable, Hashable {
+    let id: String        // = session_id (nome do arquivo .jsonl)
+    let cwd: String       // pasta onde a sessão roda
+    let title: String     // primeira mensagem do usuário
+    let last: String      // última mensagem do usuário (preview)
+    let count: Int        // nº de mensagens do usuário (preview)
+    let modified: Int64   // mtime do transcript (epoch em segundos)
+
+    /// Instante da última atividade, derivado do mtime.
+    var modifiedAt: Date { Date(timeIntervalSince1970: TimeInterval(modified)) }
+
+    /// Último componente da pasta (ex.: "personal") para rótulo compacto.
+    var folderName: String {
+        let trimmed = cwd.hasSuffix("/") ? String(cwd.dropLast()) : cwd
+        return trimmed.split(separator: "/").last.map(String.init) ?? cwd
+    }
+
+    /// Componentes da pasta (para a "árvore" no preview), sem o "/" inicial.
+    var pathComponents: [String] {
+        cwd.split(separator: "/").map(String.init)
+    }
+
+    // Campos novos podem faltar em respostas de um hub antigo → default seguro.
+    private enum CodingKeys: String, CodingKey { case id, cwd, title, last, count, modified }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        cwd = try c.decode(String.self, forKey: .cwd)
+        title = try c.decode(String.self, forKey: .title)
+        last = (try? c.decode(String.self, forKey: .last)) ?? ""
+        count = (try? c.decode(Int.self, forKey: .count)) ?? 0
+        modified = try c.decode(Int64.self, forKey: .modified)
+    }
+}
+
 // MARK: - Mensagens do WebSocket
 
 /// Mensagens recebidas pelo canal /ws.

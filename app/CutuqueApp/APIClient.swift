@@ -224,6 +224,105 @@ struct APIClient {
         }
     }
 
+    /// Lista as sessões do Claude Code já existentes numa máquina (lidas de
+    /// ~/.claude/projects lá), inclusive as não lançadas pelo Cutuque — a base
+    /// para "acompanhar sessões ativas do Mac". `GET /machines/{machine}/sessions`.
+    /// 200 → sessões; 404 → `[]` (hub antigo sem o endpoint, degradação graciosa);
+    /// rede/502/etc → lança, para a UI distinguir "falhou" de "sem sessões".
+    func discover(machine: String) async throws -> [DiscoveredSession] {
+        let url = baseURL
+            .appendingPathComponent("machines")
+            .appendingPathComponent(machine)
+            .appendingPathComponent("sessions")
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        switch http.statusCode {
+        case 200:
+            return try JSONDecoder.cutuque.decode(DiscoverEnvelope.self, from: data).sessions
+        case 404:
+            return [] // hub antigo sem o endpoint → trata como "sem sessões"
+        case 502, 503:
+            throw CutuqueError.server(status: http.statusCode, message: "o Mac não respondeu (tente de novo)")
+        default:
+            throw CutuqueError.unexpected(status: http.statusCode)
+        }
+    }
+
+    private struct DiscoverEnvelope: Decodable {
+        let sessions: [DiscoveredSession]
+    }
+
+    /// Lista as sessões do Claude RODANDO agora numa máquina (processo vivo +
+    /// transcript recente) — as "ao vivo" que aparecem na home.
+    /// `GET /machines/{machine}/live`. Erros são engolidos em `[]` (é um poll de
+    /// fundo; não deve poluir a home com alertas).
+    func live(machine: String) async -> [DiscoveredSession] {
+        let url = baseURL
+            .appendingPathComponent("machines")
+            .appendingPathComponent(machine)
+            .appendingPathComponent("live")
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return [] }
+            return try JSONDecoder.cutuque.decode(DiscoverEnvelope.self, from: data).sessions
+        } catch {
+            return []
+        }
+    }
+
+    /// Corpo de `POST /machines/{machine}/adopt`.
+    private struct AdoptBody: Encodable {
+        let id: String
+        let cwd: String
+        let title: String
+    }
+
+    /// Adota uma sessão descoberta: registra-a no hub (idle) para poder abri-la
+    /// e continuar a conversa. `201` → Session. `POST /machines/{machine}/adopt`.
+    func adopt(machine: String, discovered: DiscoveredSession) async throws -> Session {
+        let url = baseURL
+            .appendingPathComponent("machines")
+            .appendingPathComponent(machine)
+            .appendingPathComponent("adopt")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            AdoptBody(id: discovered.id, cwd: discovered.cwd, title: discovered.title)
+        )
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        switch http.statusCode {
+        case 201:
+            return try JSONDecoder.cutuque.decode(SessionEnvelope.self, from: data).session
+        case 400, 404:
+            let message = Self.errorMessage(from: data) ?? "erro do servidor"
+            throw CutuqueError.server(status: http.statusCode, message: message)
+        default:
+            throw CutuqueError.unexpected(status: http.statusCode)
+        }
+    }
+
+    /// Informa ao hub se o app está em foreground. Enquanto ativo (heartbeat),
+    /// o hub suprime push — o app já recebe tudo ao vivo pelo WS.
+    /// `POST /app/foreground {active}`. Falha silenciosa (é best-effort).
+    func setForeground(_ active: Bool) async {
+        let url = baseURL.appendingPathComponent("app").appendingPathComponent("foreground")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONEncoder().encode(["active": active])
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
     /// Aprova o pedido de permissão pendente da sessão.
     func approve(sessionID: String) async throws {
         try await postAction(sessionID: sessionID, action: "approve")

@@ -3,14 +3,24 @@ import UIKit
 
 // MARK: - ViewModel
 
+/// Uma sessão que está rodando AGORA numa máquina (poll do /machines/{m}/live).
+struct LiveEntry: Identifiable, Equatable {
+    let machine: String
+    let session: DiscoveredSession
+    var id: String { session.id }
+}
+
 @MainActor
 final class SessionListViewModel: ObservableObject {
     @Published var sessions: [Session] = []
     @Published var hubStatus: HealthStatus = .unknown
+    /// Sessões vivas no Mac (rodando em tempo real), atualizadas por polling.
+    @Published var liveSessions: [LiveEntry] = []
 
     private let api = APIClient()
     private let health = HealthClient()
     private var liveTask: Task<Void, Never>?
+    private var livePollTask: Task<Void, Never>?
 
     // Haptics locais: "gostinho do cutucão" antes do push da Fase 4.
     private let haptics = UINotificationFeedbackGenerator()
@@ -69,6 +79,44 @@ final class SessionListViewModel: ObservableObject {
     func stopLiveUpdates() {
         liveTask?.cancel()
         liveTask = nil
+    }
+
+    // MARK: Sessões vivas no Mac (polling)
+
+    /// Começa a pollar as sessões vivas de todas as máquinas a cada ~15s.
+    /// Idempotente. Uma passada roda já no início (sem esperar o 1º sleep).
+    func startLivePolling() {
+        guard livePollTask == nil else { return }
+        livePollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.refreshLive()
+                try? await Task.sleep(for: .seconds(15))
+            }
+        }
+    }
+
+    func stopLivePolling() {
+        livePollTask?.cancel()
+        livePollTask = nil
+    }
+
+    /// Uma passada de descoberta de vivas: para cada máquina, busca /live.
+    func refreshLive() async {
+        let targets = (try? await api.targets()) ?? []
+        var all: [LiveEntry] = []
+        for machine in targets {
+            let sessions = await api.live(machine: machine)
+            all.append(contentsOf: sessions.map { LiveEntry(machine: machine, session: $0) })
+        }
+        let sorted = all.sorted { $0.session.modified > $1.session.modified }
+        withAnimation(.snappy) { liveSessions = sorted }
+    }
+
+    /// Adota uma sessão viva (registra + importa histórico) e devolve a Session
+    /// para o pai navegar. nil em falha.
+    func adoptLive(_ entry: LiveEntry) async -> Session? {
+        try? await api.adopt(machine: entry.machine, discovered: entry.session)
     }
 
     // MARK: Apagar sessão
@@ -130,6 +178,7 @@ struct SessionListView: View {
     // Router de deep-link vindo de uma notificação (Fase 4).
     @EnvironmentObject private var router: Router
     @State private var showingNew = false
+    @State private var showingDiscover = false
     @State private var showingSettings = false
     @State private var showingStatus = false
     // Sessão em processo de renomear (nil = alerta fechado) + texto do apelido.
@@ -138,14 +187,33 @@ struct SessionListView: View {
     // Pilha de navegação; empurramos a sessão (criada ou deep-link) programaticamente.
     // Um único destino `for: Session.self` serve tanto o NavigationLink quanto os pushes.
     @State private var path: [Session] = []
+    // ID da sessão viva sendo adotada (spinner na linha).
+    @State private var adoptingLiveID: String?
 
     // Sessões que precisam de você sobem para uma seção destacada no topo.
     private var needsYou: [Session] { model.sessions.filter { $0.state == .needsYou } }
     private var others: [Session] { model.sessions.filter { $0.state != .needsYou } }
+    // Vivas no Mac que ainda NÃO estão sendo acompanhadas aqui (evita duplicar
+    // na home uma sessão já adotada/rastreada).
+    private var liveNotTracked: [LiveEntry] {
+        let known = Set(model.sessions.map(\.id))
+        return model.liveSessions.filter { !known.contains($0.id) }
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
             List {
+                if !liveNotTracked.isEmpty {
+                    Section {
+                        ForEach(liveNotTracked) { liveRow($0) }
+                    } header: {
+                        Label("Ao vivo no Mac", systemImage: "dot.radiowaves.left.and.right")
+                            .foregroundStyle(.green)
+                            .textCase(nil)
+                    } footer: {
+                        Text("Sessões rodando agora no seu Mac. Toque para dar continuidade ao vivo.")
+                    }
+                }
                 if !needsYou.isEmpty {
                     Section {
                         ForEach(needsYou) { sessionLink($0) }
@@ -167,7 +235,7 @@ struct SessionListView: View {
                 SessionDetailView(session: session)
             }
             .overlay {
-                if model.sessions.isEmpty {
+                if model.sessions.isEmpty && liveNotTracked.isEmpty {
                     emptyState
                 }
             }
@@ -185,12 +253,21 @@ struct SessionListView: View {
                     .accessibilityLabel("Status do hub")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showingNew = true
+                    Menu {
+                        Button {
+                            showingNew = true
+                        } label: {
+                            Label("Nova tarefa", systemImage: "plus")
+                        }
+                        Button {
+                            showingDiscover = true
+                        } label: {
+                            Label("Continuar sessão do Mac", systemImage: "macbook.and.iphone")
+                        }
                     } label: {
                         Image(systemName: "plus")
                     }
-                    .accessibilityLabel("Nova tarefa")
+                    .accessibilityLabel("Nova tarefa ou continuar sessão")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -206,6 +283,15 @@ struct SessionListView: View {
                     // Sucesso: fecha a sheet e navega pro detalhe da sessão criada.
                     showingNew = false
                     path.append(session)
+                }
+            }
+            .sheet(isPresented: $showingDiscover) {
+                DiscoverSessionsView { session in
+                    // Adotou: fecha a sheet e navega pro detalhe (continua a conversa).
+                    showingDiscover = false
+                    if path.last?.id != session.id {
+                        path.append(session)
+                    }
                 }
             }
             .sheet(isPresented: $showingSettings) {
@@ -231,13 +317,20 @@ struct SessionListView: View {
             } message: { _ in
                 Text("Só muda o nome aqui no app; não afeta a sessão real.")
             }
-            .refreshable { await model.refresh() }
+            .refreshable {
+                await model.refresh()
+                await model.refreshLive()
+            }
             .task {
                 await model.refresh()
                 model.startLiveUpdates()
+                model.startLivePolling()
                 resolveDeepLink() // pode haver um push pendente antes da lista carregar
             }
-            .onDisappear { model.stopLiveUpdates() }
+            .onDisappear {
+                model.stopLiveUpdates()
+                model.stopLivePolling()
+            }
             // Deep-link do push: quando o Router aponta uma sessão, navega até ela.
             .onChange(of: router.pendingSessionID) { _, _ in resolveDeepLink() }
             // A sessão do push pode chegar só depois da lista carregar via WS/REST.
@@ -247,6 +340,9 @@ struct SessionListView: View {
             .onChange(of: showingNew) { _, isShowing in
                 if !isShowing { resolveDeepLink() }
             }
+            .onChange(of: showingDiscover) { _, isShowing in
+                if !isShowing { resolveDeepLink() }
+            }
         }
     }
 
@@ -254,7 +350,7 @@ struct SessionListView: View {
     /// Se ainda não chegou (lista carregando), mantém pendente para tentar de novo.
     /// Não navega com a sheet de nova tarefa aberta — adia até ela fechar.
     private func resolveDeepLink() {
-        guard !showingNew, let id = router.pendingSessionID else { return }
+        guard !showingNew, !showingDiscover, let id = router.pendingSessionID else { return }
         if let session = model.sessions.first(where: { $0.id == id }) {
             // Evita empurrar duas vezes o mesmo detalhe.
             if path.last?.id != session.id {
@@ -265,6 +361,48 @@ struct SessionListView: View {
     }
 
     // MARK: Subviews
+
+    /// Linha de uma sessão viva no Mac: toca → adota (importa histórico) → abre.
+    private func liveRow(_ entry: LiveEntry) -> some View {
+        Button {
+            Task {
+                adoptingLiveID = entry.id
+                defer { adoptingLiveID = nil }
+                if let session = await model.adoptLive(entry) {
+                    if path.last?.id != session.id { path.append(session) }
+                }
+            }
+        } label: {
+            HStack(spacing: 12) {
+                LivePulse()
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.session.title)
+                        .font(.body)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        Image(systemName: machineSymbol(entry.machine))
+                        Text(entry.session.folderName)
+                        Text("·")
+                        RelativeTimeText(date: entry.session.modifiedAt)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                if adoptingLiveID == entry.id {
+                    ProgressView()
+                } else {
+                    Image(systemName: "arrow.right.circle").foregroundStyle(.green)
+                }
+            }
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(adoptingLiveID != nil)
+    }
 
     private func sessionLink(_ session: Session) -> some View {
         NavigationLink(value: session) {
@@ -350,6 +488,26 @@ private struct SessionRow: View {
             StateChip(state: session.state)
         }
         .padding(.vertical, 4)
+    }
+}
+
+// MARK: - Pulso "ao vivo" (bolinha verde pulsante)
+
+private struct LivePulse: View {
+    @State private var on = false
+    var body: some View {
+        Circle()
+            .fill(Color.green)
+            .frame(width: 10, height: 10)
+            .overlay(
+                Circle()
+                    .stroke(Color.green, lineWidth: 2)
+                    .scaleEffect(on ? 2.2 : 1)
+                    .opacity(on ? 0 : 0.8)
+            )
+            .animation(.easeOut(duration: 1.2).repeatForever(autoreverses: false), value: on)
+            .onAppear { on = true }
+            .accessibilityLabel("ao vivo")
     }
 }
 
