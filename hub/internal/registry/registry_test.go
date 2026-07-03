@@ -2,12 +2,56 @@ package registry
 
 import (
 	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/vxfontes/cutuque/hub/internal/session"
 )
+
+// TestPersistenceRoundTrip: sessões + estado + dismissed sobrevivem a um
+// "restart" (novo Registry no mesmo path). Sessão concluída volta como done.
+func TestPersistenceRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	now := time.Now()
+
+	r1 := NewAt(path)
+	r1.Add(session.Session{ID: "a", Machine: "macbook", State: session.StateRunning, CreatedAt: now, UpdatedAt: now})
+	_ = r1.UpdateState("a", session.StateDone) // concluiu
+	r1.Add(session.Session{ID: "b", Machine: "macbook", State: session.StateNeedsYou, CreatedAt: now, UpdatedAt: now})
+	r1.Remove("b") // apagada → dismissed
+
+	r2 := NewAt(path) // simula restart do hub
+	if s, ok := r2.Get("a"); !ok || s.State != session.StateDone {
+		t.Errorf("sessão 'a' devia voltar como done; ok=%v state=%q", ok, s.State)
+	}
+	if !r2.Dismissed("b") {
+		t.Error("'b' devia continuar dismissed após restart")
+	}
+	if _, ok := r2.Get("b"); ok {
+		t.Error("'b' foi apagada; não devia reaparecer")
+	}
+}
+
+// TestPersistenceDropsStale: sessões paradas há mais que o TTL não recarregam.
+func TestPersistenceDropsStale(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	old := time.Now().Add(-persistSessionTTL - time.Hour)
+	fresh := time.Now()
+
+	r1 := NewAt(path)
+	r1.Add(session.Session{ID: "velha", Machine: "m", State: session.StateDone, CreatedAt: old, UpdatedAt: old})
+	r1.Add(session.Session{ID: "nova", Machine: "m", State: session.StateDone, CreatedAt: fresh, UpdatedAt: fresh})
+
+	r2 := NewAt(path)
+	if _, ok := r2.Get("velha"); ok {
+		t.Error("sessão velha (além do TTL) não devia recarregar")
+	}
+	if _, ok := r2.Get("nova"); !ok {
+		t.Error("sessão nova devia recarregar")
+	}
+}
 
 func mkSession(id string, created time.Time) session.Session {
 	return session.Session{

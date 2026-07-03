@@ -37,7 +37,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// CUTUQUE_SESSIONS_PATH persiste a metadata das sessões em disco (volume
+	// docker) para sobreviverem a restart/deploy — senão sessões concluídas
+	// reaparecem como "rodando" e a lista some. Sem a env var, só memória (dev).
 	reg := registry.New()
+	if p := os.Getenv("CUTUQUE_SESSIONS_PATH"); p != "" {
+		reg = registry.NewAt(p)
+		logger.Info("sessões persistidas em disco", "path", p, "carregadas", len(reg.List()))
+	}
 
 	// Launcher com os alvos conhecidos. Sem CUTUQUE_SSH_TARGETS, cai no
 	// LocalTarget "macbook" (dev, hub e claude na mesma máquina). Com a env
@@ -57,7 +64,15 @@ func main() {
 		if err != nil {
 			logger.Error("apns configurado mas a chave não carregou; seguindo sem push", "err", err)
 		} else {
+			// CUTUQUE_DEVICES_PATH persiste os device tokens em disco (volume
+			// docker) para sobreviverem a restart/deploy — senão um push
+			// disparado antes do app reabrir e re-registrar se perde. Sem a env
+			// var, segue só em memória (dev).
 			store := devices.New()
+			if p := os.Getenv("CUTUQUE_DEVICES_PATH"); p != "" {
+				store = devices.NewAt(p)
+				logger.Info("devices persistidos em disco", "path", p, "carregados", len(store.List()))
+			}
 			ntf = notifier.New(client, store, reg, logger)
 			ntf.SetRenudgeInterval(time.Duration(cfg.RenudgeSeconds) * time.Second)
 			ntf.Start()

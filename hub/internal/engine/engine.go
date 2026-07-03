@@ -84,35 +84,50 @@ func (e *Engine) Apply(ev event.Event) {
 // usa os metadados (Machine/Agent/Title) vindos do adapter no session_started —
 // mantendo o Engine como único escritor do Registry.
 func (e *Engine) ensureRunning(ev event.Event) {
-	cur, exists := e.reg.Get(ev.SessionID)
-	if !exists {
-		now := time.Now()
-		e.reg.Add(session.Session{
-			ID:        ev.SessionID,
-			Machine:   ev.Machine,
-			Agent:     ev.Agent,
-			Title:     ev.Title,
-			State:     session.StateRunning,
-			Cwd:       ev.Cwd,
-			CreatedAt: now,
-			UpdatedAt: now,
-		})
+	now := time.Now()
+	// Reivindicação atômica (checa presença + insere no MESMO lock): fecha a
+	// corrida entre Get e Add quando hook e Runner criam a MESMA sessão nova ao
+	// mesmo tempo — um Add bruto sobrescreveria silenciosamente o estado que o
+	// outro já avançou (ex.: needs_you + PendingPrompt), deixando o processo real
+	// travado sem badge visível (review SEC-106, mesmo padrão do SEC-103).
+	cur, added := e.reg.AddIfAbsent(session.Session{
+		ID:        ev.SessionID,
+		Machine:   ev.Machine,
+		Agent:     ev.Agent,
+		Title:     ev.Title,
+		State:     session.StateRunning,
+		Cwd:       ev.Cwd,
+		Pane:      ev.Pane,
+		External:  ev.External,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if added {
 		return
+	}
+	// Já existia (re-disparo ou corrida): reconcilia sem sobrescrever.
+	// Se o evento é do Runner (autoritativo, !External) e a sessão foi
+	// pré-criada como external por um hook, o hub reassume o controle dela
+	// (senão aprovar/negar ficaria escondido pra sempre — #1).
+	if !ev.External && cur.External {
+		e.reg.Reclaim(ev.SessionID, ev.Title, ev.Machine, ev.Agent)
 	}
 	if cur.State != session.StateRunning {
 		_ = e.reg.UpdateState(ev.SessionID, session.StateRunning)
 	}
+	e.reg.SetPane(ev.SessionID, ev.Pane)
 }
+
+// SetPane atualiza o alvo tmux de uma sessão existente (usado pelos hooks para
+// gravar o pane numa sessão que já foi registrada antes de o pane ser conhecido).
+func (e *Engine) SetPane(id, pane string) { e.reg.SetPane(id, pane) }
 
 // EnsureRegistered registra a sessão (como running) se ela ainda NÃO existir —
 // usado pelos hooks do Claude Code para que QUALQUER sessão no Mac (não só as
 // lançadas pelo hub) apareça e possa cutucar. No-op se já conhecida (não mexe
 // no estado atual). machine/agent vazios ganham defaults.
-func (e *Engine) EnsureRegistered(id, machine, agent, title, cwd string) {
+func (e *Engine) EnsureRegistered(id, machine, agent, title, cwd, pane string) {
 	if id == "" {
-		return
-	}
-	if _, ok := e.reg.Get(id); ok {
 		return
 	}
 	if machine == "" {
@@ -122,13 +137,17 @@ func (e *Engine) EnsureRegistered(id, machine, agent, title, cwd string) {
 		agent = "claude-code"
 	}
 	now := time.Now()
-	e.reg.Add(session.Session{
+	// Reivindicação atômica (checa dismissed + insere no MESMO lock): fecha a
+	// corrida entre Get/Dismissed/Add e o Undismiss+AddIfAbsent do Adopt (#2).
+	e.reg.AddIfAllowed(session.Session{
 		ID:        id,
 		Machine:   machine,
 		Agent:     agent,
 		Title:     title,
 		State:     session.StateRunning,
 		Cwd:       cwd,
+		Pane:      pane,
+		External:  true, // veio de hook — o hub não controla o gate dela
 		CreatedAt: now,
 		UpdatedAt: now,
 	})

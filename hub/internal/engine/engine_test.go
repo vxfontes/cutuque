@@ -187,3 +187,73 @@ func TestApplyRedundantDoesNotBumpUpdatedAt(t *testing.T) {
 		t.Errorf("UpdatedAt mudou num no-op: %v -> %v", before.UpdatedAt, after.UpdatedAt)
 	}
 }
+
+// TestRunnerReclaimsHookPreCreatedSession cobre a corrida do review #1: um hook
+// pré-cria a sessão como external; quando o Runner (autoritativo, External:false)
+// manda o session_started, o hub reassume — External vira false (aprovar/negar
+// volta a funcionar).
+func TestRunnerReclaimsHookPreCreatedSession(t *testing.T) {
+	reg := registry.New()
+	eng := New(reg)
+	id := "sess-race"
+
+	// hook chega primeiro: cria external.
+	eng.EnsureRegistered(id, "macbook", "claude-code", "titulo-hook", "/x", "")
+	if s, _ := reg.Get(id); !s.External {
+		t.Fatalf("pré-condição: sessão deveria estar external após o hook")
+	}
+
+	// Runner manda o session_started dele (External:false = autoritativo).
+	eng.Apply(event.Event{SessionID: id, Type: event.SessionStarted, Machine: "macbook", Agent: "claude-code", Title: "prompt-real", At: time.Now()})
+
+	s, _ := reg.Get(id)
+	if s.External {
+		t.Error("sessão continuou external — o Runner deveria ter reassumido (aprovar/negar ficaria escondido)")
+	}
+	if s.Title != "prompt-real" {
+		t.Errorf("Title = %q, quero o do Runner \"prompt-real\"", s.Title)
+	}
+}
+
+// TestSetPaneEvictsStaleSession cobre o review #3: quando uma pane é reusada por
+// uma sessão nova, a sessão antiga perde a pane e, se estava em needs_you, vira
+// done (senão tocar nela abriria o terminal da sessão nova).
+func TestSetPaneEvictsStaleSession(t *testing.T) {
+	reg := registry.New()
+	now := time.Now()
+	pane := "/tmp/tmux-501/main\t%0"
+	// A: stale, travada em needs_you, com a pane.
+	reg.Add(session.Session{ID: "A", Machine: "macbook", State: session.StateNeedsYou, Pane: pane, PendingPrompt: "?", CreatedAt: now, UpdatedAt: now})
+	// B: nova, reusa a MESMA pane.
+	reg.Add(session.Session{ID: "B", Machine: "macbook", State: session.StateRunning, CreatedAt: now, UpdatedAt: now})
+	reg.SetPane("B", pane)
+
+	a, _ := reg.Get("A")
+	if a.Pane == pane {
+		t.Error("A ainda tem a pane reusada — deveria ter sido despejada")
+	}
+	if a.State != session.StateDone {
+		t.Errorf("A.State = %q, quero done (stale despejada)", a.State)
+	}
+	b, _ := reg.Get("B")
+	if b.Pane != pane {
+		t.Errorf("B deveria ter a pane; got %q", b.Pane)
+	}
+}
+
+// TestSetPaneDoesNotEvictCrossMachine: o mesmo alvo de pane em máquinas
+// DIFERENTES não colide — defaults do tmux coincidem entre máquinas, mas cada
+// uma é um terminal distinto (review SEC-104).
+func TestSetPaneDoesNotEvictCrossMachine(t *testing.T) {
+	reg := registry.New()
+	now := time.Now()
+	pane := "/tmp/tmux-501/main\t%0" // mesmo alvo, máquinas distintas
+	reg.Add(session.Session{ID: "A", Machine: "macbook", State: session.StateNeedsYou, Pane: pane, PendingPrompt: "?", CreatedAt: now, UpdatedAt: now})
+	reg.Add(session.Session{ID: "B", Machine: "wsl", State: session.StateRunning, CreatedAt: now, UpdatedAt: now})
+	reg.SetPane("B", pane)
+
+	// A (macbook) NÃO deve ter sido despejada por B (wsl).
+	if a, _ := reg.Get("A"); a.Pane != pane || a.State != session.StateNeedsYou {
+		t.Errorf("A (macbook) foi mexida por uma pane igual em outra máquina: %+v", a)
+	}
+}

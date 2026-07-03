@@ -50,15 +50,20 @@ const (
 // como user/assistant/tool/tool_result (ver constantes Kind* acima) para o
 // contrato tipado de output do app. Nos demais tipos de evento fica vazio.
 type Event struct {
-	SessionID string          `json:"session_id"`
-	Type      Type            `json:"type"`
-	Kind      string          `json:"kind,omitempty"`
-	Data      string          `json:"data"`
-	At        time.Time       `json:"at"`
-	Machine   string          `json:"machine,omitempty"`
-	Agent     string          `json:"agent,omitempty"`
-	Title     string          `json:"title,omitempty"`
-	Cwd       string          `json:"cwd,omitempty"`
+	SessionID string    `json:"session_id"`
+	Type      Type      `json:"type"`
+	Kind      string    `json:"kind,omitempty"`
+	Data      string    `json:"data"`
+	At        time.Time `json:"at"`
+	Machine   string    `json:"machine,omitempty"`
+	Agent     string    `json:"agent,omitempty"`
+	Title     string    `json:"title,omitempty"`
+	Cwd       string    `json:"cwd,omitempty"`
+	Pane      string    `json:"pane,omitempty"`
+	// External marca eventos vindos de HOOK (sessão não lançada pelo hub). O
+	// Runner emite eventos com External=false (autoritativo) — usado por
+	// ensureRunning para reassumir sessões pré-criadas por hook numa corrida.
+	External  bool            `json:"external,omitempty"`
 	ControlID string          `json:"control_id,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
 }
