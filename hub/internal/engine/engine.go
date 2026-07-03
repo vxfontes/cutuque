@@ -93,6 +93,7 @@ func (e *Engine) ensureRunning(ev event.Event) {
 			Agent:     ev.Agent,
 			Title:     ev.Title,
 			State:     session.StateRunning,
+			Cwd:       ev.Cwd,
 			CreatedAt: now,
 			UpdatedAt: now,
 		})
@@ -101,6 +102,36 @@ func (e *Engine) ensureRunning(ev event.Event) {
 	if cur.State != session.StateRunning {
 		_ = e.reg.UpdateState(ev.SessionID, session.StateRunning)
 	}
+}
+
+// EnsureRegistered registra a sessão (como running) se ela ainda NÃO existir —
+// usado pelos hooks do Claude Code para que QUALQUER sessão no Mac (não só as
+// lançadas pelo hub) apareça e possa cutucar. No-op se já conhecida (não mexe
+// no estado atual). machine/agent vazios ganham defaults.
+func (e *Engine) EnsureRegistered(id, machine, agent, title, cwd string) {
+	if id == "" {
+		return
+	}
+	if _, ok := e.reg.Get(id); ok {
+		return
+	}
+	if machine == "" {
+		machine = "mac"
+	}
+	if agent == "" {
+		agent = "claude-code"
+	}
+	now := time.Now()
+	e.reg.Add(session.Session{
+		ID:        id,
+		Machine:   machine,
+		Agent:     agent,
+		Title:     title,
+		State:     session.StateRunning,
+		Cwd:       cwd,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
 }
 
 // targetState mapeia um tipo de evento para o estado-alvo. ok=false quando o

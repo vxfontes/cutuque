@@ -58,6 +58,7 @@ type Event struct {
 	Machine   string          `json:"machine,omitempty"`
 	Agent     string          `json:"agent,omitempty"`
 	Title     string          `json:"title,omitempty"`
+	Cwd       string          `json:"cwd,omitempty"`
 	ControlID string          `json:"control_id,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
 }

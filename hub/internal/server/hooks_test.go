@@ -30,6 +30,46 @@ func TestHookNotificationSetsNeedsYou(t *testing.T) {
 	}
 }
 
+// TestHookAutoRegistersUnknownSession: um hook de uma sessão que o hub NÃO
+// lançou (interativa/tmux) auto-registra a sessão e a leva a needs_you — a base
+// para "qualquer claude no Mac aparece e cutuca".
+func TestHookAutoRegistersUnknownSession(t *testing.T) {
+	cfg, reg := testDeps()
+	body := `{"session_id":"desconhecida-123","hook_event_name":"Notification","message":"posso rodar?","cwd":"/Users/example/proj","machine":"macbook"}`
+	req := httptest.NewRequest(http.MethodPost, "/hooks/claude", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, quero 200", rec.Code)
+	}
+	s, ok := reg.Get("desconhecida-123")
+	if !ok {
+		t.Fatal("sessão desconhecida não foi auto-registrada pelo hook")
+	}
+	if s.State != session.StateNeedsYou || s.Machine != "macbook" || s.Cwd != "/Users/example/proj" {
+		t.Errorf("sessão auto-registrada errada: %+v", s)
+	}
+}
+
+// TestHookSessionStartRegistersRunning: SessionStart auto-registra como running.
+func TestHookSessionStartRegistersRunning(t *testing.T) {
+	cfg, reg := testDeps()
+	body := `{"session_id":"nova-1","hook_event_name":"SessionStart","cwd":"/Users/example/x","machine":"macbook"}`
+	req := httptest.NewRequest(http.MethodPost, "/hooks/claude", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, quero 200", rec.Code)
+	}
+	if s, ok := reg.Get("nova-1"); !ok || s.State != session.StateRunning {
+		t.Errorf("SessionStart devia registrar running; got ok=%v state=%q", ok, s.State)
+	}
+}
+
 func TestHookStopSetsDone(t *testing.T) {
 	cfg, reg := testDeps()
 	now := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
