@@ -36,6 +36,8 @@ struct HubSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage(HubSettings.urlKey) private var url = HubSettings.defaultURL
     @AppStorage(HubSettings.tokenKey) private var token = HubSettings.defaultToken
+    @AppStorage(AppThemeKeys.colorScheme) private var colorSchemeRaw = AppColorScheme.system.rawValue
+    @AppStorage(AppThemeKeys.accent) private var accentRaw = AppAccent.blue.rawValue
 
     @State private var renudge = 15
     @State private var renudgeAvailable = false
@@ -54,6 +56,26 @@ struct HubSettingsView: View {
                     TextField("Token", text: $token)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                }
+
+                Section {
+                    Picker("Aparência", selection: $colorSchemeRaw) {
+                        ForEach(AppColorScheme.allCases) { s in
+                            Label(s.label, systemImage: s.symbol).tag(s.rawValue)
+                        }
+                    }
+                    Picker("Tema (cor)", selection: $accentRaw) {
+                        ForEach(AppAccent.allCases) { a in
+                            HStack {
+                                Circle().fill(a.color).frame(width: 14, height: 14)
+                                Text(a.label)
+                            }.tag(a.rawValue)
+                        }
+                    }
+                } header: {
+                    Text("Aparência")
+                } footer: {
+                    Text("Modo claro/escuro (ou seguir o sistema) e a cor de realce do app.")
                 }
 
                 Section {
