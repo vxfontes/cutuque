@@ -22,9 +22,19 @@ type fakeLauncher struct {
 	denyErr       error
 	sendErr       error
 
+	machines  []string
+	removeErr error
+
 	gotMachine, gotAgent, gotPrompt string
 	gotApproveID, gotDenyID         string
 	gotInputID, gotInputText        string
+	gotRemoveID                     string
+}
+
+func (f *fakeLauncher) Machines() []string { return f.machines }
+func (f *fakeLauncher) Remove(id string) error {
+	f.gotRemoveID = id
+	return f.removeErr
 }
 
 func (f *fakeLauncher) Launch(_ context.Context, machine, agent, prompt string) (session.Session, error) {
@@ -202,5 +212,35 @@ func assertErrorCode(t *testing.T, body []byte, want string) {
 	}
 	if e.Error != want {
 		t.Errorf("error = %q, quero %q", e.Error, want)
+	}
+}
+
+func TestTargetsListsMachines(t *testing.T) {
+	f := &fakeLauncher{machines: []string{"macbook", "macmini"}}
+	rec := do(t, f, http.MethodGet, "/targets", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, quero 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"macbook"`) || !strings.Contains(rec.Body.String(), `"macmini"`) {
+		t.Errorf("corpo sem as máquinas: %s", rec.Body.String())
+	}
+}
+
+func TestDeleteSessionOK(t *testing.T) {
+	f := &fakeLauncher{}
+	rec := do(t, f, http.MethodDelete, "/sessions/abc", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, quero 200 (corpo: %s)", rec.Code, rec.Body.String())
+	}
+	if f.gotRemoveID != "abc" {
+		t.Errorf("Remove chamado com %q, quero \"abc\"", f.gotRemoveID)
+	}
+}
+
+func TestDeleteSessionNotFound(t *testing.T) {
+	f := &fakeLauncher{removeErr: launcher.ErrUnknownSession}
+	rec := do(t, f, http.MethodDelete, "/sessions/ghost", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, quero 404", rec.Code)
 	}
 }

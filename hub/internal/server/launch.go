@@ -21,6 +21,33 @@ type Launcher interface {
 	Approve(id string) error
 	Deny(id string) error
 	SendText(id, text string) error
+	Machines() []string
+	Remove(id string) error
+}
+
+// TargetsHandler lista as máquinas disponíveis para lançar sessões.
+//
+//	200 {"targets":["macbook","macmini"]}
+func TargetsHandler(lch Launcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string][]string{"targets": lch.Machines()})
+	}
+}
+
+// DeleteSessionHandler apaga uma sessão (fecha se viva + remove do registry).
+//
+//	200 {"ok":true} | 404 unknown_session
+func DeleteSessionHandler(lch Launcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if err := lch.Remove(id); err != nil {
+			writeJSONError(w, http.StatusNotFound, "unknown_session")
+			return
+		}
+		writeOK(w)
+	}
 }
 
 // launchRequest é o corpo de POST /sessions.

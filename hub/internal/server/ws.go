@@ -40,6 +40,12 @@ type outputMessage struct {
 	Data      string `json:"data"`
 }
 
+// removedMessage é enviada quando uma sessão é apagada (Registry.Remove).
+type removedMessage struct {
+	Type      string `json:"type"` // sempre "session_removed"
+	SessionID string `json:"session_id"`
+}
+
 // WSHandler faz o upgrade para WebSocket e transmite o estado das sessões:
 // um snapshot inicial e, em seguida, uma mensagem por mudança no registry.
 func WSHandler(reg *registry.Registry) http.HandlerFunc {
@@ -96,6 +102,14 @@ func WSHandler(reg *registry.Registry) http.HandlerFunc {
 					return
 				}
 				msg := outputMessage{Type: "output_chunk", SessionID: o.SessionID, Data: o.Data}
+				if err := writeJSON(ctx, c, msg); err != nil {
+					return
+				}
+			case id, ok := <-sub.Removed:
+				if !ok {
+					return
+				}
+				msg := removedMessage{Type: "session_removed", SessionID: id}
 				if err := writeJSON(ctx, c, msg); err != nil {
 					return
 				}
