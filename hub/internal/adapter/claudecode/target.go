@@ -3,12 +3,19 @@ package claudecode
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
+	"time"
 )
+
+// closeWaitTimeout é quanto Close espera o processo sair sozinho (após fechar
+// stdin/stdout) antes de matar com SIGKILL. Sem esse teto, um filho pendurado
+// (ex.: ssh travado no connect) faria Close — e o graceful shutdown — travar
+// para sempre (review F5, achado bloqueante #1).
+const closeWaitTimeout = 5 * time.Second
 
 // Handle é o canal bidirecional de uma sessão viva do Claude Code: lê-se o
 // stream-json pelo Stdout e escreve-se pelo Stdin (mensagens de usuário e
@@ -20,7 +27,8 @@ import (
 type Handle struct {
 	Stdout  io.ReadCloser
 	Stdin   io.WriteCloser
-	closer  func() error
+	wait    func() error // cmd.Wait — colhe o processo
+	kill    func() error // cmd.Process.Kill (SIGKILL) — fallback do Close
 	writeMu sync.Mutex
 
 	// closeOnce garante um único cmd.Wait(): Close pode ser chamado em corrida
@@ -32,7 +40,9 @@ type Handle struct {
 
 // Close fecha o stdin (sinaliza EOF ao agente) e espera o processo terminar,
 // para não deixar zumbis. É seguro (e idempotente) chamar de várias goroutines:
-// só a primeira executa; as demais recebem o mesmo resultado.
+// só a primeira executa; as demais recebem o mesmo resultado. Se o processo não
+// sair em closeWaitTimeout (ex.: ssh pendurado), é morto com SIGKILL — Close
+// nunca bloqueia indefinidamente (review F5, achado bloqueante #1).
 func (h *Handle) Close() error {
 	h.closeOnce.Do(func() {
 		if h.Stdin != nil {
@@ -41,11 +51,32 @@ func (h *Handle) Close() error {
 		if h.Stdout != nil {
 			_ = h.Stdout.Close()
 		}
-		if h.closer != nil {
-			h.closeErr = h.closer()
+		if h.wait == nil {
+			return
+		}
+		done := make(chan error, 1)
+		go func() { done <- h.wait() }()
+		select {
+		case err := <-done:
+			h.closeErr = err
+		case <-time.After(closeWaitTimeout):
+			if h.kill != nil {
+				_ = h.kill()
+			}
+			h.closeErr = <-done // Wait retorna após o SIGKILL
 		}
 	})
 	return h.closeErr
+}
+
+// procKill devolve uma função que mata o processo do cmd com SIGKILL (nil-safe).
+func procKill(cmd *exec.Cmd) func() error {
+	return func() error {
+		if cmd.Process != nil {
+			return cmd.Process.Kill()
+		}
+		return nil
+	}
 }
 
 // userMessage é a mensagem de usuário no formato stream-json que o CLI aceita
@@ -162,7 +193,8 @@ func (t *LocalTarget) Start(ctx context.Context) (*Handle, error) {
 	return &Handle{
 		Stdout: stdout,
 		Stdin:  stdin,
-		closer: cmd.Wait,
+		wait:   cmd.Wait,
+		kill:   procKill(cmd),
 	}, nil
 }
 
@@ -180,21 +212,128 @@ func childEnv() []string {
 	return env
 }
 
-// SSHTarget observará uma sessão numa máquina remota via `tailscale ssh`.
-// Stub documentado — implementação real fica para a Fase 3/v1.
+// defaultRemoteClaudeCmd é o comando/caminho do claude remoto quando nada é
+// configurado — assume que está no PATH do login shell remoto. Máquinas onde o
+// claude mora fora do PATH (ex.: instalado via npm em ~/.local/bin sem symlink
+// em /usr/local/bin) precisam de SetRemoteClaudeCmd com o caminho absoluto.
+const defaultRemoteClaudeCmd = "claude"
+
+// SSHTarget roda o Claude Code numa máquina remota via `ssh`, no MESMO shape
+// bidirecional do LocalTarget: Start devolve um *Handle cujo Stdin/Stdout são
+// pipes limpos (SEM PTY) ligados ao stream-json do `claude` do outro lado —
+// docs/02 chama isso de "native-first" via `tailscale ssh`/ssh direto.
+//
+// O comando remoto roda dentro de um login shell (`bash -lc`): uma sessão ssh
+// não-interativa normalmente só carrega /etc/profile (não o rc do shell do
+// usuário), e o `claude` costuma estar em ~/.local/bin ou similar — fora desse
+// PATH reduzido (docs/superpowers/plans/2026-07-02-fase-5, "reconhecimento do
+// servidor"). O login shell garante que o PATH completo do usuário remoto seja
+// carregado antes de procurar o `claude`.
 type SSHTarget struct {
-	name string
+	name      string
+	dest      string // destino ssh: alias do ~/.ssh/config OU user@host
+	remoteCmd string // caminho/comando do claude remoto (default: "claude")
+	prog      string // programa ssh local (parametrizável em teste)
+	buildArgs func(dest, remoteCmd string) []string
 }
 
-// NewSSHTarget cria o stub de um alvo remoto.
-func NewSSHTarget(name string) *SSHTarget {
-	return &SSHTarget{name: name}
+// NewSSHTarget cria um SSHTarget que conecta a `dest` (alias do ~/.ssh/config
+// ou user@host) e roda o `claude` real lá, com o comando verificado na CLI
+// 2.1.198 (mesmas flags do LocalTarget — docs/10).
+func NewSSHTarget(name, dest string) *SSHTarget {
+	return newSSHCommand(name, dest, defaultRemoteClaudeCmd, "ssh", sshClaudeArgs)
 }
 
-// Name identifica o alvo remoto.
+// newSSHCommand cria um SSHTarget parametrizável (usado em teste para trocar o
+// binário `ssh` local por um fake — ex. `cat`/`env` sobre uma fixture — e
+// inspecionar/injetar o stream, no mesmo espírito de newLocalCommand).
+func newSSHCommand(name, dest, remoteCmd, prog string, buildArgs func(dest, remoteCmd string) []string) *SSHTarget {
+	return &SSHTarget{name: name, dest: dest, remoteCmd: remoteCmd, prog: prog, buildArgs: buildArgs}
+}
+
+// SetRemoteClaudeCmd sobrescreve o caminho/comando do claude remoto (ex.:
+// "/Users/example/.local/bin/claude" quando não está nem no PATH do login
+// shell remoto). Valores vazios são ignorados (mantém o default/atual).
+func (t *SSHTarget) SetRemoteClaudeCmd(cmd string) {
+	if cmd != "" {
+		t.remoteCmd = cmd
+	}
+}
+
+// Name identifica o alvo remoto (vira o campo Machine da sessão).
 func (t *SSHTarget) Name() string { return t.name }
 
-// Start ainda não é suportado (Fase 3/v1: abrir/observar via `tailscale ssh`).
+// Start conecta via ssh e liga stdin/stdout (pipes limpos, sem PTY) ao Handle.
+// Fechar o Handle fecha o stdin do ssh local (EOF chega ao `claude` remoto) e
+// espera o processo ssh terminar — mesmo shape do LocalTarget.Start.
 func (t *SSHTarget) Start(ctx context.Context) (*Handle, error) {
-	return nil, errors.New("claudecode: SSHTarget ainda não implementado (Fase 3/v1)")
+	cmd := exec.CommandContext(ctx, t.prog, t.buildArgs(t.dest, t.remoteCmd)...)
+	// Mesma allowlist do LocalTarget (SEC-006): o processo ssh NÃO herda o
+	// ambiente do hub além do necessário. HOME é essencial para o ssh achar
+	// ~/.ssh/config, as chaves privadas e o known_hosts.
+	cmd.Env = childEnv()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return &Handle{
+		Stdout: stdout,
+		Stdin:  stdin,
+		wait:   cmd.Wait,
+		kill:   procKill(cmd),
+	}, nil
+}
+
+// sshClaudeArgs monta os args reais passados ao binário `ssh` local:
+//   - BatchMode=yes: nunca pede senha interativamente (o hub não tem TTY para
+//     responder); falha rápido se a chave não autenticar sozinha.
+//   - ServerAliveInterval/CountMax: keepalive da camada ssh — detecta o Mac
+//     dormindo/rede caindo sem esperar o TCP timeout do SO.
+//   - -T: desliga alocação de PTY (mesmo que o ~/.ssh/config do alias peça
+//     "RequestTTY"), garantindo stdin/stdout como pipes limpos para o
+//     protocolo stream-json — um PTY reescreveria/misturaria os bytes.
+//   - o comando remoto roda o claude dentro de um login shell (ver comentário
+//     do SSHTarget).
+func sshClaudeArgs(dest, remoteCmd string) []string {
+	return []string{
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=10", // não pendura no connect de host lento/inalcançável (review F5, #1)
+		"-o", "ServerAliveInterval=15",
+		"-o", "ServerAliveCountMax=3",
+		"-o", "StrictHostKeyChecking=accept-new", // explícito: não fica refém do ssh_config do host (review F5, segurança-ssh)
+		"-T",
+		"--", // separador: um dest começando com "-" nunca é reinterpretado como opção (review F5, injeção)
+		dest,
+		remoteClaudeCommand(remoteCmd),
+	}
+}
+
+// remoteClaudeCommand monta a linha de comando remota como UMA única string
+// (para sobreviver à concatenação por espaço que o próprio ssh faz dos args
+// finais antes de mandar ao shell de login remoto): `bash -lc '<claude com as
+// flags verificadas>'`.
+func remoteClaudeCommand(claudeCmd string) string {
+	claudeArgs := []string{
+		claudeCmd, "-p",
+		"--input-format", "stream-json",
+		"--output-format", "stream-json",
+		"--permission-mode", "default",
+		"--permission-prompt-tool", "stdio",
+		"--verbose",
+	}
+	return "bash -lc " + singleQuote(strings.Join(claudeArgs, " "))
+}
+
+// singleQuote envolve s em aspas simples (escapando aspas simples internas) —
+// suficiente para os valores fixos/configurados aqui (caminho do claude e suas
+// flags), não pretende ser um escapador de shell genérico para input externo.
+func singleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

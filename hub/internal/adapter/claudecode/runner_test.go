@@ -234,13 +234,3 @@ func TestSendUserMessageWritesStreamJSON(t *testing.T) {
 		t.Errorf("content errado: %+v", msg.Message.Content)
 	}
 }
-
-func TestSSHTargetIsStub(t *testing.T) {
-	tgt := NewSSHTarget("remote")
-	if tgt.Name() != "remote" {
-		t.Errorf("Name() = %q, quero \"remote\"", tgt.Name())
-	}
-	if _, err := tgt.Start(context.Background()); err == nil {
-		t.Errorf("SSHTarget.Start err = nil, quero erro de não-implementado")
-	}
-}
