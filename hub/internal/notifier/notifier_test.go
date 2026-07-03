@@ -207,12 +207,30 @@ func TestNotifiesOnDone(t *testing.T) {
 	}
 }
 
+// startExternal cria uma sessão externa (tmux) COM pane — as que cutucam.
 func startExternal(eng *engine.Engine, id string) {
 	eng.Apply(event.Event{
 		SessionID: id, Type: event.SessionStarted,
 		Machine: "macbook", Agent: "claude-code", Title: "tmux task",
-		External: true, At: time.Now(),
+		External: true, Pane: "/tmp/tmux-501/main\t%0", At: time.Now(),
 	})
+}
+
+// TestNoPushForExternalWithoutPane: subagente (externa SEM pane) NÃO cutuca —
+// fica arquivada na aba Subagentes, sem push.
+func TestNoPushForExternalWithoutPane(t *testing.T) {
+	eng, _, _, fake, _ := fixture(t)
+	eng.Apply(event.Event{
+		SessionID: "sub1", Type: event.SessionStarted,
+		Machine: "macbook", Agent: "claude-code", Title: "subagente",
+		External: true, At: time.Now(), // sem Pane
+	})
+	eng.Apply(event.Event{SessionID: "sub1", Type: event.NeedsInput, Data: "?", At: time.Now()})
+	eng.Apply(event.Event{SessionID: "sub1", Type: event.Finished, At: time.Now()})
+
+	if p, got := tryRecv(fake, 250*time.Millisecond); got {
+		t.Fatalf("subagente (externa sem pane) não deve cutucar: %s", p.payload)
+	}
 }
 
 // TestNotifiesOnDoneExternal: sessão externa (tmux/hook) cutuca ao concluir —

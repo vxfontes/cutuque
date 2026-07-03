@@ -231,24 +231,33 @@ struct SessionListView: View {
     @State private var serverToKill: ServerKill?
     @State private var confirmingClear = false
     @State private var concludedExpanded = false
+    @State private var subagentsExpanded = false
 
     // Alvos tmux (compostos socket\tpane) que estão vivos agora.
     private var livePaneIDs: Set<String> { Set(model.liveSessions.map(\.id)) }
     // Panes das sessões que precisam de você (pra não duplicar em "Ao vivo").
     private var needsYouPaneIDs: Set<String> { Set(needsYou.compactMap(\.tmuxTarget)) }
 
-    // "Precisa de você": qualquer sessão em needs_you (a área de notificação).
-    private var needsYou: [Session] { model.sessions.filter { $0.state == .needsYou } }
+    // Subagente / sessão "solta": externa (de hook) e SEM pane de tmux — não dá
+    // pra interagir ao vivo (sem terminal pra espelhar). São os subagentes do
+    // maestri e afins; ficam arquivados na seção "Subagentes" (recap sob demanda),
+    // fora das seções principais, para não inundar a home com títulos repetidos.
+    private func isSubagent(_ s: Session) -> Bool { s.isExternal && s.tmuxTarget == nil }
+    private var subagents: [Session] { model.sessions.filter { isSubagent($0) } }
+
+    // "Precisa de você": needs_you acionável (tem pane de tmux OU foi lançada pelo
+    // app). Subagentes sem pane não entram aqui (vão pra "Subagentes").
+    private var needsYou: [Session] { model.sessions.filter { $0.state == .needsYou && !isSubagent($0) } }
     // "Ao vivo no Mac": panes do tmux vivos que NÃO estão em needs_you (esses já
     // aparecem em "Precisa de você" e abrem o terminal ao tocar).
     private var liveNotTracked: [LiveEntry] {
         model.liveSessions.filter { !needsYouPaneIDs.contains($0.id) }
     }
-    // "Sessões": registry que não é needs_you e NÃO é uma sessão viva do tmux
-    // (dedup: a viva aparece em "Ao vivo"/"Precisa de você", não aqui).
+    // "Sessões": registry que não é needs_you, não é subagente e NÃO é uma sessão
+    // viva do tmux (dedup: a viva aparece em "Ao vivo"/"Precisa de você").
     private var others: [Session] {
         model.sessions.filter { s in
-            s.state != .needsYou && !(s.tmuxTarget.map { livePaneIDs.contains($0) } ?? false)
+            s.state != .needsYou && !isSubagent(s) && !(s.tmuxTarget.map { livePaneIDs.contains($0) } ?? false)
         }
     }
     // "Sessões" ativas (rodando/ociosas) ficam em destaque; concluídas (done/error)
@@ -338,6 +347,24 @@ struct SessionListView: View {
         }
     }
 
+    // "Subagentes": sessões externas sem pane (subagentes do maestri etc.),
+    // arquivadas e recolhidas. Toque abre o recap da conversa (sem interação ao
+    // vivo). Não cutucam.
+    @ViewBuilder private var subagentsSection: some View {
+        if !subagents.isEmpty {
+            Section {
+                DisclosureGroup(isExpanded: $subagentsExpanded) {
+                    ForEach(subagents) { sessionLink($0) }
+                } label: {
+                    Label("Subagentes (\(subagents.count))", systemImage: "square.stack.3d.up")
+                        .textCase(nil)
+                }
+            } footer: {
+                Text("Sessões sem terminal ao vivo (ex.: subagentes do maestri). Toque para ver a conversa.")
+            }
+        }
+    }
+
     var body: some View {
         NavigationStack(path: $path) {
             List {
@@ -345,6 +372,7 @@ struct SessionListView: View {
                 needsYouSection
                 activeSection
                 concludedSection
+                subagentsSection
             }
             .listStyle(.insetGrouped)
             // Destino único para navegação por valor (NavigationLink) e por push (path).

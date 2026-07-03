@@ -203,6 +203,17 @@ func (n *Notifier) handle(s session.Session) {
 		return // estado inalterado (ex.: rebroadcast de pending prompt)
 	}
 
+	// Subagente / sessão externa SEM pane de tmux: não é acionável pelo app (sem
+	// terminal ao vivo) e fica "arquivada" na aba Subagentes — NÃO cutuca, senão
+	// os subagentes do maestri inundariam a usuária com push sem sentido. Só
+	// registra o estado (e encerra qualquer nudge/done pendente).
+	if s.External && s.Pane == "" {
+		n.stopNudge(s.ID)
+		n.cancelDonePush(s.ID)
+		n.setState(s.ID, s.State)
+		return
+	}
+
 	switch s.State {
 	case session.StateNeedsYou:
 		if s.PendingPrompt == "" {
