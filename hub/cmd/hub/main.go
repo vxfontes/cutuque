@@ -61,7 +61,7 @@ func main() {
 			ntf = notifier.New(client, store, reg, logger)
 			ntf.SetRenudgeInterval(time.Duration(cfg.RenudgeSeconds) * time.Second)
 			ntf.Start()
-			serverOpts = append(serverOpts, server.WithDevices(store), server.WithRenudge(ntf))
+			serverOpts = append(serverOpts, server.WithDevices(store), server.WithRenudge(ntf), server.WithForeground(ntf))
 			logger.Info("apns habilitado", "host", cfg.APNSHost, "topic", cfg.APNSTopic, "renudge_s", cfg.RenudgeSeconds)
 		}
 	} else {
