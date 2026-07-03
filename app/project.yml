@@ -24,14 +24,20 @@ targets:
       properties:
         UILaunchScreen: {}
         CFBundleDisplayName: Cutuque
-        # Dev: HTTP liberado — o hub fala HTTP puro na Tailscale (que já cifra o
-        # túnel) e a faixa CGNAT 100.64/10 do Tailscale NÃO é coberta por
-        # NSAllowsLocalNetworking. Apertar antes de App Store (Fase 5+).
+        # Sem esta chave o iOS bloqueia SILENCIOSAMENTE o app de falar com IPs
+        # privados/Tailscale (o app não emite request nenhum). Com ela, o iOS
+        # mostra o prompt de Rede Local e passa a permitir após o usuário aceitar.
+        NSLocalNetworkUsageDescription: "O Cutuque fala com o seu hub na rede privada (Tailscale) para listar sessões e receber avisos."
+        # Dev: HTTP liberado. IMPORTANTE — só NSAllowsArbitraryLoads: se ele
+        # coexistir com NSAllowsLocalNetworking, o iOS IGNORA o ArbitraryLoads
+        # (trata como false) e o LocalNetworking NÃO cobre a faixa CGNAT
+        # 100.64/10 do Tailscale → HTTP pro hub dá erro -1022. Apertar (HTTPS/
+        # exceção por domínio) antes da App Store (Fase 5+).
         NSAppTransportSecurity:
-          NSAllowsLocalNetworking: true
           NSAllowsArbitraryLoads: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vxfontes.cutuque
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
