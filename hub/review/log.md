@@ -2,6 +2,71 @@
 
 Append-only. Entrada mais recente no topo.
 
+## 2026-07-02 — Notifier: re-nudge (opção 1 — persistência háptica) em needs_you
+**Risco:** R2 (nova goroutine de vida longa por sessão em `needs_you`, com `Close()` alterado; não toca auth/payments/PII diretamente, mas o bug encontrado quebra o contrato de shutdown limpo do componente que dispara a notificação mais crítica do produto)
+**Escopo:** revisão focada em `hub/internal/notifier/notifier.go` e `hub/internal/notifier/notifier_test.go` — a mudança que faz o Notifier RE-enviar o push de `needs_you` a cada `renudgeInterval`/`RenudgeInterval()` via goroutine por sessão (`startNudge`/`nudgeLoop`/`stopNudge`, cancelável), parando quando a sessão sai de `needs_you` ou no `Close`. Não revisei `cmd/hub/main.go` (mudança não relacionada de debug/access-log presente no working tree, fora do escopo pedido). Li `review/log.md`, `patterns.md` e `security.md` antes de revisar. `go vet ./internal/notifier/` e `go test ./internal/notifier/ -race -count=5` limpos como baseline (0 falhas, sem hangs).
+
+**Nota de processo:** o arquivo `notifier.go` foi editado concorrentemente por outra sessão/processo DURANTE esta revisão (evoluindo de um `var renudgeInterval` simples para uma API `SetRenudgeInterval`/`RenudgeInterval()` com `atomic.Int64`, presumivelmente preparando um futuro handler `/settings`). Em um ponto intermediário isso deixou `notifier.go`/`notifier_test.go` inconsistentes entre si (`go build` falhava com `undefined: renudgeInterval`) até o arquivo de teste ser atualizado para `n.SetRenudgeInterval(...)`. A revisão abaixo é sobre o estado FINAL, estável (build limpo, confirmado com dois `go vet`/`go test` consecutivos com hash de arquivo idêntico). Registro aqui só para transparência — não é um achado de código, é um risco de processo de revisar um alvo em movimento.
+
+### Bloqueantes
+- issue (correctness/concurrency, blocking): `Close()` (`notifier.go:104-118`) pode travar PARA SEMPRE se um evento `needs_you` ainda estiver bufferizado no canal do subscriber (não drenado por `loop()`) no exato instante em que `Close()` faz sua única passada de cancelamento sobre `n.nudges` (`notifier.go:111-116`). Se `startNudge()` (`notifier.go:174-187`) rodar DEPOIS dessa passada — adicionando uma nova entrada no mapa e subindo uma goroutine `nudgeLoop` —, ninguém mais vai cancelar aquele contexto (`Close()` não itera `n.nudges` de novo), e se a sessão nunca sair de `needs_you` (cenário plausível justamente durante um shutdown, quando nada mais gera eventos), a goroutine também não se autorresolve pelo check de Registry em `nudgeLoop` (`notifier.go:211-214`). Como essa goroutine detém seu próprio `+1` no `sync.WaitGroup` (via `n.wg.Add(1)` em `startNudge`, `notifier.go:185`), `n.wg.Wait()` (`notifier.go:117`) bloqueia indefinidamente. **Reproduzido deterministicamente**: escrevi um teste-sonda descartável (`zzz_race_probe_test.go`, removido antes de terminar a revisão — `git status` confirmado limpo) que cria uma sessão, dispara `needs_you` e imediatamente chama `Close()` em uma goroutine separada, falhando se `Close()` não retornar em 500ms. Falhou no PRIMEIRO run, com e sem `-race`, e novamente após o refactor concorrente para `SetRenudgeInterval`/`RenudgeInterval()` (a lógica de `Close`/`startNudge`/`stopNudge` não mudou entre as duas versões). Não é uma corrida de janela estreita: como o caminho de `Close()` é muito mais barato (poucas operações de mutex) que o caminho de `loop()` processando os broadcasts de uma transição para `needs_you` (até 3 broadcasts: `session_started`, `UpdateState` sem prompt, `SetPendingPrompt` com prompt), a ordenação que causa o bug é a mais PROVÁVEL, não a mais rara, sempre que `Close()` é chamado próximo no tempo de uma transição para `needs_you` ainda em trânsito. Por que importa: quebra o contrato documentado do próprio `Close()` ("cancela todos os re-cutucões ativos e espera as goroutines pendentes", `notifier.go:104-106`); hoje o impacto em produção é limitado porque `cmd/hub/main.go` ainda não chama `Notifier.Close()` (dívida já catalogada), mas isso faz da correção um pré-requisito ANTES de fechar essa dívida — do contrário, "hub não desliga graciosamente" vira "hub trava no shutdown, exige SIGKILL", pior que o status quo. Também é uma armadilha viva para a suíte de testes: qualquer teste futuro que chame `Close()` sem sincronizar (via `recv()`) antes corre risco de travar até o timeout do `go test` em vez de falhar rápido — os testes atuais só escapam porque `t.Cleanup(n.Close)` sempre roda depois de toda sincronização via canal.
+  **Fix recomendado:** fechar a "porta" para novos nudges na MESMA seção crítica que faz o cancelamento em massa. Duas opções equivalentes:
+  ```go
+  // Opção A: flag `closed` sob o mesmo mutex
+  type Notifier struct {
+      ...
+      closed bool
+  }
+  func (n *Notifier) startNudge(id string) {
+      ctx, cancel := context.WithCancel(context.Background())
+      n.mu.Lock()
+      if n.closed {
+          n.mu.Unlock()
+          cancel()
+          return // não spawna: Close() já está em curso
+      }
+      if old, ok := n.nudges[id]; ok {
+          old()
+      }
+      n.nudges[id] = cancel
+      n.mu.Unlock()
+      n.wg.Add(1)
+      go n.nudgeLoop(ctx, id)
+  }
+  func (n *Notifier) Close() {
+      if n.sub != nil {
+          n.reg.Unsubscribe(n.sub)
+      }
+      n.mu.Lock()
+      n.closed = true
+      for id, cancel := range n.nudges {
+          cancel()
+          delete(n.nudges, id)
+      }
+      n.mu.Unlock()
+      n.wg.Wait()
+  }
+  ```
+  Opção B (mais idiomática, evita o campo booleano): derivar todo `ctx` de nudge de um único contexto-pai do Notifier (`n.lifeCtx`, criado em `New`/`Start`), cancelado UMA vez em `Close()` — `context.WithCancel` sobre um pai já cancelado devolve um filho já cancelado (garantia do pacote `context`), então mesmo um `startNudge` que perca a corrida contra `Close()` cria uma goroutine que sai na primeira iteração do `select`, sem tocar em nenhuma flag adicional. Qualquer uma das duas fecha a corrida por completo (prova por exclusão mútua: as duas operações concorrentes — "marcar fechado" e "checar fechado antes de criar" — passam a ocorrer sob a mesma seção crítica ou a herdar o mesmo estado de cancelamento). Adicionar um teste de regressão no mesmo espírito do `TestConcurrentAccessIsRaceFree` do registry (Fase 1): repetir N vezes "dispara needs_you + Close() concorrente" e assert que `Close()` retorna dentro de um timeout curto. [→ patterns.md#recurso-de-longa-duração-sem-cancelamento]
+
+### Non-bloqueantes
+- suggestion (perf/idiom, non-blocking): `nudgeLoop` (`notifier.go:202-219`) usa `time.After(n.RenudgeInterval())` dentro do `for { select {...} }` em vez de reutilizar um único `time.Timer`/`time.Ticker`. É uma escolha deliberada e comentada (permite reler o intervalo a cada volta para valer mudanças de `SetRenudgeInterval` "já no próximo ciclo") — trade-off razoável dado que `time.Ticker` não suporta intervalo dinâmico sem recriar. Efeito colateral conhecido do padrão `time.After` em loop: quando o `select` sai pelo `ctx.Done()` em vez do timer, o `time.Timer` daquela iteração fica "pendurado" (não tem `Stop()`) até disparar sozinho e ser coletado — no pior caso (uma sessão configurada com um `RenudgeInterval` muito longo, cancelada logo após entrar no `select`) isso mantém um timer residual vivo por até esse intervalo. Baixo custo prático (um `time.Timer` é leve, e o volume de sessões concorrentes de um hub pessoal é pequeno), mas registrar como algo a revisitar se `SetRenudgeInterval` algum dia permitir intervalos muito longos sem teto.
+  **Fix recomendado (se doer):** criar o `time.Timer` uma vez fora do loop, e a cada iteração `timer.Reset(n.RenudgeInterval())` (drenando o canal antes do reset, como o pacote `time` recomenda), com `defer timer.Stop()`.
+- suggestion (design/hardening, non-blocking): `SetRenudgeInterval` (`notifier.go:59-67`) só rejeita valores `<= 0`; a validação de faixa (min/max) é explicitamente delegada ao "handler /settings" (comentário próprio) que ainda não existe neste diff. Quando esse handler for escrito, vale um teto mínimo (evita virar spam de push/dreno de bateria do device) e um teto máximo (evita um valor tão alto que a "persistência háptica" perca o sentido) — ecoa o mesmo princípio de SEC-007 (parâmetro configurável sem limite pode virar vetor de consumo de recurso ilimitado, aqui contra a APNs/bateria do usuário em vez de processos locais). Não bloqueante porque o handler está fora deste diff.
+- suggestion (testabilidade, non-blocking): nenhum teste cobre explicitamente o ciclo completo pedido no escopo desta revisão — `needs_you → running → needs_you` de novo, verificando que o re-cutucão reinicia (e não fica "preso" com o cancelamento da primeira rodada). Validei manualmente por leitura de código que `startNudge`/`stopNudge` tratam esse ciclo corretamente (handle() é single-consumer; cada transição real cancela/cria de forma determinística), mas seria a forma de travar essa garantia contra regressão. Sugestão de teste: aplicar `NeedsInput` → `UserResponded` → `NeedsInput` de novo na mesma sessão e assertar que os pushes de needs_you continuam chegando na segunda rodada.
+- note (design, non-blocking): a migração de `var renudgeInterval` (pacote, mutável globalmente pelos testes) para `Notifier.SetRenudgeInterval`/`RenudgeInterval()` (campo `atomic.Int64` por instância) é uma melhoria de isolamento de teste — o padrão anterior teria um problema latente se algum teste no pacote algum dia rodasse com `t.Parallel()` (dois testes mutando a mesma variável global simultaneamente); o novo campo por instância elimina essa classe de problema de raiz, mesmo que nenhum teste use `t.Parallel()` hoje.
+- praise: `nudgeLoop` reler o Registry como fonte da verdade a cada tick (`notifier.go:211-214`, `s, ok := n.reg.Get(id); if !ok || s.State != session.StateNeedsYou { return }`) é a decisão de design certa — mesmo que a corrida entre `ctx.Done()` e o timer dispare o timer primeiro (`select` com múltiplos casos prontos escolhe pseudo-aleatoriamente), essa checagem previne um re-cutucão indevido depois que a sessão já resolveu, sem depender só da temporização do cancelamento. Resolve corretamente a pergunta "o re-nudge pode disparar em dobro ou no broadcast sem PendingPrompt?" — não: o polling é orientado a relógio+Registry, nunca a broadcasts crus, então não pode disparar durante o primeiro broadcast (sem `PendingPrompt`) nem duplicar o push imediato (o primeiro tick só ocorre depois de um `RenudgeInterval` completo).
+- praise: a disciplina de `sync.WaitGroup` está correta e é sutil o suficiente para valer o registro — `loop()` (via `Start()`, `notifier.go:100`) e cada `nudgeLoop` (via `startNudge`, `notifier.go:185`) seguram seu PRÓPRIO `+1` durante toda a sua execução, ANTES de chamar `wg.Add(1)` para os filhos que disparam (`fanout`/`nudgeLoop`). Isso garante que o contador nunca esteja em zero enquanto uma goroutine "pai" ainda pode chamar `Add` para um filho novo — exatamente o padrão que evita o panic documentado do `WaitGroup` ("Add chamado concorrentemente com Wait quando o contador está zerado"). Ironicamente, é essa MESMA disciplina correta que transforma o achado bloqueante acima em um travamento permanente em vez de um panic recuperável: não há bug de uso do WaitGroup, há um recurso (a goroutine órfã) que nunca decrementa.
+- praise: `startNudge` cancela o `nudge` anterior da mesma sessão ANTES de instalar o novo (`notifier.go:179-182`, dentro da mesma seção crítica) — não há vazamento no caminho de substituição normal (fora da corrida com `Close()` acima), e o ciclo `needs_you → running → needs_you` reinicia corretamente porque `handle()` é single-consumer (só `loop()` chama `startNudge`/`stopNudge`), eliminando qualquer concorrência real sobre o mapa `n.nudges` nesse caminho.
+
+### Padrões detectados
+- `recurso-de-longa-duração-sem-cancelamento` (4ª ocorrência, nova variante: cancelamento em passe único durante dreno concorrente de um canal fechado — revisa a conclusão anterior de que o `Close()` do Notifier "estava corretamente implementado") [→ patterns.md#recurso-de-longa-duração-sem-cancelamento]
+
+### Especialistas envolvidos
+- Marcus: revisar o fix do `Close()`/`startNudge` (concorrência de backend crítica) antes de qualquer trabalho futuro de graceful shutdown do processo (que dependeria de `Notifier.Close()` funcionar de fato).
+
+---
+
 ## 2026-07-02 — Fase 4: notifier + APNs (cliente JWT/HTTP2, devices, fan-out) + app iOS (PushManager, categorias, deep-link)
 **Risco:** R2 (introduz push notification real via terceiro — Apple APNs — para a feature-título "cutucão"; nova credencial `.p8`; nova ação remota de aprovar/negar disparável fora do app; permanece dentro do modelo de confiança de single-user já estabelecido, sem tocar dados de outros usuários)
 **Escopo:** commits `cda67db..2f8022c` — `hub/internal/apns` (cliente HTTP/2 + JWT ES256, cache ~50min), `hub/internal/devices` (store + `POST /devices`), `hub/internal/notifier` (transições → push, fan-out com timeout por device, 410 → remove), `hub/internal/config` (campos APNs), `server.go`+`cmd/hub` (wiring opcional), `app/CutuqueApp/PushManager.swift` (novo), `CutuqueApp.swift`, `SessionListView.swift` (Router/deep-link), `APIClient.swift` (`registerDevice`), `project.yml`/entitlements. Li `hub/review/log.md`, `patterns.md` e `security.md` antes de revisar (F1–F3 já corrigidas, não re-auditadas). `go vet ./...` e `go test ./... -race` limpos como baseline, incluindo os 3 pacotes novos.
