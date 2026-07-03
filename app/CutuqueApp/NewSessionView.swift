@@ -32,6 +32,7 @@ struct NewSessionView: View {
     @State private var prompt = ""
     /// Pasta onde o claude roda (opcional). Vazio = home da máquina.
     @State private var cwd = ""
+    @State private var showingFolderPicker = false
     @State private var isLaunching = false
     @State private var alertMessage: String?
 
@@ -78,6 +79,12 @@ struct NewSessionView: View {
             }
             // Popula as máquinas do hub; primeira = default (a menos que já haja pré-seleção).
             .task { await loadTargets() }
+            // Sheet no nível do Form (estável): preso a uma Section, o SwiftUI
+            // reavalia e derruba a apresentação (e a sheet pai junto) — bug do
+            // "abre e fecha tudo".
+            .sheet(isPresented: $showingFolderPicker) {
+                FolderPickerView(machine: machine) { path in cwd = path }
+            }
         }
     }
 
@@ -141,16 +148,36 @@ struct NewSessionView: View {
     }
 
     /// Pasta opcional onde o claude roda (cwd). Vazia = home da máquina alvo.
+    /// Um seletor navega as pastas do Mac em vez de digitar o caminho.
     private var folderSection: some View {
         Section {
-            TextField("/Users/example/projeto", text: $cwd)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.system(.body, design: .monospaced))
+            Button {
+                showingFolderPicker = true
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "folder")
+                        .foregroundStyle(.blue)
+                    Text(cwd.isEmpty ? "Home da máquina" : cwd)
+                        .foregroundStyle(cwd.isEmpty ? .secondary : .primary)
+                        .font(.system(.body, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                    Spacer(minLength: 8)
+                    Text("Escolher")
+                        .font(.footnote)
+                        .foregroundStyle(.blue)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if !cwd.isEmpty {
+                Button("Usar home da máquina") { cwd = "" }
+                    .font(.footnote)
+            }
         } header: {
             Text("Pasta (opcional)")
         } footer: {
-            Text("Caminho onde o claude vai rodar. Vazio = home da máquina.")
+            Text("Navegue as pastas do Mac. Vazio = home da máquina.")
         }
     }
 
