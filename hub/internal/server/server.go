@@ -15,6 +15,7 @@ import (
 // dependências opcionais entram (ex.: o store de devices da Fase 4).
 type routerConfig struct {
 	devices *devices.Store
+	renudge RenudgeController
 }
 
 // RouterOption configura dependências opcionais do Router.
@@ -24,6 +25,12 @@ type RouterOption func(*routerConfig)
 // opção a rota não é registrada (ex.: testes que não exercem devices).
 func WithDevices(store *devices.Store) RouterOption {
 	return func(rc *routerConfig) { rc.devices = store }
+}
+
+// WithRenudge habilita GET/PUT /settings/renudge para ler e ajustar o intervalo
+// do re-cutucão em runtime. Sem esta opção as rotas não são registradas.
+func WithRenudge(rc2 RenudgeController) RouterOption {
+	return func(rc *routerConfig) { rc.renudge = rc2 }
 }
 
 // Router registra as rotas do hub. As rotas protegidas passam pelo middleware
@@ -61,6 +68,14 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 	// Registro de device tokens para push (Fase 4). Só quando há store.
 	if rc.devices != nil {
 		mux.Handle("POST /devices", requireAuth(cfg.Token, DevicesHandler(rc.devices)))
+	}
+
+	// Intervalo do re-cutucão, ajustável pelo app (Fase 4.1). Só quando há
+	// controlador (ou seja, quando o Notifier/APNs está ativo).
+	if rc.renudge != nil {
+		h := SettingsHandler(rc.renudge)
+		mux.Handle("GET /settings/renudge", requireAuth(cfg.Token, h))
+		mux.Handle("PUT /settings/renudge", requireAuth(cfg.Token, h))
 	}
 
 	// Dev-only: seed de dados fake. Em prod o handler responde 404.

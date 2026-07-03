@@ -20,6 +20,11 @@ const (
 	// devolve 400 BadDeviceToken — por isso o default segue o ambiente.
 	apnsHostSandbox = "api.sandbox.push.apple.com"
 	apnsHostProd    = "api.push.apple.com"
+
+	// Intervalo padrão do re-cutucão (opção 1): de quanto em quanto tempo o hub
+	// reenvia o push enquanto a sessão segue em needs_you. Configurável em runtime
+	// pelo app (ver /settings) e no boot via CUTUQUE_RENUDGE_SECONDS.
+	defaultRenudgeSeconds = 15
 )
 
 // Config é a configuração resolvida do hub.
@@ -37,6 +42,8 @@ type Config struct {
 	APNSTeamID  string // Team ID da conta Apple Developer (CUTUQUE_APNS_TEAM_ID)
 	APNSTopic   string // bundle id do app (CUTUQUE_APNS_TOPIC)
 	APNSHost    string // host APNs; default por ambiente (CUTUQUE_APNS_HOST)
+
+	RenudgeSeconds int // intervalo do re-cutucão em needs_you (CUTUQUE_RENUDGE_SECONDS)
 }
 
 // APNSEnabled indica se há credencial APNs suficiente para o Notifier subir.
@@ -88,6 +95,13 @@ func Load() Config {
 		apnsHost = h
 	}
 
+	renudge := defaultRenudgeSeconds
+	if r := os.Getenv("CUTUQUE_RENUDGE_SECONDS"); r != "" {
+		if n, err := strconv.Atoi(r); err == nil && n > 0 {
+			renudge = n
+		}
+	}
+
 	return Config{
 		Env:      env,
 		BindAddr: bind,
@@ -99,6 +113,8 @@ func Load() Config {
 		APNSTeamID:  os.Getenv("CUTUQUE_APNS_TEAM_ID"),
 		APNSTopic:   os.Getenv("CUTUQUE_APNS_TOPIC"),
 		APNSHost:    apnsHost,
+
+		RenudgeSeconds: renudge,
 	}
 }
 

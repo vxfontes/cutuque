@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/vxfontes/cutuque/hub/internal/adapter/claudecode"
 	"github.com/vxfontes/cutuque/hub/internal/apns"
@@ -48,9 +49,10 @@ func main() {
 		} else {
 			store := devices.New()
 			ntf := notifier.New(client, store, reg, logger)
+			ntf.SetRenudgeInterval(time.Duration(cfg.RenudgeSeconds) * time.Second)
 			ntf.Start()
-			serverOpts = append(serverOpts, server.WithDevices(store))
-			logger.Info("apns habilitado", "host", cfg.APNSHost, "topic", cfg.APNSTopic)
+			serverOpts = append(serverOpts, server.WithDevices(store), server.WithRenudge(ntf))
+			logger.Info("apns habilitado", "host", cfg.APNSHost, "topic", cfg.APNSTopic, "renudge_s", cfg.RenudgeSeconds)
 		}
 	} else {
 		logger.Info("apns desabilitado (credenciais não configuradas); hub sobe sem push")
