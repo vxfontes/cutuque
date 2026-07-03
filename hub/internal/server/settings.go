@@ -13,6 +13,34 @@ type RenudgeController interface {
 	SetRenudgeInterval(time.Duration)
 }
 
+// ForegroundController marca se o app está em foreground (para suprimir push).
+// *notifier.Notifier o satisfaz.
+type ForegroundController interface {
+	SetForeground(active bool)
+}
+
+// foregroundBody é o corpo de POST /app/foreground.
+type foregroundBody struct {
+	Active bool `json:"active"`
+}
+
+// ForegroundHandler recebe o estado de foreground do app (heartbeat enquanto
+// aberto; false ao ir pro background). Enquanto ativo, o hub não dispara push.
+//
+//	POST {"active":true|false} → 200 {"ok":true}
+func ForegroundHandler(fc ForegroundController) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
+		var b foregroundBody
+		if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+			writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+			return
+		}
+		fc.SetForeground(b.Active)
+		writeJSONResp(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}
+
 // Faixa aceita para o intervalo do re-cutucão (segundos): nem tão curto que vire
 // spam, nem tão longo que perca o sentido de "insistente".
 const (

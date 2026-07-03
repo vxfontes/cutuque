@@ -23,9 +23,19 @@ type scriptTarget struct {
 	name     string
 	run      func(stdout io.Writer, stdin *bufio.Reader, captured chan<- string)
 	captured chan string
+	// transcript é o histórico devolvido por Transcript (import ao adotar).
+	// nil → sem histórico. transcriptErr simula falha de leitura.
+	transcript    []claudecode.TranscriptChunk
+	transcriptErr error
 }
 
 func (s *scriptTarget) Name() string { return s.name }
+
+// Transcript satisfaz claudecode.Transcriber: devolve o histórico canned (usado
+// pelo teste de import ao adotar).
+func (s *scriptTarget) Transcript(_ context.Context, _ string) ([]claudecode.TranscriptChunk, error) {
+	return s.transcript, s.transcriptErr
+}
 
 func (s *scriptTarget) Start(_ context.Context, _, _ string) (*claudecode.Handle, error) {
 	stdinR, stdinW := io.Pipe()
@@ -384,5 +394,114 @@ func TestResumeEchoesPromptAsUserOutputChunk(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("Output = %+v, quero um chunk {kind:user, text:\"retome por favor\"} do resume", out)
+	}
+}
+
+// TestAdoptRejectsInvalidID é a defesa em profundidade do SEC-101 na camada do
+// Launcher: um id fora do formato de session id (que viraria `--resume <id>`
+// num comando remoto) é rejeitado e NADA é registrado.
+func TestAdoptRejectsInvalidID(t *testing.T) {
+	tgt := &scriptTarget{name: "macbook", captured: make(chan string, 1)}
+	l, reg := newTestLauncher(tgt)
+
+	for _, bad := range []string{"x; rm -rf ~", "abc$(touch /tmp/x)", "", "id com espaço", "a/b/c"} {
+		_, err := l.Adopt("macbook", bad, "/Users/example/proj", "titulo")
+		if err != ErrInvalidSessionID {
+			t.Errorf("Adopt(id=%q) err = %v, quero ErrInvalidSessionID", bad, err)
+		}
+		if _, ok := reg.Get(bad); ok {
+			t.Errorf("Adopt(id=%q) registrou a sessão mesmo com id inválido", bad)
+		}
+	}
+}
+
+// TestAdoptRegistersValidSession: um UUID válido vira uma sessão idle no
+// registry, com cwd/título preservados para o resume posterior.
+func TestAdoptRegistersValidSession(t *testing.T) {
+	tgt := &scriptTarget{name: "macbook", captured: make(chan string, 1)}
+	l, reg := newTestLauncher(tgt)
+
+	id := "7b6ff87d-99ca-4bd4-a0e9-e01a4ba689af"
+	s, err := l.Adopt("macbook", id, "/Users/example/proj", "arruma o build")
+	if err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+	if s.ID != id || s.Machine != "macbook" || s.Cwd != "/Users/example/proj" || s.State != session.StateIdle {
+		t.Errorf("session adotada = %+v", s)
+	}
+	got, ok := reg.Get(id)
+	if !ok || got.Cwd != "/Users/example/proj" {
+		t.Errorf("sessão não ficou no registry com o cwd: ok=%v got=%+v", ok, got)
+	}
+}
+
+// TestAdoptImportsTranscript: ao adotar, o histórico do transcript vira output
+// da sessão (na ordem), para o chat mostrar as mensagens anteriores ao abrir.
+func TestAdoptImportsTranscript(t *testing.T) {
+	tgt := &scriptTarget{
+		name:     "macbook",
+		captured: make(chan string, 1),
+		transcript: []claudecode.TranscriptChunk{
+			{Kind: event.KindUser, Text: "conserta o build"},
+			{Kind: event.KindAssistant, Text: "vou rodar os testes"},
+			{Kind: event.KindTool, Text: "Bash: go test ./..."},
+			{Kind: event.KindToolResult, Text: "ok PASS"},
+		},
+	}
+	l, reg := newTestLauncher(tgt)
+
+	id := "7b6ff87d-99ca-4bd4-a0e9-e01a4ba689af"
+	if _, err := l.Adopt("macbook", id, "/Users/example/proj", "titulo"); err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+
+	out := reg.Output(id)
+	if len(out) != 4 {
+		t.Fatalf("output = %d chunks, quero 4 (o histórico importado): %+v", len(out), out)
+	}
+	if out[0].Kind != event.KindUser || out[0].Text != "conserta o build" ||
+		out[2].Kind != event.KindTool || out[2].Text != "Bash: go test ./..." {
+		t.Errorf("histórico importado fora de ordem/errado: %+v", out)
+	}
+}
+
+// TestAdoptTranscriptFailureStillAdopts: falha ao ler o transcript não derruba a
+// adoção — a sessão é registrada mesmo sem histórico (degradação graciosa).
+func TestAdoptTranscriptFailureStillAdopts(t *testing.T) {
+	tgt := &scriptTarget{
+		name:          "macbook",
+		captured:      make(chan string, 1),
+		transcriptErr: context.DeadlineExceeded,
+	}
+	l, reg := newTestLauncher(tgt)
+
+	id := "7b6ff87d-99ca-4bd4-a0e9-e01a4ba689af"
+	if _, err := l.Adopt("macbook", id, "/x", "t"); err != nil {
+		t.Fatalf("Adopt não devia falhar por causa do transcript: %v", err)
+	}
+	if _, ok := reg.Get(id); !ok {
+		t.Error("sessão não foi registrada apesar da falha do transcript")
+	}
+	if out := reg.Output(id); len(out) != 0 {
+		t.Errorf("output = %+v, quero vazio (transcript falhou)", out)
+	}
+}
+
+// TestAdoptUnknownMachine: máquina inexistente → ErrUnknownMachine.
+func TestAdoptUnknownMachine(t *testing.T) {
+	l, _ := newTestLauncher(nil)
+	_, err := l.Adopt("ghost", "7b6ff87d-99ca-4bd4-a0e9-e01a4ba689af", "/x", "t")
+	if err != ErrUnknownMachine {
+		t.Errorf("err = %v, quero ErrUnknownMachine", err)
+	}
+}
+
+// TestDiscoverUnknownMachine: máquina inexistente → ErrUnknownMachine (não
+// ErrDiscoverFailed, que é reservado para falha real da descoberta).
+func TestDiscoverUnknownMachine(t *testing.T) {
+	l, _ := newTestLauncher(nil)
+	_, err := l.Discover("ghost")
+	if err != ErrUnknownMachine {
+		t.Errorf("err = %v, quero ErrUnknownMachine", err)
 	}
 }

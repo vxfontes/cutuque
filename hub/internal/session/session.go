@@ -32,4 +32,19 @@ type Session struct {
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 	PendingPrompt string    `json:"pending_prompt,omitempty"`
+	// Cwd é a pasta onde o claude roda. Preenchido no launch com pasta e nas
+	// sessões descobertas/adotadas do Mac (para o --resume rodar no dir certo).
+	Cwd string `json:"cwd,omitempty"`
+}
+
+// Discovered é uma sessão do Claude Code encontrada no disco de uma máquina
+// (~/.claude/projects/<cwd>/<id>.jsonl) — inclusive as que NÃO foram lançadas
+// pelo Cutuque. Permite descobrir e retomar conversas já existentes.
+type Discovered struct {
+	ID       string `json:"id"`
+	Cwd      string `json:"cwd"`
+	Title    string `json:"title"`    // 1ª mensagem do usuário
+	Last     string `json:"last"`     // última mensagem do usuário (preview)
+	Count    int    `json:"count"`    // nº de mensagens do usuário (preview)
+	Modified int64  `json:"modified"` // unix epoch (mtime do transcript)
 }

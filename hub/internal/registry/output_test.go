@@ -29,22 +29,23 @@ func TestAppendAndGetOutput(t *testing.T) {
 	}
 }
 
-func TestOutputCapsAt200(t *testing.T) {
+func TestOutputCapsAtMax(t *testing.T) {
 	r := New()
-	for i := range 250 {
+	total := maxOutputChunks + 50
+	for i := range total {
 		r.AppendOutput("a", "assistant", fmt.Sprintf("chunk-%d", i))
 	}
 
 	got := r.Output("a")
-	if len(got) != 200 {
-		t.Fatalf("len(Output) = %d, quero 200 (cap)", len(got))
+	if len(got) != maxOutputChunks {
+		t.Fatalf("len(Output) = %d, quero %d (cap)", len(got), maxOutputChunks)
 	}
-	// Deve manter os 200 mais recentes: chunk-50 .. chunk-249.
+	// Deve manter os maxOutputChunks mais recentes: chunk-50 .. chunk-(total-1).
 	if got[0].Text != "chunk-50" {
 		t.Errorf("Output[0].Text = %q, quero \"chunk-50\"", got[0].Text)
 	}
-	if got[199].Text != "chunk-249" {
-		t.Errorf("Output[199].Text = %q, quero \"chunk-249\"", got[199].Text)
+	if got[len(got)-1].Text != fmt.Sprintf("chunk-%d", total-1) {
+		t.Errorf("Output[last].Text = %q, quero \"chunk-%d\"", got[len(got)-1].Text, total-1)
 	}
 }
 

@@ -51,6 +51,12 @@ type Notifier struct {
 
 	renudgeNanos atomic.Int64 // intervalo do re-cutucão (ns); ajustável em runtime
 
+	// foregroundUntil: unix nano até quando o app está em foreground. Enquanto
+	// válido, o push é suprimido (o app já recebe tudo ao vivo pelo WS — não faz
+	// sentido cutucar quem está com o app aberto). O app renova por heartbeat; o
+	// TTL evita supressão eterna se o app morrer sem avisar "background".
+	foregroundUntil atomic.Int64
+
 	mu     sync.Mutex
 	closed bool                          // Close() em curso: não spawna novos nudges
 	states map[string]session.State      // último estado notificado por sessão
@@ -74,6 +80,28 @@ func (n *Notifier) RenudgeInterval() time.Duration {
 		return defaultRenudge
 	}
 	return d
+}
+
+// foregroundTTL é por quanto tempo um "estou em foreground" vale sem renovação.
+// O app manda heartbeat mais frequente que isso; o TTL só protege contra o app
+// morrer sem mandar "background" (senão o push ficaria suprimido para sempre).
+const foregroundTTL = 150 * time.Second
+
+// SetForeground marca se o app está aberto/em foreground. Enquanto ativo (e
+// dentro do TTL), fanout suprime o push — o app já recebe tudo pelo WS.
+func (n *Notifier) SetForeground(active bool) {
+	if active {
+		n.foregroundUntil.Store(time.Now().Add(foregroundTTL).UnixNano())
+	} else {
+		n.foregroundUntil.Store(0)
+	}
+}
+
+// foregroundSuppressed diz se o push deve ser suprimido agora (app em foreground
+// e dentro do TTL).
+func (n *Notifier) foregroundSuppressed() bool {
+	until := n.foregroundUntil.Load()
+	return until > 0 && time.Now().UnixNano() < until
 }
 
 // New cria um Notifier. Se logger for nil, descarta logs (não é fatal).
@@ -237,6 +265,11 @@ func (n *Notifier) setState(id string, st session.State) {
 // fanout envia o push a todos os devices, um por goroutine com timeout próprio.
 // Um 410 remove o device; outros erros só são logados.
 func (n *Notifier) fanout(payload []byte, opts apns.PushOptions) {
+	// App em foreground: não dispara push (a usuária já vê tudo ao vivo pelo WS).
+	if n.foregroundSuppressed() {
+		n.logger.Info("push suprimido: app em foreground")
+		return
+	}
 	for _, d := range n.devices.List() {
 		n.wg.Add(1)
 		go func(token string) {

@@ -25,16 +25,40 @@ type fakeLauncher struct {
 	machines  []string
 	removeErr error
 
+	discovered   []session.Discovered
+	discoverErr  error
+	liveSessions []session.Discovered
+	liveErr      error
+	adoptSession session.Session
+	adoptErr     error
+
 	gotMachine, gotAgent, gotPrompt, gotCwd string
 	gotApproveID, gotDenyID                 string
 	gotInputID, gotInputText                string
 	gotRemoveID                             string
+	gotDiscoverMachine                      string
+	gotAdoptMachine, gotAdoptID             string
+	gotAdoptCwd, gotAdoptTitle              string
 }
 
 func (f *fakeLauncher) Machines() []string { return f.machines }
 func (f *fakeLauncher) Remove(id string) error {
 	f.gotRemoveID = id
 	return f.removeErr
+}
+
+func (f *fakeLauncher) Discover(machine string) ([]session.Discovered, error) {
+	f.gotDiscoverMachine = machine
+	return f.discovered, f.discoverErr
+}
+
+func (f *fakeLauncher) Live(machine string) ([]session.Discovered, error) {
+	return f.liveSessions, f.liveErr
+}
+
+func (f *fakeLauncher) Adopt(machine, id, cwd, title string) (session.Session, error) {
+	f.gotAdoptMachine, f.gotAdoptID, f.gotAdoptCwd, f.gotAdoptTitle = machine, id, cwd, title
+	return f.adoptSession, f.adoptErr
 }
 
 func (f *fakeLauncher) Launch(_ context.Context, machine, agent, prompt, cwd string) (session.Session, error) {
@@ -273,4 +297,121 @@ func TestDeleteSessionNotFound(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, quero 404", rec.Code)
 	}
+}
+
+func TestDiscoverListsSessions(t *testing.T) {
+	f := &fakeLauncher{discovered: []session.Discovered{
+		{ID: "sess-1", Cwd: "/Users/example/proj", Title: "arruma o build", Modified: 1720000000},
+	}}
+	rec := do(t, f, http.MethodGet, "/machines/macbook/sessions", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, quero 200 (corpo: %s)", rec.Code, rec.Body.String())
+	}
+	if f.gotDiscoverMachine != "macbook" {
+		t.Errorf("Discover recebeu machine=%q, quero \"macbook\"", f.gotDiscoverMachine)
+	}
+	var resp struct {
+		Sessions []session.Discovered `json:"sessions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("corpo inválido: %v", err)
+	}
+	if len(resp.Sessions) != 1 || resp.Sessions[0].ID != "sess-1" || resp.Sessions[0].Title != "arruma o build" {
+		t.Errorf("sessões = %+v, quero [sess-1]", resp.Sessions)
+	}
+}
+
+func TestDiscoverUnknownMachine(t *testing.T) {
+	f := &fakeLauncher{discoverErr: launcher.ErrUnknownMachine}
+	rec := do(t, f, http.MethodGet, "/machines/ghost/sessions", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, quero 404", rec.Code)
+	}
+	assertErrorCode(t, rec.Body.Bytes(), "unknown_machine")
+}
+
+func TestLiveListsSessions(t *testing.T) {
+	f := &fakeLauncher{liveSessions: []session.Discovered{
+		{ID: "live-1", Cwd: "/x", Title: "rodando agora", Modified: 1720000000},
+	}}
+	rec := do(t, f, http.MethodGet, "/machines/macbook/live", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, quero 200 (corpo: %s)", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Sessions []session.Discovered `json:"sessions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("corpo inválido: %v", err)
+	}
+	if len(resp.Sessions) != 1 || resp.Sessions[0].ID != "live-1" {
+		t.Errorf("sessões = %+v, quero [live-1]", resp.Sessions)
+	}
+}
+
+func TestLiveDiscoverFailed(t *testing.T) {
+	f := &fakeLauncher{liveErr: launcher.ErrDiscoverFailed}
+	rec := do(t, f, http.MethodGet, "/machines/macbook/live", "")
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, quero 502", rec.Code)
+	}
+	assertErrorCode(t, rec.Body.Bytes(), "discover_failed")
+}
+
+func TestAdoptCreated(t *testing.T) {
+	f := &fakeLauncher{adoptSession: session.Session{ID: "sess-1", Machine: "macbook", Cwd: "/Users/example/proj", Title: "arruma o build", State: session.StateIdle}}
+	rec := do(t, f, http.MethodPost, "/machines/macbook/adopt", `{"id":"sess-1","cwd":"/Users/example/proj","title":"arruma o build"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, quero 201 (corpo: %s)", rec.Code, rec.Body.String())
+	}
+	if f.gotAdoptMachine != "macbook" || f.gotAdoptID != "sess-1" || f.gotAdoptCwd != "/Users/example/proj" || f.gotAdoptTitle != "arruma o build" {
+		t.Errorf("Adopt recebeu machine=%q id=%q cwd=%q title=%q", f.gotAdoptMachine, f.gotAdoptID, f.gotAdoptCwd, f.gotAdoptTitle)
+	}
+	var resp launchResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("corpo inválido: %v", err)
+	}
+	if resp.Session.ID != "sess-1" {
+		t.Errorf("session.id = %q, quero \"sess-1\"", resp.Session.ID)
+	}
+}
+
+func TestAdoptBadRequest(t *testing.T) {
+	f := &fakeLauncher{}
+	for _, body := range []string{`{não é json`, `{"cwd":"/x"}`, `{"id":""}`} {
+		rec := do(t, f, http.MethodPost, "/machines/macbook/adopt", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("body %q => status %d, quero 400", body, rec.Code)
+		}
+	}
+}
+
+func TestAdoptUnknownMachine(t *testing.T) {
+	f := &fakeLauncher{adoptErr: launcher.ErrUnknownMachine}
+	rec := do(t, f, http.MethodPost, "/machines/ghost/adopt", `{"id":"sess-1"}`)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, quero 404", rec.Code)
+	}
+	assertErrorCode(t, rec.Body.Bytes(), "unknown_machine")
+}
+
+// TestAdoptInvalidSessionID: id fora do formato esperado (SEC-101) → 400.
+func TestAdoptInvalidSessionID(t *testing.T) {
+	f := &fakeLauncher{adoptErr: launcher.ErrInvalidSessionID}
+	rec := do(t, f, http.MethodPost, "/machines/macbook/adopt", `{"id":"x; rm -rf ~"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, quero 400", rec.Code)
+	}
+	assertErrorCode(t, rec.Body.Bytes(), "invalid_session_id")
+}
+
+// TestDiscoverFailedReturns502: máquina existe mas a descoberta falhou (ssh/
+// python/timeout) → 502, distinto de 404 unknown_machine.
+func TestDiscoverFailedReturns502(t *testing.T) {
+	f := &fakeLauncher{discoverErr: launcher.ErrDiscoverFailed}
+	rec := do(t, f, http.MethodGet, "/machines/macbook/sessions", "")
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, quero 502", rec.Code)
+	}
+	assertErrorCode(t, rec.Body.Bytes(), "discover_failed")
 }

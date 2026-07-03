@@ -3,6 +3,8 @@ package claudecode
 import (
 	"context"
 	"io"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -196,16 +198,28 @@ func TestSSHClaudeArgsHaveKeepaliveBatchModeNoPTY(t *testing.T) {
 	}
 }
 
+// execPrefix é o wrapper que impede o `bash -lc` interno de reparsear os args
+// como shell (SEC-101): cada arg vira parâmetro posicional, repassado por
+// `exec "$0" "$@"`. Compartilhado pelos testes que checam o formato.
+var execPrefix = "bash -lc " + singleQuote(`exec "$0" "$@"`)
+
 // TestRemoteClaudeCommandUsesConfiguredPath garante que trocar o comando/caminho
-// do claude remoto (SetRemoteClaudeCmd) se reflete no comando enviado por ssh.
+// do claude remoto (SetRemoteClaudeCmd) se reflete no comando enviado por ssh,
+// já como $0 single-quoted do wrapper exec "$0" "$@".
 func TestRemoteClaudeCommandUsesConfiguredPath(t *testing.T) {
 	got := remoteClaudeCommand("/Users/example/.local/bin/claude", "", "")
-	if !strings.Contains(got, "/Users/example/.local/bin/claude") {
-		t.Errorf("remoteClaudeCommand = %q, quero usar o caminho configurado", got)
+	if !strings.HasPrefix(got, execPrefix+" ") {
+		t.Errorf("remoteClaudeCommand não usa o wrapper exec \"$0\" \"$@\":\n  %s", got)
 	}
-	want := "bash -lc " + singleQuote("/Users/example/.local/bin/claude -p --input-format stream-json --output-format stream-json --permission-mode default --permission-prompt-tool stdio --verbose")
-	if got != want {
-		t.Errorf("remoteClaudeCommand =\n  %s\nquero:\n  %s", got, want)
+	// O caminho do claude entra como $0, single-quoted.
+	if !strings.Contains(got, execPrefix+" "+singleQuote("/Users/example/.local/bin/claude")+" ") {
+		t.Errorf("remoteClaudeCommand = %q, quero o caminho configurado como $0 quotado", got)
+	}
+	// Cada flag verificada aparece como arg quotado.
+	for _, flag := range []string{"-p", "--input-format", "stream-json", "--verbose", "--permission-prompt-tool", "stdio"} {
+		if !strings.Contains(got, " "+singleQuote(flag)) {
+			t.Errorf("remoteClaudeCommand sem a flag quotada %q:\n  %s", flag, got)
+		}
 	}
 }
 
@@ -214,10 +228,58 @@ func TestRemoteClaudeCommandUsesConfiguredPath(t *testing.T) {
 // não-interativo do sshd, e o `bash -lc` seguinte herda o cwd do pai.
 func TestRemoteClaudeCommandWithCwdPrefixesCd(t *testing.T) {
 	got := remoteClaudeCommand(defaultRemoteClaudeCmd, "", "/tmp/algum diretório")
-	want := "cd " + singleQuote("/tmp/algum diretório") + " && bash -lc " +
-		singleQuote(defaultRemoteClaudeCmd+" -p --input-format stream-json --output-format stream-json --permission-mode default --permission-prompt-tool stdio --verbose")
-	if got != want {
-		t.Errorf("remoteClaudeCommand com cwd =\n  %s\nquero:\n  %s", got, want)
+	wantPrefix := "cd " + singleQuote("/tmp/algum diretório") + " && " + execPrefix + " "
+	if !strings.HasPrefix(got, wantPrefix) {
+		t.Errorf("remoteClaudeCommand com cwd =\n  %s\nquero prefixo:\n  %s", got, wantPrefix)
+	}
+}
+
+// TestRemoteClaudeCommandNeutralizesInjection é o teste de regressão do SEC-101:
+// um resumeID malicioso (controlável pelo cliente via Adopt) NUNCA pode virar
+// comando, mesmo executado como o sshd faz — `login_shell -c "<cmd>"` com um
+// `bash -lc` aninhado. Constrói o comando real, roda-o num shell (simulando o
+// sshd) com um `claude` falso que registra o próprio argv, e prova que (a)
+// nenhum comando injetado rodou e (b) o payload chegou como UM único argumento.
+func TestRemoteClaudeCommandNeutralizesInjection(t *testing.T) {
+	dir := t.TempDir()
+	sentinel := filepath.Join(dir, "PWNED")
+	argvOut := filepath.Join(dir, "argv.txt")
+	// claude falso: grava cada arg recebido em argv.txt (um por linha).
+	fakeClaude := filepath.Join(dir, "claude")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + singleQuote(argvOut) + "\n"
+	if err := os.WriteFile(fakeClaude, []byte(script), 0o755); err != nil {
+		t.Fatalf("escrever fake claude: %v", err)
+	}
+
+	payloads := []string{
+		"abc; touch " + sentinel + " #",
+		"abc && touch " + sentinel,
+		"abc$(touch " + sentinel + ")",
+		"abc`touch " + sentinel + "`",
+		"$(touch " + sentinel + ")",
+	}
+	for _, id := range payloads {
+		t.Run(id, func(t *testing.T) {
+			_ = os.Remove(sentinel)
+			_ = os.Remove(argvOut)
+			cmd := remoteClaudeCommand(fakeClaude, id, "")
+			// Simula exatamente o que o sshd faz: login_shell -c "<cmd>".
+			out, err := exec.Command("bash", "-c", cmd).CombinedOutput()
+			if err != nil {
+				t.Fatalf("rodar comando: %v\nsaída: %s", err, out)
+			}
+			if _, err := os.Stat(sentinel); err == nil {
+				t.Fatalf("INJEÇÃO: comando embutido no id rodou (sentinela criada) para id=%q", id)
+			}
+			// O claude falso deve ter rodado e recebido o id como UM arg intacto.
+			got, err := os.ReadFile(argvOut)
+			if err != nil {
+				t.Fatalf("claude falso não rodou (sem argv.txt) para id=%q: %v", id, err)
+			}
+			if !strings.Contains(string(got), id) {
+				t.Errorf("id não chegou intacto como arg único.\nargv:\n%s\nquero conter: %q", got, id)
+			}
+		})
 	}
 }
 

@@ -1,9 +1,10 @@
 package registry
 
-// maxOutputChunks é quantos pedaços de output são guardados por sessão. Só o
-// output recente interessa (output ao vivo no app); o histórico completo vive
-// na sessão real do agente.
-const maxOutputChunks = 200
+// maxOutputChunks é quantos pedaços de output são guardados por sessão. Cobre
+// tanto o output ao vivo quanto o histórico importado ao adotar uma sessão do
+// Mac (Launcher.Adopt → importTranscript); mantém os mais recentes. 500 cobre
+// a grande maioria das conversas; sessões maiores mostram os 500 chunks finais.
+const maxOutputChunks = 500
 
 // OutputChunk é um pedaço de output TIPADO de uma sessão: Kind ∈
 // {user, assistant, tool, tool_result} (ver internal/event) e o texto já

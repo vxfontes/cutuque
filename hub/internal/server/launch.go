@@ -23,6 +23,87 @@ type Launcher interface {
 	SendText(id, text string) error
 	Machines() []string
 	Remove(id string) error
+	Discover(machine string) ([]session.Discovered, error)
+	Live(machine string) ([]session.Discovered, error)
+	Adopt(machine, id, cwd, title string) (session.Session, error)
+}
+
+// DiscoverHandler lista as sessões do Claude Code existentes numa máquina
+// (inclusive as não lançadas pelo Cutuque). 200 {"sessions":[Discovered...]} |
+// 404 unknown_machine | 502 discover_failed.
+func DiscoverHandler(lch Launcher) http.HandlerFunc {
+	return discoveryLikeHandler(func(machine string) ([]session.Discovered, error) {
+		return lch.Discover(machine)
+	})
+}
+
+// LiveHandler lista as sessões do Claude Code RODANDO agora numa máquina.
+// Mesmo contrato do DiscoverHandler.
+func LiveHandler(lch Launcher) http.HandlerFunc {
+	return discoveryLikeHandler(func(machine string) ([]session.Discovered, error) {
+		return lch.Live(machine)
+	})
+}
+
+// discoveryLikeHandler é o corpo comum de discover/live: {machine} → lista, com
+// o mesmo mapeamento de erro/status.
+func discoveryLikeHandler(list func(machine string) ([]session.Discovered, error)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sessions, err := list(r.PathValue("machine"))
+		switch {
+		case errors.Is(err, launcher.ErrUnknownMachine):
+			writeJSONError(w, http.StatusNotFound, "unknown_machine")
+		case errors.Is(err, launcher.ErrDiscoverFailed):
+			// Máquina existe, mas a busca falhou (ssh/python/timeout) — 502, não
+			// 404: o cliente sabe que o nome está certo e é transitório.
+			writeJSONError(w, http.StatusBadGateway, "discover_failed")
+		case err != nil:
+			writeJSONError(w, http.StatusBadGateway, "discover_failed")
+		default:
+			if sessions == nil {
+				sessions = []session.Discovered{}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string][]session.Discovered{"sessions": sessions})
+		}
+	}
+}
+
+// adoptRequest é o corpo de POST /machines/{machine}/adopt.
+type adoptRequest struct {
+	ID    string `json:"id"`
+	Cwd   string `json:"cwd"`
+	Title string `json:"title"`
+}
+
+// AdoptHandler registra uma sessão descoberta para poder abri-la e continuar.
+// 201 {"session":{...}} | 400 bad_request | 404 unknown_machine.
+func AdoptHandler(lch Launcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		machine := r.PathValue("machine")
+		r.Body = http.MaxBytesReader(w, r.Body, maxLaunchBody)
+		var req adoptRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
+			writeJSONError(w, http.StatusBadRequest, "bad_request")
+			return
+		}
+		s, err := lch.Adopt(machine, req.ID, req.Cwd, req.Title)
+		switch {
+		case errors.Is(err, launcher.ErrUnknownMachine):
+			writeJSONError(w, http.StatusNotFound, "unknown_machine")
+			return
+		case errors.Is(err, launcher.ErrInvalidSessionID):
+			writeJSONError(w, http.StatusBadRequest, "invalid_session_id")
+			return
+		case err != nil:
+			writeJSONError(w, http.StatusBadRequest, "bad_request")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(launchResponse{Session: s})
+	}
 }
 
 // TargetsHandler lista as máquinas disponíveis para lançar sessões.

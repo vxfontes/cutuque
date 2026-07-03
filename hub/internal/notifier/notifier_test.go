@@ -129,6 +129,36 @@ func TestNotifiesOnlyOnceForNeedsYou(t *testing.T) {
 	}
 }
 
+// TestForegroundSuppressesPush: com o app em foreground, uma transição que
+// normalmente cutuca (done) NÃO dispara push.
+func TestForegroundSuppressesPush(t *testing.T) {
+	eng, _, _, fake, n := fixture(t)
+	n.SetForeground(true)
+	startSession(eng, "s1")
+	eng.Apply(event.Event{SessionID: "s1", Type: event.Finished, At: time.Now()})
+
+	select {
+	case p := <-fake.ch:
+		t.Fatalf("push disparado com app em foreground: %s", p.payload)
+	case <-time.After(300 * time.Millisecond):
+		// ok: suprimido
+	}
+}
+
+// TestForegroundFalseResumesPush: ao voltar pro background (false), o push volta.
+func TestForegroundFalseResumesPush(t *testing.T) {
+	eng, _, _, fake, n := fixture(t)
+	n.SetForeground(true)
+	n.SetForeground(false) // app foi pro background
+	startSession(eng, "s1")
+	eng.Apply(event.Event{SessionID: "s1", Type: event.Finished, At: time.Now()})
+
+	p := recv(t, fake)
+	if !strings.Contains(string(p.payload), `"state":"done"`) {
+		t.Errorf("push esperado após background: %s", p.payload)
+	}
+}
+
 func TestNotifiesOnDone(t *testing.T) {
 	eng, _, _, fake, _ := fixture(t)
 	startSession(eng, "s1")

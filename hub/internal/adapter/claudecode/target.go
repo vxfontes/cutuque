@@ -307,36 +307,56 @@ func (t *SSHTarget) Start(ctx context.Context, resumeID, cwd string) (*Handle, e
 	}, nil
 }
 
-// sshClaudeArgs monta os args reais passados ao binário `ssh` local:
+// sshBaseOpts são as opções de ssh compartilhadas por todo uso (o claude e a
+// descoberta). Compartilhar evita divergência entre os dois:
 //   - BatchMode=yes: nunca pede senha interativamente (o hub não tem TTY para
 //     responder); falha rápido se a chave não autenticar sozinha.
+//   - ConnectTimeout=10: não pendura para sempre se o Mac estiver offline.
 //   - ServerAliveInterval/CountMax: keepalive da camada ssh — detecta o Mac
 //     dormindo/rede caindo sem esperar o TCP timeout do SO.
+//   - StrictHostKeyChecking=accept-new: confia na primeira conexão (Tailscale
+//     já autentica a rede), mas trava se a host key mudar depois.
 //   - -T: desliga alocação de PTY (mesmo que o ~/.ssh/config do alias peça
 //     "RequestTTY"), garantindo stdin/stdout como pipes limpos para o
 //     protocolo stream-json — um PTY reescreveria/misturaria os bytes.
-//   - o comando remoto roda o claude dentro de um login shell (ver comentário
-//     do SSHTarget).
-func sshClaudeArgs(dest, remoteCmd, resumeID, cwd string) []string {
+func sshBaseOpts() []string {
 	return []string{
 		"-o", "BatchMode=yes",
-		"-o", "ConnectTimeout=10", // não pendura no connect de host lento/inalcançável (review F5, #1)
+		"-o", "ConnectTimeout=10",
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
-		"-o", "StrictHostKeyChecking=accept-new", // explícito: não fica refém do ssh_config do host (review F5, segurança-ssh)
+		"-o", "StrictHostKeyChecking=accept-new",
 		"-T",
-		"--", // separador: um dest começando com "-" nunca é reinterpretado como opção (review F5, injeção)
-		dest,
-		remoteClaudeCommand(remoteCmd, resumeID, cwd),
 	}
 }
 
-// remoteClaudeCommand monta a linha de comando remota como UMA única string
-// (para sobreviver à concatenação por espaço que o próprio ssh faz dos args
-// finais antes de mandar ao shell de login remoto): `bash -lc '<claude com as
-// flags verificadas>'`. cwd != "" prefixa com `cd <cwd> &&` (single-quoted);
-// como `cd` é builtin do shell não-interativo que o sshd invoca, o diretório
-// já está setado quando o `bash -lc` seguinte é executado (herda o cwd do pai).
+// sshClaudeArgs monta os args do `ssh` local para rodar o claude remoto: as
+// opções-base + o dest + o comando remoto (login shell). O comando remoto roda
+// dentro de um login shell (ver remoteClaudeCommand e o comentário do SSHTarget).
+func sshClaudeArgs(dest, remoteCmd, resumeID, cwd string) []string {
+	return append(sshBaseOpts(),
+		"--", // separador: um dest começando com "-" nunca é reinterpretado como opção (review F5, injeção)
+		dest,
+		remoteClaudeCommand(remoteCmd, resumeID, cwd),
+	)
+}
+
+// remoteClaudeCommand monta a linha de comando remota que o `ssh` manda ao shell
+// de login remoto. São DOIS níveis de parse de shell, e é isso que torna o
+// escape sutil (SEC-101):
+//
+//   - Nível 1: o `sshd` invoca `login_shell -c "<esta string>"`. Aqui cada token
+//     single-quoted é literal.
+//   - Nível 2: dentro dela roda `bash -lc <cmdstring> <arg0> <arg1> ...`. O
+//     `-l` carrega o PATH completo do usuário (o `claude` costuma morar em
+//     ~/.local/bin, fora do PATH de uma sessão ssh não-interativa).
+//
+// A armadilha: se juntássemos os args numa cmdstring (`bash -lc 'claude --resume
+// <id> ...'`), o nível 2 REPARSEARIA essa string como shell — `;`, `&&`, `$()`
+// em resumeID (que agora vem do cliente via Adopt) virariam comando. Por isso
+// passamos cada arg como PARÂMETRO POSICIONAL de `bash -lc 'exec "$0" "$@"'`:
+// `$@` repassa cada parâmetro intacto ao claude, sem um segundo parse. cwd só é
+// usado no `cd` do nível 1 (nunca reparseado), então single-quote basta lá.
 func remoteClaudeCommand(claudeCmd, resumeID, cwd string) string {
 	claudeArgs := []string{claudeCmd, "-p"}
 	if resumeID != "" {
@@ -349,16 +369,23 @@ func remoteClaudeCommand(claudeCmd, resumeID, cwd string) string {
 		"--permission-prompt-tool", "stdio",
 		"--verbose",
 	)
-	cmd := "bash -lc " + singleQuote(strings.Join(claudeArgs, " "))
+	// Cada arg single-quoted (nível 1) + o idioma exec "$0" "$@" (nível 2 não
+	// reparseia). claudeArgs[0] vira $0 (o programa), o resto vira "$@".
+	quoted := make([]string, len(claudeArgs))
+	for i, a := range claudeArgs {
+		quoted[i] = singleQuote(a)
+	}
+	cmd := "bash -lc " + singleQuote(`exec "$0" "$@"`) + " " + strings.Join(quoted, " ")
 	if cwd != "" {
 		cmd = "cd " + singleQuote(cwd) + " && " + cmd
 	}
 	return cmd
 }
 
-// singleQuote envolve s em aspas simples (escapando aspas simples internas) —
-// suficiente para os valores fixos/configurados aqui (caminho do claude e suas
-// flags), não pretende ser um escapador de shell genérico para input externo.
+// singleQuote envolve s em aspas simples, escapando aspas simples internas com o
+// idioma '\”. Protege UM nível de parse de shell contra QUALQUER conteúdo
+// (inclusive input do cliente): tudo entre as aspas é literal. Para dois níveis
+// aninhados, ver remoteClaudeCommand — quoting sozinho não basta lá.
 func singleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

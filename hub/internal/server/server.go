@@ -14,8 +14,9 @@ import (
 // RouterOption. Mantém a assinatura de Router/New estável quando novas
 // dependências opcionais entram (ex.: o store de devices da Fase 4).
 type routerConfig struct {
-	devices *devices.Store
-	renudge RenudgeController
+	devices    *devices.Store
+	renudge    RenudgeController
+	foreground ForegroundController
 }
 
 // RouterOption configura dependências opcionais do Router.
@@ -31,6 +32,13 @@ func WithDevices(store *devices.Store) RouterOption {
 // do re-cutucão em runtime. Sem esta opção as rotas não são registradas.
 func WithRenudge(rc2 RenudgeController) RouterOption {
 	return func(rc *routerConfig) { rc.renudge = rc2 }
+}
+
+// WithForeground habilita POST /app/foreground, por onde o app avisa quando está
+// aberto (para o hub suprimir push enquanto isso). Sem esta opção a rota não é
+// registrada.
+func WithForeground(fc ForegroundController) RouterOption {
+	return func(rc *routerConfig) { rc.foreground = fc }
 }
 
 // Router registra as rotas do hub. As rotas protegidas passam pelo middleware
@@ -66,6 +74,11 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		// Máquinas disponíveis (picker do app) e apagar sessão (swipe-to-delete).
 		mux.Handle("GET /targets", requireAuth(cfg.Token, TargetsHandler(lch)))
 		mux.Handle("DELETE /sessions/{id}", requireAuth(cfg.Token, DeleteSessionHandler(lch)))
+		// Descobrir sessões do Claude já existentes numa máquina + adotar uma
+		// para continuar (acompanhar sessões ativas do Mac).
+		mux.Handle("GET /machines/{machine}/sessions", requireAuth(cfg.Token, DiscoverHandler(lch)))
+		mux.Handle("GET /machines/{machine}/live", requireAuth(cfg.Token, LiveHandler(lch)))
+		mux.Handle("POST /machines/{machine}/adopt", requireAuth(cfg.Token, AdoptHandler(lch)))
 	}
 
 	// Registro de device tokens para push (Fase 4). Só quando há store.
@@ -79,6 +92,11 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		h := SettingsHandler(rc.renudge)
 		mux.Handle("GET /settings/renudge", requireAuth(cfg.Token, h))
 		mux.Handle("PUT /settings/renudge", requireAuth(cfg.Token, h))
+	}
+
+	// Estado de foreground do app (suprime push enquanto aberto).
+	if rc.foreground != nil {
+		mux.Handle("POST /app/foreground", requireAuth(cfg.Token, ForegroundHandler(rc.foreground)))
 	}
 
 	// Dev-only: seed de dados fake. Em prod o handler responde 404.

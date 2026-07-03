@@ -14,6 +14,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"regexp"
 	"sort"
 	"sync"
 	"time"
@@ -27,15 +29,28 @@ import (
 
 // Erros tipados, mapeados para os status HTTP pelos handlers REST.
 var (
-	ErrUnknownMachine  = errors.New("launcher: máquina desconhecida")
-	ErrUnknownAgent    = errors.New("launcher: agente desconhecido")
-	ErrLaunchTimeout   = errors.New("launcher: timeout esperando session_started")
-	ErrUnknownSession  = errors.New("launcher: sessão desconhecida")
-	ErrStaleState      = errors.New("launcher: estado obsoleto (não está em needs_you)")
-	ErrNoHandle        = errors.New("launcher: sessão sem canal vivo")
-	ErrTooManySessions = errors.New("launcher: limite de sessões concorrentes atingido (SEC-007)")
-	ErrShuttingDown    = errors.New("launcher: hub está encerrando")
+	ErrUnknownMachine   = errors.New("launcher: máquina desconhecida")
+	ErrUnknownAgent     = errors.New("launcher: agente desconhecido")
+	ErrLaunchTimeout    = errors.New("launcher: timeout esperando session_started")
+	ErrUnknownSession   = errors.New("launcher: sessão desconhecida")
+	ErrStaleState       = errors.New("launcher: estado obsoleto (não está em needs_you)")
+	ErrNoHandle         = errors.New("launcher: sessão sem canal vivo")
+	ErrTooManySessions  = errors.New("launcher: limite de sessões concorrentes atingido (SEC-007)")
+	ErrShuttingDown     = errors.New("launcher: hub está encerrando")
+	ErrInvalidSessionID = errors.New("launcher: id de sessão inválido")
+	ErrDiscoverFailed   = errors.New("launcher: falha ao descobrir sessões na máquina")
 )
+
+// sessionIDPattern valida o id de uma sessão adotada. Session ids do Claude são
+// UUIDs (hex + hífens); restringir a esse formato é defesa em profundidade
+// contra qualquer conteúdo perigoso chegar em `--resume <id>` (SEC-101), mesmo
+// com o escape estrutural do remoteClaudeCommand já neutralizando injeção.
+var sessionIDPattern = regexp.MustCompile(`^[0-9a-fA-F-]{8,64}$`)
+
+// discoverTimeout limita quanto Discover espera o ssh/python remoto responder,
+// para um alvo pendurado (rede/NFS travada) não segurar o request HTTP nem o
+// processo até o Shutdown do hub.
+const discoverTimeout = 15 * time.Second
 
 // agentClaudeCode é o único agente suportado nesta fase (dev).
 const agentClaudeCode = "claude-code"
@@ -186,6 +201,108 @@ func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt, cwd strin
 	}
 }
 
+// Discover lista as sessões do Claude Code já existentes na máquina (lendo
+// ~/.claude/projects lá), inclusive as não lançadas pelo Cutuque. Retorna
+// ErrUnknownMachine se a máquina não existe ou não suporta descoberta.
+func (l *Launcher) Discover(machine string) ([]session.Discovered, error) {
+	tgt, ok := l.targets[machine]
+	if !ok {
+		return nil, ErrUnknownMachine
+	}
+	d, ok := tgt.(claudecode.Discoverer)
+	if !ok {
+		return nil, ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	list, err := d.Discover(ctx)
+	if err != nil {
+		// Máquina existe, mas a descoberta em si falhou (ssh caiu, python3
+		// ausente, JSON corrompido, timeout) — distinto de "máquina
+		// desconhecida", para o handler não mascarar tudo como 404.
+		return nil, fmt.Errorf("%w: %v", ErrDiscoverFailed, err)
+	}
+	return list, nil
+}
+
+// Live lista as sessões do Claude Code que estão RODANDO agora na máquina
+// (processo vivo + transcript recente). Mesmos erros/timeout do Discover.
+func (l *Launcher) Live(machine string) ([]session.Discovered, error) {
+	tgt, ok := l.targets[machine]
+	if !ok {
+		return nil, ErrUnknownMachine
+	}
+	lv, ok := tgt.(claudecode.Liver)
+	if !ok {
+		return nil, ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	list, err := lv.Live(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrDiscoverFailed, err)
+	}
+	return list, nil
+}
+
+// Adopt registra no Registry uma sessão descoberta (idle), para que a usuária
+// possa abri-la e continuar a conversa (SendText → --resume). Se já for
+// conhecida, devolve a existente. ErrUnknownMachine se a máquina não existe.
+func (l *Launcher) Adopt(machine, id, cwd, title string) (session.Session, error) {
+	tgt, ok := l.targets[machine]
+	if !ok {
+		return session.Session{}, ErrUnknownMachine
+	}
+	// id vira `--resume <id>` num comando remoto: só aceita o formato real de
+	// session id (UUID). Defesa em profundidade contra SEC-101 além do escape
+	// estrutural do remoteClaudeCommand.
+	if !sessionIDPattern.MatchString(id) {
+		return session.Session{}, ErrInvalidSessionID
+	}
+	if s, ok := l.reg.Get(id); ok {
+		return s, nil // já conhecida (evita sobrescrever estado vivo/histórico já importado)
+	}
+	now := time.Now()
+	s := session.Session{
+		ID:        id,
+		Machine:   machine,
+		Agent:     agentClaudeCode,
+		Title:     title,
+		State:     session.StateIdle,
+		Cwd:       cwd,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	l.reg.Add(s)
+	// Importa o histórico do transcript do Mac (se o alvo suportar) para o chat
+	// mostrar as mensagens anteriores ao abrir a sessão adotada — sem isso o
+	// output começaria vazio e só o `--resume` traria conteúdo novo. Feito ANTES
+	// de devolver, para que o GET /output logo após o adopt já traga o histórico.
+	// Falha (ssh/python/timeout) degrada graciosamente: adota sem histórico.
+	l.importTranscript(tgt, id)
+	return s, nil
+}
+
+// importTranscript lê o transcript da sessão no alvo e o adiciona ao output do
+// registry, na ordem cronológica (o registry mantém os mais recentes até o
+// teto). Best-effort: qualquer erro é silenciado (a adoção não deve falhar por
+// causa do histórico).
+func (l *Launcher) importTranscript(tgt claudecode.Target, id string) {
+	tr, ok := tgt.(claudecode.Transcriber)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	chunks, err := tr.Transcript(ctx, id)
+	if err != nil {
+		return
+	}
+	for _, ch := range chunks {
+		l.reg.AppendOutput(id, ch.Kind, ch.Text)
+	}
+}
+
 // Machines devolve os nomes dos alvos registrados, ordenados. targets é fixado
 // em New e nunca mutado, então é seguro ler sem lock.
 func (l *Launcher) Machines() []string {
@@ -303,10 +420,9 @@ func (l *Launcher) resume(s session.Session, prompt string) error {
 	l.wg.Add(1)
 	l.mu.Unlock()
 
-	// cwd vazio: o resume não guarda o cwd da sessão original (Session não tem
-	// esse campo) — roda em home, como hoje. Futuro: persistir Session.Cwd se
-	// isso importar.
-	handle, err := tgt.Start(l.baseCtx, s.ID, "") // --resume s.ID
+	// Retoma na MESMA pasta da sessão (s.Cwd): importa pras sessões adotadas do
+	// Mac (o --resume restaura a conversa, mas as ferramentas operam no cwd).
+	handle, err := tgt.Start(l.baseCtx, s.ID, s.Cwd) // --resume s.ID
 	if err != nil {
 		l.wg.Done()
 		return err
