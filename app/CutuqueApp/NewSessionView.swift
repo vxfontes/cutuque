@@ -80,12 +80,28 @@ struct NewSessionView: View {
 
     // MARK: Seções do formulário
 
+    // Alvos planejados mas ainda não disponíveis no hub (aparecem como "em breve").
+    private let plannedMachines = ["desktop-win"]
+
+    private var comingSoon: [String] {
+        plannedMachines.filter { !machines.contains($0) }
+    }
+
     private var machineSection: some View {
         Section("Máquina") {
             Picker("Máquina", selection: $machine) {
                 ForEach(machines, id: \.self) { name in
                     Label(name, systemImage: machineSymbol(name)).tag(name)
                 }
+            }
+            // Alvos futuros: mostrados desabilitados, não selecionáveis.
+            ForEach(comingSoon, id: \.self) { name in
+                HStack {
+                    Label(name, systemImage: machineSymbol(name))
+                    Spacer()
+                    Text("em breve").font(.caption)
+                }
+                .foregroundStyle(.tertiary)
             }
         }
     }

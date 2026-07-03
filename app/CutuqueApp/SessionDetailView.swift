@@ -87,6 +87,27 @@ final class SessionDetailViewModel: ObservableObject {
         return await runAction { try await self.api.sendInput(sessionID: self.session.id, text: trimmed) }
     }
 
+    /// Lança uma NOVA sessão na mesma máquina desta (usado quando esta já
+    /// encerrou — done/error/idle — e não há processo vivo pra responder).
+    /// Devolve a sessão criada (para o chamador navegar até ela), ou nil em falha.
+    func launchNew(_ text: String) async -> Session? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        actionInProgress = true
+        defer { actionInProgress = false }
+        do {
+            return try await api.createSession(machine: session.machine, agent: session.agent, prompt: trimmed)
+        } catch let CutuqueError.server(status, message) {
+            notice = status == 504
+                ? "o agente demorou a responder — confira a lista, a sessão pode aparecer"
+                : message
+            return nil
+        } catch {
+            notice = error.localizedDescription
+            return nil
+        }
+    }
+
     /// Executa uma ação com loading; no 409 recarrega a sessão e avisa "o estado mudou".
     @discardableResult
     private func runAction(_ perform: @escaping () async throws -> Void) async -> Bool {
@@ -119,12 +140,12 @@ final class SessionDetailViewModel: ObservableObject {
 struct SessionDetailView: View {
     @StateObject private var model: SessionDetailViewModel
     @ObservedObject private var namer = SessionNamesStore.shared
+    // Router p/ navegar ao detalhe da nova sessão ao relançar de uma encerrada.
+    @EnvironmentObject private var router: Router
     @State private var draft = ""
     @State private var showScrollToBottom = false
     @State private var renaming = false
     @State private var renameText = ""
-    // Sheet de relançar (nova tarefa na mesma máquina de uma sessão encerrada).
-    @State private var showingRelaunch = false
 
     init(session: Session) {
         _model = StateObject(wrappedValue: SessionDetailViewModel(session: session))
@@ -151,14 +172,10 @@ struct SessionDetailView: View {
                 permissionCard(prompt)
             }
             outputTerminal
-            // Sessões VIVAS (rodando/precisa de você): dá pra mandar texto pro
-            // claude em andamento. Sessões ENCERRADAS (concluído/falhou/ocioso):
-            // sem processo vivo → oferecer relançar na mesma máquina.
-            if model.session.state == .running || model.session.state == .needsYou {
-                inputBar
-            } else {
-                relaunchBar
-            }
+            // Barra de digitação SEMPRE visível. Em sessão viva, o texto responde
+            // ao agente em andamento; em sessão encerrada (sem processo vivo), o
+            // texto lança uma nova tarefa na mesma máquina (relançar).
+            interactionBar
         }
         .navigationTitle(displayTitle)
         .navigationBarTitleDisplayMode(.inline)
@@ -175,13 +192,6 @@ struct SessionDetailView: View {
         }
         .task { await model.start() }
         .onDisappear { model.stop() }
-        // Relançar: nova tarefa já com a máquina desta sessão pré-selecionada.
-        .sheet(isPresented: $showingRelaunch) {
-            NewSessionView(initialMachine: model.session.machine) { _ in
-                // A nova sessão aparece na lista via WS; só fechamos a sheet.
-                showingRelaunch = false
-            }
-        }
         .alert("Renomear sessão", isPresented: $renaming) {
             TextField("Nome", text: $renameText)
             Button("Salvar") { namer.setName(renameText, for: model.session.id) }
@@ -254,41 +264,43 @@ struct SessionDetailView: View {
         .padding()
     }
 
-    // MARK: Barra de resposta ao agente
+    // MARK: Barra de interação (responder OU relançar, conforme o estado)
 
-    private var inputBar: some View {
+    /// Viva (rodando/precisa de você): há processo pra receber o texto.
+    private var isLive: Bool {
+        model.session.state == .running || model.session.state == .needsYou
+    }
+
+    private var interactionBar: some View {
         HStack(spacing: 8) {
-            TextField("responder ao agente...", text: $draft, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(1...4)
+            TextField(
+                isLive ? "responder ao agente..." : "nova tarefa nesta máquina...",
+                text: $draft, axis: .vertical
+            )
+            .textFieldStyle(.roundedBorder)
+            .lineLimit(1...4)
 
             Button {
                 let text = draft
                 Task {
-                    if await model.sendInput(text) { draft = "" }
+                    if isLive {
+                        // Sessão viva: manda o texto pro claude em andamento.
+                        if await model.sendInput(text) { draft = "" }
+                    } else {
+                        // Encerrada: lança nova tarefa na mesma máquina e navega
+                        // pra ela (o processo antigo morreu — não dá pra responder).
+                        if let s = await model.launchNew(text) {
+                            draft = ""
+                            router.openSession(s.id)
+                        }
+                    }
                 }
             } label: {
-                Image(systemName: "paperplane.fill")
+                Image(systemName: isLive ? "paperplane.fill" : "play.fill")
             }
             .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.actionInProgress)
+            .accessibilityLabel(isLive ? "Enviar ao agente" : "Lançar nova tarefa")
         }
-        .padding()
-        .background(.bar)
-    }
-
-    // MARK: Barra de relançar (sessões encerradas)
-
-    /// Sessão sem processo vivo (concluído/falhou/ocioso): oferece disparar uma
-    /// nova tarefa na MESMA máquina (o processo antigo já morreu, não dá pra
-    /// responder — só relançar).
-    private var relaunchBar: some View {
-        Button {
-            showingRelaunch = true
-        } label: {
-            Label("Nova tarefa nesta máquina", systemImage: "arrow.clockwise")
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.borderedProminent)
         .padding()
         .background(.bar)
     }
