@@ -73,7 +73,7 @@ func TestLaunchAcceptsUpToMaxSessionsThenRejects(t *testing.T) {
 
 	for i := 0; i < max; i++ {
 		machine := fmt.Sprintf("m%d", i)
-		s, err := l.Launch(context.Background(), machine, agentClaudeCode, "tarefa")
+		s, err := l.Launch(context.Background(), machine, agentClaudeCode, "tarefa", "")
 		if err != nil {
 			t.Fatalf("Launch %d (%s): %v", i, machine, err)
 		}
@@ -83,7 +83,7 @@ func TestLaunchAcceptsUpToMaxSessionsThenRejects(t *testing.T) {
 	}
 
 	overflowMachine := fmt.Sprintf("m%d", max)
-	if _, err := l.Launch(context.Background(), overflowMachine, agentClaudeCode, "excedente"); err != ErrTooManySessions {
+	if _, err := l.Launch(context.Background(), overflowMachine, agentClaudeCode, "excedente", ""); err != ErrTooManySessions {
 		t.Fatalf("Launch acima do teto: err = %v, quero ErrTooManySessions", err)
 	}
 }

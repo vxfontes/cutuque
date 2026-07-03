@@ -17,7 +17,7 @@ const maxLaunchBody = 64 * 1024
 // Launcher é a superfície que os handlers de comando consomem. *launcher.Launcher
 // a satisfaz; um fake a implementa nos testes.
 type Launcher interface {
-	Launch(ctx context.Context, machine, agent, prompt string) (session.Session, error)
+	Launch(ctx context.Context, machine, agent, prompt, cwd string) (session.Session, error)
 	Approve(id string) error
 	Deny(id string) error
 	SendText(id, text string) error
@@ -50,11 +50,13 @@ func DeleteSessionHandler(lch Launcher) http.HandlerFunc {
 	}
 }
 
-// launchRequest é o corpo de POST /sessions.
+// launchRequest é o corpo de POST /sessions. Cwd é opcional: a pasta onde o
+// `claude` roda; vazio = home.
 type launchRequest struct {
 	Machine string `json:"machine"`
 	Agent   string `json:"agent"`
 	Prompt  string `json:"prompt"`
+	Cwd     string `json:"cwd,omitempty"`
 }
 
 // launchResponse é o corpo de sucesso de POST /sessions.
@@ -95,7 +97,7 @@ func LaunchHandler(lch Launcher) http.HandlerFunc {
 			return
 		}
 
-		s, err := lch.Launch(context.Background(), req.Machine, req.Agent, req.Prompt)
+		s, err := lch.Launch(context.Background(), req.Machine, req.Agent, req.Prompt, req.Cwd)
 		switch {
 		case errors.Is(err, launcher.ErrUnknownMachine):
 			writeJSONError(w, http.StatusBadRequest, "unknown_machine")

@@ -20,8 +20,8 @@ func addRunning(reg interface {
 func TestSessionOutputReturnsChunks(t *testing.T) {
 	cfg, reg := testDeps()
 	addRunning(reg, "s")
-	reg.AppendOutput("s", "linha 1")
-	reg.AppendOutput("s", "linha 2")
+	reg.AppendOutput("s", "assistant", "linha 1")
+	reg.AppendOutput("s", "tool", "linha 2")
 
 	req := httptest.NewRequest(http.MethodGet, "/sessions/s/output", nil)
 	req.Header.Set("Authorization", "Bearer secret")
@@ -33,13 +33,18 @@ func TestSessionOutputReturnsChunks(t *testing.T) {
 		t.Fatalf("status = %d, quero 200", rec.Code)
 	}
 	var body struct {
-		Chunks []string `json:"chunks"`
+		Chunks []struct {
+			Kind string `json:"kind"`
+			Text string `json:"text"`
+		} `json:"chunks"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("resposta não é JSON: %v", err)
 	}
-	if len(body.Chunks) != 2 || body.Chunks[0] != "linha 1" || body.Chunks[1] != "linha 2" {
-		t.Errorf("chunks = %v, quero [linha 1, linha 2]", body.Chunks)
+	if len(body.Chunks) != 2 ||
+		body.Chunks[0].Kind != "assistant" || body.Chunks[0].Text != "linha 1" ||
+		body.Chunks[1].Kind != "tool" || body.Chunks[1].Text != "linha 2" {
+		t.Errorf("chunks = %+v, quero [{assistant,linha 1},{tool,linha 2}]", body.Chunks)
 	}
 }
 

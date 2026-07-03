@@ -36,7 +36,7 @@ type Registry struct {
 	mu      sync.RWMutex
 	byID    map[string]session.Session
 	subs    map[*Subscription]struct{}
-	outputs map[string][]string
+	outputs map[string][]OutputChunk
 	outSubs map[*OutputSub]struct{}
 }
 
@@ -45,7 +45,7 @@ func New() *Registry {
 	return &Registry{
 		byID:    make(map[string]session.Session),
 		subs:    make(map[*Subscription]struct{}),
-		outputs: make(map[string][]string),
+		outputs: make(map[string][]OutputChunk),
 		outSubs: make(map[*OutputSub]struct{}),
 	}
 }

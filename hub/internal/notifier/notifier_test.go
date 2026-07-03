@@ -218,9 +218,14 @@ func TestPayloadNeverContainsOutput(t *testing.T) {
 	eng, reg, _, fake, _ := fixture(t)
 	startSession(eng, "s1")
 	// Injeta output com a sentinela (armazenado no buffer de output do registry).
-	eng.Apply(event.Event{SessionID: "s1", Type: event.OutputChunk, Data: sentinel, At: time.Now()})
+	eng.Apply(event.Event{SessionID: "s1", Type: event.OutputChunk, Kind: event.KindAssistant, Data: sentinel, At: time.Now()})
 	// Confirma que a sentinela está mesmo guardada (senão o teste seria vácuo).
-	if out := reg.Output("s1"); len(out) == 0 || !strings.Contains(strings.Join(out, ""), sentinel) {
+	out := reg.Output("s1")
+	var joined strings.Builder
+	for _, c := range out {
+		joined.WriteString(c.Text)
+	}
+	if len(out) == 0 || !strings.Contains(joined.String(), sentinel) {
 		t.Fatalf("sentinela não foi guardada no output; teste inválido")
 	}
 

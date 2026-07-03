@@ -73,8 +73,12 @@ func TestRunnerProcessesFixtureToDone(t *testing.T) {
 	}
 
 	out := reg.Output("ea6c037a-4306-479b-acc7-d5bd0cf52941")
-	joined := strings.Join(out, "\n")
-	if !strings.Contains(joined, "oi") {
+	var joined strings.Builder
+	for _, c := range out {
+		joined.WriteString(c.Text)
+		joined.WriteString("\n")
+	}
+	if !strings.Contains(joined.String(), "oi") {
 		t.Errorf("output = %v, quero conter \"oi\"", out)
 	}
 }
@@ -143,7 +147,7 @@ func TestRunnerFillsSessionIDForSingleSessionStream(t *testing.T) {
 	if s.State != session.StateDone {
 		t.Errorf("State = %q, quero \"done\"", s.State)
 	}
-	if out := reg.Output("unica"); len(out) != 1 || out[0] != "produzindo" {
+	if out := reg.Output("unica"); len(out) != 1 || out[0].Text != "produzindo" {
 		t.Errorf("Output = %v, quero [\"produzindo\"]", out)
 	}
 }
@@ -187,7 +191,7 @@ func TestLocalTargetExecsCommand(t *testing.T) {
 		t.Errorf("Name() = %q, quero \"macbook\"", tgt.Name())
 	}
 
-	h, err := tgt.Start(context.Background(), "")
+	h, err := tgt.Start(context.Background(), "", "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}

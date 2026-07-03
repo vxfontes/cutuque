@@ -120,8 +120,8 @@ func (l *Launcher) SetMaxSessions(n int) {
 // uma goroutine. Valida machine/agent (dev: só máquinas registradas + claude-code),
 // rejeita acima do teto de sessões concorrentes (SEC-007, ErrTooManySessions),
 // envia o prompt inicial pelo stdin e espera o session_started (até launchTimeout)
-// para devolver a Session criada.
-func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt string) (session.Session, error) {
+// para devolver a Session criada. cwd é a pasta onde o `claude` roda; vazio → home.
+func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt, cwd string) (session.Session, error) {
 	tgt, ok := l.targets[machine]
 	if !ok {
 		return session.Session{}, ErrUnknownMachine
@@ -152,7 +152,7 @@ func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt string) (s
 	// abaixo; defer wg.Done na goroutine no caminho feliz). Usa l.baseCtx (não o
 	// ctx do request, que é Background e nunca cancela) para que o Shutdown mate
 	// o processo em voo cancelando baseCtx.
-	handle, err := tgt.Start(l.baseCtx, "")
+	handle, err := tgt.Start(l.baseCtx, "", cwd)
 	if err != nil {
 		l.wg.Done()
 		return session.Session{}, err
@@ -165,7 +165,7 @@ func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt string) (s
 	}
 
 	started := make(chan session.Session, 1)
-	app := &launchApplier{l: l, handle: handle, started: started}
+	app := &launchApplier{l: l, handle: handle, started: started, prompt: prompt}
 	runner := claudecode.NewRunner(app)
 	go func() {
 		defer l.wg.Done()
@@ -273,6 +273,9 @@ func (l *Launcher) SendText(id, text string) error {
 	l.mu.Unlock()
 
 	if live {
+		// Eco ANTES do envio: garante que o texto da usuária apareça no
+		// transcript antes de qualquer resposta do agente (ordem cronológica).
+		l.eng.Apply(event.Event{SessionID: id, Type: event.OutputChunk, Kind: event.KindUser, Data: text, At: time.Now()})
 		if err := h.SendUserMessage(text); err != nil {
 			return err
 		}
@@ -300,11 +303,16 @@ func (l *Launcher) resume(s session.Session, prompt string) error {
 	l.wg.Add(1)
 	l.mu.Unlock()
 
-	handle, err := tgt.Start(l.baseCtx, s.ID) // --resume s.ID
+	// cwd vazio: o resume não guarda o cwd da sessão original (Session não tem
+	// esse campo) — roda em home, como hoje. Futuro: persistir Session.Cwd se
+	// isso importar.
+	handle, err := tgt.Start(l.baseCtx, s.ID, "") // --resume s.ID
 	if err != nil {
 		l.wg.Done()
 		return err
 	}
+	// Eco ANTES do envio, mesma ordem cronológica do caminho ao vivo.
+	l.eng.Apply(event.Event{SessionID: s.ID, Type: event.OutputChunk, Kind: event.KindUser, Data: prompt, At: time.Now()})
 	if err := handle.SendUserMessage(prompt); err != nil {
 		_ = handle.Close()
 		l.wg.Done()
@@ -393,6 +401,7 @@ type launchApplier struct {
 	started   chan session.Session
 	sessionID string // preenchido no session_started (usado na limpeza ao fim)
 	forcedID  string // resume: força todos os eventos para este id (continuidade)
+	prompt    string // prompt inicial do Launch, ecoado (kind "user") no session_started
 }
 
 func (a *launchApplier) Apply(ev event.Event) {
@@ -414,6 +423,14 @@ func (a *launchApplier) Apply(ev event.Event) {
 	if ev.Type == event.SessionStarted {
 		a.sessionID = ev.SessionID
 		a.l.setHandle(ev.SessionID, a.handle)
+		// Eco do prompt inicial (kind "user"): grava DEPOIS do session_started
+		// (id já conhecido) e ANTES de sinalizar started, garantindo que o
+		// eco apareça no transcript antes de qualquer resposta do agente —
+		// que só é processada em linhas posteriores do mesmo stream, na mesma
+		// goroutine do Runner.
+		if a.prompt != "" {
+			a.l.eng.Apply(event.Event{SessionID: ev.SessionID, Type: event.OutputChunk, Kind: event.KindUser, Data: a.prompt, At: time.Now()})
+		}
 		if s, ok := a.l.reg.Get(ev.SessionID); ok {
 			select {
 			case a.started <- s:

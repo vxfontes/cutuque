@@ -171,18 +171,19 @@ func TestWSSendsOutputChunk(t *testing.T) {
 		t.Fatalf("lendo snapshot: %v", err)
 	}
 
-	reg.AppendOutput("s1", "saída ao vivo")
+	reg.AppendOutput("s1", "assistant", "saída ao vivo")
 
 	var msg struct {
 		Type      string `json:"type"`
 		SessionID string `json:"session_id"`
+		Kind      string `json:"kind"`
 		Data      string `json:"data"`
 	}
 	if err := wsjson.Read(ctx, c, &msg); err != nil {
 		t.Fatalf("lendo output_chunk: %v", err)
 	}
-	if msg.Type != "output_chunk" || msg.SessionID != "s1" || msg.Data != "saída ao vivo" {
-		t.Errorf("msg = %+v, quero output_chunk s1 \"saída ao vivo\"", msg)
+	if msg.Type != "output_chunk" || msg.SessionID != "s1" || msg.Kind != "assistant" || msg.Data != "saída ao vivo" {
+		t.Errorf("msg = %+v, quero output_chunk s1 assistant \"saída ao vivo\"", msg)
 	}
 }
 

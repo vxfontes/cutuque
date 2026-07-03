@@ -5,46 +5,49 @@ package registry
 // na sessão real do agente.
 const maxOutputChunks = 200
 
+// OutputChunk é um pedaço de output TIPADO de uma sessão: Kind ∈
+// {user, assistant, tool, tool_result} (ver internal/event) e o texto já
+// resumido/truncado pelo adapter. É o contrato exposto ao app (REST
+// GET /sessions/{id}/output e WS output_chunk).
+type OutputChunk struct {
+	Kind string `json:"kind"`
+	Text string `json:"text"`
+}
+
 // OutputEvent é um pedaço de output de uma sessão, entregue aos subscribers.
 type OutputEvent struct {
 	SessionID string `json:"session_id"`
-	Data      string `json:"data"`
+	Kind      string `json:"kind"`
+	Text      string `json:"data"`
 }
 
-// OutputSub é a inscrição no stream de output. Consuma de C e chame
-// UnsubscribeOutput ao terminar.
-type OutputSub struct {
-	C  <-chan OutputEvent
-	ch chan OutputEvent
-}
-
-// AppendOutput guarda mais um pedaço de output da sessão (mantendo só os
-// maxOutputChunks mais recentes) e notifica os subscribers de output.
-func (r *Registry) AppendOutput(sessionID, data string) {
+// AppendOutput guarda mais um pedaço de output tipado da sessão (mantendo só
+// os maxOutputChunks mais recentes) e notifica os subscribers de output.
+func (r *Registry) AppendOutput(sessionID, kind, text string) {
 	r.mu.Lock()
-	buf := append(r.outputs[sessionID], data)
+	buf := append(r.outputs[sessionID], OutputChunk{Kind: kind, Text: text})
 	if len(buf) > maxOutputChunks {
 		// Mantém a janela dos mais recentes, copiando para não segurar o array
 		// antigo inteiro em memória.
-		trimmed := make([]string, maxOutputChunks)
+		trimmed := make([]OutputChunk, maxOutputChunks)
 		copy(trimmed, buf[len(buf)-maxOutputChunks:])
 		buf = trimmed
 	}
 	r.outputs[sessionID] = buf
 	r.mu.Unlock()
 
-	r.broadcastOutput(OutputEvent{SessionID: sessionID, Data: data})
+	r.broadcastOutput(OutputEvent{SessionID: sessionID, Kind: kind, Text: text})
 }
 
 // Output retorna uma cópia dos pedaços de output guardados para a sessão.
-func (r *Registry) Output(sessionID string) []string {
+func (r *Registry) Output(sessionID string) []OutputChunk {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	src := r.outputs[sessionID]
 	if len(src) == 0 {
 		return nil
 	}
-	out := make([]string, len(src))
+	out := make([]OutputChunk, len(src))
 	copy(out, src)
 	return out
 }
@@ -57,6 +60,13 @@ func (r *Registry) SubscribeOutput() *OutputSub {
 	r.outSubs[sub] = struct{}{}
 	r.mu.Unlock()
 	return sub
+}
+
+// OutputSub é a inscrição no stream de output. Consuma de C e chame
+// UnsubscribeOutput ao terminar.
+type OutputSub struct {
+	C  <-chan OutputEvent
+	ch chan OutputEvent
 }
 
 // UnsubscribeOutput encerra a inscrição de output e fecha seu canal. É idempotente.

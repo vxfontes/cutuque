@@ -22,6 +22,16 @@ const (
 	Errored             Type = "errored"              // falha/crash
 )
 
+// Kinds de output_chunk: o contrato tipado exposto ao app (REST
+// GET /sessions/{id}/output e WS output_chunk). Só fazem sentido quando
+// Type == OutputChunk.
+const (
+	KindUser       = "user"        // eco do texto que a usuária enviou
+	KindAssistant  = "assistant"   // texto do agente (limpo)
+	KindTool       = "tool"        // chamada de ferramenta (resumo do input)
+	KindToolResult = "tool_result" // resultado de ferramenta (truncado)
+)
+
 // Event é um evento normalizado emitido por um adapter.
 //
 // Machine, Agent e Title são metadados de criação da sessão: os adapters os
@@ -35,9 +45,14 @@ const (
 // devolvido intacto como updatedInput ao aprovar (protocolo verificado na CLI
 // 2.1.198). O Launcher os guarda para responder pelo stdin; o Engine só usa
 // Data (resumo humano) para o estado.
+//
+// Kind só é usado quando Type == OutputChunk: qualifica o pedaço de saída
+// como user/assistant/tool/tool_result (ver constantes Kind* acima) para o
+// contrato tipado de output do app. Nos demais tipos de evento fica vazio.
 type Event struct {
 	SessionID string          `json:"session_id"`
 	Type      Type            `json:"type"`
+	Kind      string          `json:"kind,omitempty"`
 	Data      string          `json:"data"`
 	At        time.Time       `json:"at"`
 	Machine   string          `json:"machine,omitempty"`

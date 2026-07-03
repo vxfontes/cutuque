@@ -9,18 +9,22 @@ import (
 
 func TestAppendAndGetOutput(t *testing.T) {
 	r := New()
-	r.AppendOutput("a", "linha 1")
-	r.AppendOutput("a", "linha 2")
-	r.AppendOutput("a", "linha 3")
+	r.AppendOutput("a", "assistant", "linha 1")
+	r.AppendOutput("a", "tool", "linha 2")
+	r.AppendOutput("a", "tool_result", "linha 3")
 
 	got := r.Output("a")
-	want := []string{"linha 1", "linha 2", "linha 3"}
+	want := []OutputChunk{
+		{Kind: "assistant", Text: "linha 1"},
+		{Kind: "tool", Text: "linha 2"},
+		{Kind: "tool_result", Text: "linha 3"},
+	}
 	if len(got) != len(want) {
 		t.Fatalf("len(Output) = %d, quero %d", len(got), len(want))
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Errorf("Output[%d] = %q, quero %q", i, got[i], want[i])
+			t.Errorf("Output[%d] = %+v, quero %+v", i, got[i], want[i])
 		}
 	}
 }
@@ -28,7 +32,7 @@ func TestAppendAndGetOutput(t *testing.T) {
 func TestOutputCapsAt200(t *testing.T) {
 	r := New()
 	for i := range 250 {
-		r.AppendOutput("a", fmt.Sprintf("chunk-%d", i))
+		r.AppendOutput("a", "assistant", fmt.Sprintf("chunk-%d", i))
 	}
 
 	got := r.Output("a")
@@ -36,11 +40,11 @@ func TestOutputCapsAt200(t *testing.T) {
 		t.Fatalf("len(Output) = %d, quero 200 (cap)", len(got))
 	}
 	// Deve manter os 200 mais recentes: chunk-50 .. chunk-249.
-	if got[0] != "chunk-50" {
-		t.Errorf("Output[0] = %q, quero \"chunk-50\"", got[0])
+	if got[0].Text != "chunk-50" {
+		t.Errorf("Output[0].Text = %q, quero \"chunk-50\"", got[0].Text)
 	}
-	if got[199] != "chunk-249" {
-		t.Errorf("Output[199] = %q, quero \"chunk-249\"", got[199])
+	if got[199].Text != "chunk-249" {
+		t.Errorf("Output[199].Text = %q, quero \"chunk-249\"", got[199].Text)
 	}
 }
 
@@ -53,11 +57,11 @@ func TestOutputUnknownSessionIsEmpty(t *testing.T) {
 
 func TestOutputReturnsCopy(t *testing.T) {
 	r := New()
-	r.AppendOutput("a", "orig")
+	r.AppendOutput("a", "assistant", "orig")
 	got := r.Output("a")
-	got[0] = "mutado"
-	if again := r.Output("a"); again[0] != "orig" {
-		t.Errorf("Output foi mutado externamente: %q", again[0])
+	got[0].Text = "mutado"
+	if again := r.Output("a"); again[0].Text != "orig" {
+		t.Errorf("Output foi mutado externamente: %q", again[0].Text)
 	}
 }
 
@@ -66,12 +70,12 @@ func TestSubscribeOutputReceives(t *testing.T) {
 	sub := r.SubscribeOutput()
 	defer r.UnsubscribeOutput(sub)
 
-	r.AppendOutput("a", "oi")
+	r.AppendOutput("a", "assistant", "oi")
 
 	select {
 	case ev := <-sub.C:
-		if ev.SessionID != "a" || ev.Data != "oi" {
-			t.Errorf("recebido %+v, quero {a, oi}", ev)
+		if ev.SessionID != "a" || ev.Kind != "assistant" || ev.Text != "oi" {
+			t.Errorf("recebido %+v, quero {a, assistant, oi}", ev)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout esperando output")
@@ -83,7 +87,7 @@ func TestUnsubscribeOutputStopsDelivery(t *testing.T) {
 	sub := r.SubscribeOutput()
 	r.UnsubscribeOutput(sub)
 
-	r.AppendOutput("a", "oi")
+	r.AppendOutput("a", "assistant", "oi")
 
 	select {
 	case _, ok := <-sub.C:
@@ -116,7 +120,7 @@ func TestConcurrentOutputIsRaceFree(t *testing.T) {
 	for i := range 8 {
 		wg.Go(func() {
 			id := fmt.Sprintf("s%d", i%3)
-			r.AppendOutput(id, "x")
+			r.AppendOutput(id, "assistant", "x")
 			_ = r.Output(id)
 		})
 	}

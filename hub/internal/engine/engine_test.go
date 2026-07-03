@@ -79,15 +79,15 @@ func TestApplyOutputChunkAppendsOutputKeepsRunning(t *testing.T) {
 	eng := New(reg)
 	seed(reg, "s", session.StateRunning)
 
-	eng.Apply(event.Event{SessionID: "s", Type: event.OutputChunk, Data: "linha de log"})
+	eng.Apply(event.Event{SessionID: "s", Type: event.OutputChunk, Kind: event.KindAssistant, Data: "linha de log"})
 
 	got, _ := reg.Get("s")
 	if got.State != session.StateRunning {
 		t.Errorf("State = %q, quero \"running\"", got.State)
 	}
 	out := reg.Output("s")
-	if len(out) != 1 || out[0] != "linha de log" {
-		t.Errorf("Output = %v, quero [\"linha de log\"]", out)
+	if len(out) != 1 || out[0].Kind != event.KindAssistant || out[0].Text != "linha de log" {
+		t.Errorf("Output = %+v, quero [{assistant, \"linha de log\"}]", out)
 	}
 }
 

@@ -37,6 +37,7 @@ type updatedMessage struct {
 type outputMessage struct {
 	Type      string `json:"type"` // sempre "output_chunk"
 	SessionID string `json:"session_id"`
+	Kind      string `json:"kind"`
 	Data      string `json:"data"`
 }
 
@@ -101,7 +102,7 @@ func WSHandler(reg *registry.Registry) http.HandlerFunc {
 				if !ok {
 					return
 				}
-				msg := outputMessage{Type: "output_chunk", SessionID: o.SessionID, Data: o.Data}
+				msg := outputMessage{Type: "output_chunk", SessionID: o.SessionID, Kind: o.Kind, Data: o.Text}
 				if err := writeJSON(ctx, c, msg); err != nil {
 					return
 				}

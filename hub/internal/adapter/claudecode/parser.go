@@ -11,9 +11,14 @@ import (
 	"github.com/vxfontes/cutuque/hub/internal/event"
 )
 
-// maxSummary é o tamanho máximo do resumo de inputs de ferramenta e de
-// resultados, para o output ao vivo ficar legível.
+// maxSummary é o tamanho máximo do resumo de inputs de ferramenta (kind
+// "tool" e o resumo humano de permission_requested), para o output ao vivo
+// ficar legível.
 const maxSummary = 120
+
+// maxToolResultChars é o tamanho máximo do texto de um tool_result (kind
+// "tool_result") exposto no output ao vivo — contrato: "primeiros ~200 chars".
+const maxToolResultChars = 200
 
 // streamLine é uma linha do stream-json do Claude Code. Só os campos usados.
 type streamLine struct {
@@ -137,8 +142,9 @@ func commandField(raw json.RawMessage) string {
 	return in.Command
 }
 
-// assistantEvents extrai output_chunks de uma mensagem do assistente: texto vira
-// o próprio texto; tool_use vira "→ <name>: <input resumido>"; thinking é ignorado.
+// assistantEvents extrai output_chunks de uma mensagem do assistente: texto
+// vira kind "assistant" (o texto limpo, sem prefixo); tool_use vira kind
+// "tool" (Data = "Nome: resumo do input"); thinking é ignorado.
 func assistantEvents(l streamLine, at time.Time) []event.Event {
 	blocks := decodeBlocks(l.Message)
 	var out []event.Event
@@ -146,18 +152,41 @@ func assistantEvents(l streamLine, at time.Time) []event.Event {
 		switch b.Type {
 		case "text":
 			if b.Text != "" {
-				out = append(out, event.Event{SessionID: l.SessionID, Type: event.OutputChunk, Data: b.Text, At: at})
+				out = append(out, event.Event{SessionID: l.SessionID, Type: event.OutputChunk, Kind: event.KindAssistant, Data: b.Text, At: at})
 			}
 		case "tool_use":
-			data := "→ " + b.Name + ": " + truncate(compact(b.Input), maxSummary)
-			out = append(out, event.Event{SessionID: l.SessionID, Type: event.OutputChunk, Data: data, At: at})
+			out = append(out, event.Event{SessionID: l.SessionID, Type: event.OutputChunk, Kind: event.KindTool, Data: toolSummary(b.Name, b.Input), At: at})
 		}
 		// thinking (e outros) ignorados.
 	}
 	return out
 }
 
-// userEvents extrai output_chunks de tool_result: "← <primeiros 120 chars>".
+// toolSummary monta o resumo humano de uma chamada de ferramenta: "Nome:
+// resumo do input" (ex.: "Bash: touch x.txt"). Sem prefixos decorativos — o
+// kind "tool" já identifica o tipo no contrato tipado de output.
+func toolSummary(name string, input json.RawMessage) string {
+	if name == "" {
+		name = "ferramenta"
+	}
+	detail := toolInputSummary(input)
+	if detail == "" {
+		return name
+	}
+	return name + ": " + detail
+}
+
+// toolInputSummary resume o input de uma ferramenta: usa input.command quando
+// houver (Bash e afins); senão cai no JSON compacto do input inteiro.
+func toolInputSummary(input json.RawMessage) string {
+	if cmd := commandField(input); cmd != "" {
+		return truncate(cmd, maxSummary)
+	}
+	return truncate(compact(input), maxSummary)
+}
+
+// userEvents extrai output_chunks de tool_result: kind "tool_result", Data
+// truncado aos primeiros ~200 chars. Sem prefixo — o kind já identifica.
 func userEvents(l streamLine, at time.Time) []event.Event {
 	blocks := decodeBlocks(l.Message)
 	var out []event.Event
@@ -165,8 +194,8 @@ func userEvents(l streamLine, at time.Time) []event.Event {
 		if b.Type != "tool_result" {
 			continue
 		}
-		data := "← " + truncate(toolResultText(b.Content), maxSummary)
-		out = append(out, event.Event{SessionID: l.SessionID, Type: event.OutputChunk, Data: data, At: at})
+		data := truncate(toolResultText(b.Content), maxToolResultChars)
+		out = append(out, event.Event{SessionID: l.SessionID, Type: event.OutputChunk, Kind: event.KindToolResult, Data: data, At: at})
 	}
 	return out
 }

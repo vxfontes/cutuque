@@ -9,6 +9,7 @@ import (
 
 	"github.com/vxfontes/cutuque/hub/internal/adapter/claudecode"
 	"github.com/vxfontes/cutuque/hub/internal/engine"
+	"github.com/vxfontes/cutuque/hub/internal/event"
 	"github.com/vxfontes/cutuque/hub/internal/registry"
 	"github.com/vxfontes/cutuque/hub/internal/session"
 )
@@ -26,7 +27,7 @@ type scriptTarget struct {
 
 func (s *scriptTarget) Name() string { return s.name }
 
-func (s *scriptTarget) Start(_ context.Context, _ string) (*claudecode.Handle, error) {
+func (s *scriptTarget) Start(_ context.Context, _, _ string) (*claudecode.Handle, error) {
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
 	go func() {
@@ -93,7 +94,7 @@ func waitFor(t *testing.T, cond func() bool) {
 
 func TestLaunchUnknownMachine(t *testing.T) {
 	l, _ := newTestLauncher(nil)
-	_, err := l.Launch(context.Background(), "inexistente", "claude-code", "faça algo")
+	_, err := l.Launch(context.Background(), "inexistente", "claude-code", "faça algo", "")
 	if err != ErrUnknownMachine {
 		t.Errorf("err = %v, quero ErrUnknownMachine", err)
 	}
@@ -102,7 +103,7 @@ func TestLaunchUnknownMachine(t *testing.T) {
 func TestLaunchUnknownAgent(t *testing.T) {
 	tgt := &scriptTarget{name: "macbook", run: permissionScript, captured: make(chan string, 1)}
 	l, _ := newTestLauncher(tgt)
-	_, err := l.Launch(context.Background(), "macbook", "codex", "faça algo")
+	_, err := l.Launch(context.Background(), "macbook", "codex", "faça algo", "")
 	if err != ErrUnknownAgent {
 		t.Errorf("err = %v, quero ErrUnknownAgent", err)
 	}
@@ -123,7 +124,7 @@ func TestLaunchTimeout(t *testing.T) {
 	launchTimeout = 100 * time.Millisecond
 	defer func() { launchTimeout = old }()
 
-	_, err := l.Launch(context.Background(), "macbook", "claude-code", "faça algo")
+	_, err := l.Launch(context.Background(), "macbook", "claude-code", "faça algo", "")
 	if err != ErrLaunchTimeout {
 		t.Errorf("err = %v, quero ErrLaunchTimeout", err)
 	}
@@ -133,7 +134,7 @@ func TestApproveWritesExactControlResponseAndResumes(t *testing.T) {
 	tgt := &scriptTarget{name: "macbook", run: permissionScript, captured: make(chan string, 1)}
 	l, reg := newTestLauncher(tgt)
 
-	s, err := l.Launch(context.Background(), "macbook", "claude-code", "crie um arquivo")
+	s, err := l.Launch(context.Background(), "macbook", "claude-code", "crie um arquivo", "")
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -185,7 +186,7 @@ func TestDenyWritesDenyControlResponse(t *testing.T) {
 	tgt := &scriptTarget{name: "macbook", run: permissionScript, captured: make(chan string, 1)}
 	l, reg := newTestLauncher(tgt)
 
-	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "crie um arquivo"); err != nil {
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "crie um arquivo", ""); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	waitFor(t, func() bool {
@@ -258,7 +259,7 @@ func TestSendTextDeliversAndResumes(t *testing.T) {
 	}
 	l, reg := newTestLauncher(tgt)
 
-	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "primeira tarefa"); err != nil {
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "primeira tarefa", ""); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	waitFor(t, func() bool {
@@ -276,5 +277,112 @@ func TestSendTextDeliversAndResumes(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("não capturou a mensagem de SendText")
+	}
+}
+
+// TestLaunchEchoesPromptAsUserOutputChunk cobre o eco do prompt inicial: o
+// texto que a usuária mandou tem que aparecer no output (kind "user"), ANTES
+// de qualquer resposta do agente, pra sustentar o transcript no app.
+func TestLaunchEchoesPromptAsUserOutputChunk(t *testing.T) {
+	tgt := &scriptTarget{name: "macbook", run: permissionScript, captured: make(chan string, 1)}
+	l, reg := newTestLauncher(tgt)
+
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "crie um arquivo", ""); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	out := reg.Output(sid)
+	if len(out) == 0 {
+		t.Fatalf("Output vazio, quero pelo menos o eco do prompt")
+	}
+	if out[0].Kind != event.KindUser || out[0].Text != "crie um arquivo" {
+		t.Errorf("Output[0] = %+v, quero {kind:user, text:\"crie um arquivo\"}", out[0])
+	}
+}
+
+// TestSendTextEchoesMessageAsUserOutputChunk cobre o eco no caminho VIVO do
+// SendText: o texto da usuária tem que ficar registrado como output kind
+// "user" antes de qualquer resposta nova do agente.
+func TestSendTextEchoesMessageAsUserOutputChunk(t *testing.T) {
+	captured := make(chan string, 1)
+	tgt := &scriptTarget{
+		name:     "macbook",
+		captured: captured,
+		run: func(stdout io.Writer, stdin *bufio.Reader, cap chan<- string) {
+			_, _ = stdin.ReadString('\n') // prompt inicial
+			_, _ = io.WriteString(stdout, initLine+"\n")
+			line, _ := stdin.ReadString('\n') // texto enviado via SendText
+			cap <- trimNL(line)
+			_, _ = io.WriteString(stdout, resultLine+"\n")
+		},
+	}
+	l, reg := newTestLauncher(tgt)
+
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "primeira tarefa", ""); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	waitFor(t, func() bool {
+		_, ok := reg.Get(sid)
+		return ok
+	})
+
+	if err := l.SendText(sid, "agora faça isso"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	<-captured // espera o processo receber a mensagem, garantindo que o eco já foi gravado
+
+	out := reg.Output(sid)
+	found := false
+	for _, c := range out {
+		if c.Kind == event.KindUser && c.Text == "agora faça isso" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Output = %+v, quero um chunk {kind:user, text:\"agora faça isso\"}", out)
+	}
+}
+
+// TestResumeEchoesPromptAsUserOutputChunk cobre o eco no caminho de --resume
+// (SendText numa sessão já encerrada): o prompt do resume também tem que
+// aparecer no output como kind "user".
+func TestResumeEchoesPromptAsUserOutputChunk(t *testing.T) {
+	callCount := 0
+	tgt := &scriptTarget{name: "macbook", captured: make(chan string, 4)}
+	tgt.run = func(stdout io.Writer, stdin *bufio.Reader, captured chan<- string) {
+		callCount++
+		_, _ = stdin.ReadString('\n') // prompt inicial (Launch) ou do resume
+		if callCount == 1 {
+			_, _ = io.WriteString(stdout, initLine+"\n")
+		}
+		_, _ = io.WriteString(stdout, resultLine+"\n")
+	}
+	l, reg := newTestLauncher(tgt)
+
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "primeiro prompt", ""); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	waitFor(t, func() bool {
+		s, _ := reg.Get(sid)
+		return s.State == session.StateDone
+	})
+
+	if err := l.SendText(sid, "retome por favor"); err != nil {
+		t.Fatalf("SendText (resume): %v", err)
+	}
+	waitFor(t, func() bool {
+		s, _ := reg.Get(sid)
+		return s.State == session.StateDone
+	})
+
+	out := reg.Output(sid)
+	found := false
+	for _, c := range out {
+		if c.Kind == event.KindUser && c.Text == "retome por favor" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Output = %+v, quero um chunk {kind:user, text:\"retome por favor\"} do resume", out)
 	}
 }

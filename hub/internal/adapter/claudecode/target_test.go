@@ -20,7 +20,7 @@ import (
 // io.Pipe não exercitam. Roda sob -race.
 func TestHandleCloseConcurrentIsSafe(t *testing.T) {
 	tgt := newLocalCommand("m", "cat", func(string) []string { return nil })
-	h, err := tgt.Start(context.Background(), "")
+	h, err := tgt.Start(context.Background(), "", "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestLocalTargetDoesNotLeakHubEnv(t *testing.T) {
 	t.Setenv("CUTUQUE_TEST_SENTINELA", "vazou")
 
 	tgt := newLocalCommand("m", "env", func(string) []string { return nil })
-	h, err := tgt.Start(context.Background(), "")
+	h, err := tgt.Start(context.Background(), "", "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -63,6 +63,53 @@ func TestLocalTargetDoesNotLeakHubEnv(t *testing.T) {
 	}
 	if !strings.Contains(env, "HOME=") {
 		t.Errorf("HOME deveria estar na allowlist do filho (claude precisa dela):\n%s", env)
+	}
+}
+
+// TestLocalTargetSetsCmdDirFromCwd cobre o campo cwd novo: quando != "", o
+// processo do agente roda com esse diretório de trabalho. Resolve symlinks dos
+// dois lados (no macOS /tmp é um symlink pra /private/tmp, e o `pwd` real
+// devolve o caminho físico) para comparar o diretório de fato, não a grafia.
+func TestLocalTargetSetsCmdDirFromCwd(t *testing.T) {
+	dir := t.TempDir()
+	wantDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+
+	tgt := newLocalCommand("m", "pwd", func(string) []string { return nil })
+	h, startErr := tgt.Start(context.Background(), "", dir)
+	if startErr != nil {
+		t.Fatalf("Start: %v", startErr)
+	}
+	out, err := io.ReadAll(h.Stdout)
+	if err != nil {
+		t.Fatalf("lendo stdout: %v", err)
+	}
+	_ = h.Close()
+
+	got := strings.TrimSpace(string(out))
+	if got != wantDir {
+		t.Errorf("pwd = %q, quero %q (cwd propagado)", got, wantDir)
+	}
+}
+
+// TestLocalTargetEmptyCwdUsesDefault garante que cwd vazio não mexe em
+// cmd.Dir (mantém o diretório default do processo do hub — hoje é "home").
+func TestLocalTargetEmptyCwdUsesDefault(t *testing.T) {
+	tgt := newLocalCommand("m", "pwd", func(string) []string { return nil })
+	h, err := tgt.Start(context.Background(), "", "")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	out, err := io.ReadAll(h.Stdout)
+	if err != nil {
+		t.Fatalf("lendo stdout: %v", err)
+	}
+	_ = h.Close()
+
+	if strings.TrimSpace(string(out)) == "" {
+		t.Errorf("pwd não produziu saída")
 	}
 }
 
@@ -106,7 +153,7 @@ func TestSetRemoteClaudeCmdOverridesDefault(t *testing.T) {
 // reais passados ao `ssh`: BatchMode, keepalive, -T (sem PTY), destino, e o
 // comando remoto num login shell.
 func TestSSHClaudeArgsHaveKeepaliveBatchModeNoPTY(t *testing.T) {
-	args := sshClaudeArgs("macmini", defaultRemoteClaudeCmd, "")
+	args := sshClaudeArgs("macmini", defaultRemoteClaudeCmd, "", "")
 
 	wantPrefix := []string{
 		"-o", "BatchMode=yes",
@@ -152,13 +199,25 @@ func TestSSHClaudeArgsHaveKeepaliveBatchModeNoPTY(t *testing.T) {
 // TestRemoteClaudeCommandUsesConfiguredPath garante que trocar o comando/caminho
 // do claude remoto (SetRemoteClaudeCmd) se reflete no comando enviado por ssh.
 func TestRemoteClaudeCommandUsesConfiguredPath(t *testing.T) {
-	got := remoteClaudeCommand("/Users/example/.local/bin/claude", "")
+	got := remoteClaudeCommand("/Users/example/.local/bin/claude", "", "")
 	if !strings.Contains(got, "/Users/example/.local/bin/claude") {
 		t.Errorf("remoteClaudeCommand = %q, quero usar o caminho configurado", got)
 	}
 	want := "bash -lc " + singleQuote("/Users/example/.local/bin/claude -p --input-format stream-json --output-format stream-json --permission-mode default --permission-prompt-tool stdio --verbose")
 	if got != want {
 		t.Errorf("remoteClaudeCommand =\n  %s\nquero:\n  %s", got, want)
+	}
+}
+
+// TestRemoteClaudeCommandWithCwdPrefixesCd garante que cwd != "" vira um
+// `cd <cwd> &&` (single-quoted) antes do `bash -lc` — o cd é builtin do shell
+// não-interativo do sshd, e o `bash -lc` seguinte herda o cwd do pai.
+func TestRemoteClaudeCommandWithCwdPrefixesCd(t *testing.T) {
+	got := remoteClaudeCommand(defaultRemoteClaudeCmd, "", "/tmp/algum diretório")
+	want := "cd " + singleQuote("/tmp/algum diretório") + " && bash -lc " +
+		singleQuote(defaultRemoteClaudeCmd+" -p --input-format stream-json --output-format stream-json --permission-mode default --permission-prompt-tool stdio --verbose")
+	if got != want {
+		t.Errorf("remoteClaudeCommand com cwd =\n  %s\nquero:\n  %s", got, want)
 	}
 }
 
@@ -170,13 +229,13 @@ func TestRemoteClaudeCommandUsesConfiguredPath(t *testing.T) {
 func TestSSHTargetRunnerProcessesFixtureViaFakeProgram(t *testing.T) {
 	path := filepath.Join("testdata", "fixture-simple.jsonl")
 	tgt := newSSHCommand("macmini", "dest-irrelevante-para-o-fake", defaultRemoteClaudeCmd, "cat",
-		func(dest, remoteCmd, _ string) []string { return []string{path} })
+		func(dest, remoteCmd, _, _ string) []string { return []string{path} })
 
 	if tgt.Name() != "macmini" {
 		t.Errorf("Name() = %q, quero \"macmini\"", tgt.Name())
 	}
 
-	h, err := tgt.Start(context.Background(), "")
+	h, err := tgt.Start(context.Background(), "", "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -208,9 +267,9 @@ func TestSSHTargetDoesNotLeakHubEnv(t *testing.T) {
 	t.Setenv("CUTUQUE_TEST_SENTINELA", "vazou")
 
 	tgt := newSSHCommand("macmini", "dest-irrelevante-para-o-fake", defaultRemoteClaudeCmd, "env",
-		func(dest, remoteCmd, _ string) []string { return nil })
+		func(dest, remoteCmd, _, _ string) []string { return nil })
 
-	h, err := tgt.Start(context.Background(), "")
+	h, err := tgt.Start(context.Background(), "", "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}

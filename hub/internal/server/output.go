@@ -9,7 +9,7 @@ import (
 
 // outputResponse é o corpo de GET /sessions/{id}/output.
 type outputResponse struct {
-	Chunks []string `json:"chunks"`
+	Chunks []registry.OutputChunk `json:"chunks"`
 }
 
 // SessionOutputHandler responde os últimos pedaços de output de uma sessão.
@@ -26,7 +26,7 @@ func SessionOutputHandler(reg *registry.Registry) http.HandlerFunc {
 
 		chunks := reg.Output(id)
 		if chunks == nil {
-			chunks = []string{} // serializa como [] e não null
+			chunks = []registry.OutputChunk{} // serializa como [] e não null
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

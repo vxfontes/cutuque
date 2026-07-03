@@ -45,7 +45,7 @@ func (e *Engine) Apply(ev event.Event) {
 		// Mantém o estado (a sessão segue running); só guarda o output para o
 		// stream ao vivo. Ignora output de sessão desconhecida.
 		if _, ok := e.reg.Get(ev.SessionID); ok {
-			e.reg.AppendOutput(ev.SessionID, ev.Data)
+			e.reg.AppendOutput(ev.SessionID, ev.Kind, ev.Data)
 		}
 		return
 	}

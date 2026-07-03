@@ -25,10 +25,10 @@ type fakeLauncher struct {
 	machines  []string
 	removeErr error
 
-	gotMachine, gotAgent, gotPrompt string
-	gotApproveID, gotDenyID         string
-	gotInputID, gotInputText        string
-	gotRemoveID                     string
+	gotMachine, gotAgent, gotPrompt, gotCwd string
+	gotApproveID, gotDenyID                 string
+	gotInputID, gotInputText                string
+	gotRemoveID                             string
 }
 
 func (f *fakeLauncher) Machines() []string { return f.machines }
@@ -37,8 +37,8 @@ func (f *fakeLauncher) Remove(id string) error {
 	return f.removeErr
 }
 
-func (f *fakeLauncher) Launch(_ context.Context, machine, agent, prompt string) (session.Session, error) {
-	f.gotMachine, f.gotAgent, f.gotPrompt = machine, agent, prompt
+func (f *fakeLauncher) Launch(_ context.Context, machine, agent, prompt, cwd string) (session.Session, error) {
+	f.gotMachine, f.gotAgent, f.gotPrompt, f.gotCwd = machine, agent, prompt, cwd
 	return f.launchSession, f.launchErr
 }
 func (f *fakeLauncher) Approve(id string) error { f.gotApproveID = id; return f.approveErr }
@@ -77,6 +77,36 @@ func TestLaunchCreated(t *testing.T) {
 	}
 	if resp.Session.ID != "new-1" {
 		t.Errorf("session.id = %q, quero \"new-1\"", resp.Session.ID)
+	}
+}
+
+// TestLaunchPropagatesCwd cobre o campo opcional "cwd" de POST /sessions: o
+// Launcher recebe exatamente o texto enviado.
+func TestLaunchPropagatesCwd(t *testing.T) {
+	f := &fakeLauncher{launchSession: session.Session{ID: "new-1"}}
+
+	rec := do(t, f, http.MethodPost, "/sessions", `{"machine":"macbook","agent":"claude-code","prompt":"faça x","cwd":"/tmp/projeto"}`)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, quero 201", rec.Code)
+	}
+	if f.gotCwd != "/tmp/projeto" {
+		t.Errorf("Launch recebeu cwd=%q, quero \"/tmp/projeto\"", f.gotCwd)
+	}
+}
+
+// TestLaunchOmittedCwdIsEmpty cobre o caso comum: sem "cwd" no corpo, o
+// Launcher recebe string vazia (home).
+func TestLaunchOmittedCwdIsEmpty(t *testing.T) {
+	f := &fakeLauncher{launchSession: session.Session{ID: "new-1"}}
+
+	rec := do(t, f, http.MethodPost, "/sessions", `{"machine":"macbook","agent":"claude-code","prompt":"faça x"}`)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, quero 201", rec.Code)
+	}
+	if f.gotCwd != "" {
+		t.Errorf("Launch recebeu cwd=%q, quero vazio (omitido)", f.gotCwd)
 	}
 }
 

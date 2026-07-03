@@ -46,6 +46,9 @@ func TestParseAssistantText(t *testing.T) {
 	if len(evs) != 1 || evs[0].Type != event.OutputChunk || evs[0].Data != "olá mundo" {
 		t.Fatalf("evs = %+v, quero um output_chunk \"olá mundo\"", evs)
 	}
+	if evs[0].Kind != event.KindAssistant {
+		t.Errorf("Kind = %q, quero %q", evs[0].Kind, event.KindAssistant)
+	}
 }
 
 func TestParseAssistantToolUse(t *testing.T) {
@@ -53,8 +56,11 @@ func TestParseAssistantToolUse(t *testing.T) {
 	if len(evs) != 1 || evs[0].Type != event.OutputChunk {
 		t.Fatalf("evs = %+v, quero um output_chunk", evs)
 	}
-	if !strings.HasPrefix(evs[0].Data, "→ Bash:") || !strings.Contains(evs[0].Data, "echo oi") {
-		t.Errorf("Data = %q, quero prefixo \"→ Bash:\" contendo o input", evs[0].Data)
+	if evs[0].Kind != event.KindTool {
+		t.Errorf("Kind = %q, quero %q", evs[0].Kind, event.KindTool)
+	}
+	if evs[0].Data != "Bash: echo oi" {
+		t.Errorf("Data = %q, quero \"Bash: echo oi\" (sem prefixo →)", evs[0].Data)
 	}
 }
 
@@ -71,8 +77,11 @@ func TestParseAssistantMultipleBlocks(t *testing.T) {
 	if len(evs) != 2 {
 		t.Fatalf("len = %d, quero 2", len(evs))
 	}
-	if evs[0].Data != "vou rodar" || !strings.HasPrefix(evs[1].Data, "→ Read:") {
-		t.Errorf("evs = %+v inesperado", evs)
+	if evs[0].Kind != event.KindAssistant || evs[0].Data != "vou rodar" {
+		t.Errorf("evs[0] = %+v inesperado", evs[0])
+	}
+	if evs[1].Kind != event.KindTool || !strings.HasPrefix(evs[1].Data, "Read:") {
+		t.Errorf("evs[1] = %+v inesperado", evs[1])
 	}
 }
 
@@ -81,21 +90,22 @@ func TestParseUserToolResult(t *testing.T) {
 	if len(evs) != 1 || evs[0].Type != event.OutputChunk {
 		t.Fatalf("evs = %+v, quero um output_chunk", evs)
 	}
-	if !strings.HasPrefix(evs[0].Data, "←") || !strings.Contains(evs[0].Data, "resultado do comando") {
-		t.Errorf("Data = %q, quero prefixo \"←\" com o resultado", evs[0].Data)
+	if evs[0].Kind != event.KindToolResult {
+		t.Errorf("Kind = %q, quero %q", evs[0].Kind, event.KindToolResult)
+	}
+	if evs[0].Data != "resultado do comando" {
+		t.Errorf("Data = %q, quero o resultado sem prefixo ←", evs[0].Data)
 	}
 }
 
-func TestParseUserToolResultTruncatedTo120(t *testing.T) {
+func TestParseUserToolResultTruncatedTo200(t *testing.T) {
 	long := strings.Repeat("a", 300)
 	evs, _ := ParseLine([]byte(`{"type":"user","message":{"content":[{"type":"tool_result","content":"` + long + `"}]}}`))
 	if len(evs) != 1 {
 		t.Fatalf("len = %d, quero 1", len(evs))
 	}
-	// "← " + 120 chars
-	body := strings.TrimPrefix(evs[0].Data, "← ")
-	if len(body) != 120 {
-		t.Errorf("corpo com %d chars, quero 120 (truncado)", len(body))
+	if len(evs[0].Data) != 200 {
+		t.Errorf("corpo com %d chars, quero 200 (truncado)", len(evs[0].Data))
 	}
 }
 
@@ -237,11 +247,14 @@ func TestParseFixtureToolUse(t *testing.T) {
 	if evs[0].SessionID != "815b221e-73ff-4703-a264-2ac11bcb46c4" {
 		t.Errorf("session_id = %q inesperado", evs[0].SessionID)
 	}
-	if !strings.HasPrefix(evs[1].Data, "→ Bash:") {
-		t.Errorf("evs[1].Data = %q, quero tool_use resumido", evs[1].Data)
+	if evs[1].Kind != event.KindTool || !strings.HasPrefix(evs[1].Data, "Bash:") {
+		t.Errorf("evs[1] = %+v, quero kind \"tool\" com \"Bash:\"", evs[1])
 	}
-	if !strings.HasPrefix(evs[2].Data, "←") {
-		t.Errorf("evs[2].Data = %q, quero tool_result resumido", evs[2].Data)
+	if evs[2].Kind != event.KindToolResult {
+		t.Errorf("evs[2] = %+v, quero kind \"tool_result\"", evs[2])
+	}
+	if evs[3].Kind != event.KindAssistant {
+		t.Errorf("evs[3] = %+v, quero kind \"assistant\"", evs[3])
 	}
 }
 

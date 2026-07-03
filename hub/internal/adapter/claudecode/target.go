@@ -130,9 +130,10 @@ func (h *Handle) SendUserMessage(text string) error {
 // resumeID != "" → continua a conversa existente (claude --resume <id>),
 // preservando o contexto do turno anterior (mesmo session_id — verificado na
 // CLI 2.1.199). Vazio → sessão nova.
+// cwd é a pasta onde o `claude` roda; vazio → home (comportamento atual).
 type Target interface {
 	Name() string
-	Start(ctx context.Context, resumeID string) (*Handle, error)
+	Start(ctx context.Context, resumeID, cwd string) (*Handle, error)
 }
 
 // LocalTarget roda o Claude Code como um processo local, em modo stream-json
@@ -181,9 +182,13 @@ func (t *LocalTarget) Name() string { return t.name }
 
 // Start executa o comando e liga stdin/stdout ao Handle. Fechar o Handle
 // encerra o processo (via cancelamento do ctx + close do stdin) e libera os
-// recursos. resumeID != "" continua a conversa existente.
-func (t *LocalTarget) Start(ctx context.Context, resumeID string) (*Handle, error) {
+// recursos. resumeID != "" continua a conversa existente. cwd != "" muda o
+// diretório de trabalho do processo (vazio → home, herdado do hub).
+func (t *LocalTarget) Start(ctx context.Context, resumeID, cwd string) (*Handle, error) {
 	cmd := exec.CommandContext(ctx, t.prog, t.buildArgs(resumeID)...)
+	if cwd != "" {
+		cmd.Dir = cwd
+	}
 	// Ambiente mínimo explícito: o filho NÃO herda o ambiente do hub, que
 	// carrega CUTUQUE_TOKEN (e, no futuro, credenciais APNs). Sem isso, um
 	// `printenv` — que roda sem passar pelo gate de aprovação (docs/10,
@@ -244,7 +249,7 @@ type SSHTarget struct {
 	dest      string // destino ssh: alias do ~/.ssh/config OU user@host
 	remoteCmd string // caminho/comando do claude remoto (default: "claude")
 	prog      string // programa ssh local (parametrizável em teste)
-	buildArgs func(dest, remoteCmd, resumeID string) []string
+	buildArgs func(dest, remoteCmd, resumeID, cwd string) []string
 }
 
 // NewSSHTarget cria um SSHTarget que conecta a `dest` (alias do ~/.ssh/config
@@ -257,7 +262,7 @@ func NewSSHTarget(name, dest string) *SSHTarget {
 // newSSHCommand cria um SSHTarget parametrizável (usado em teste para trocar o
 // binário `ssh` local por um fake — ex. `cat`/`env` sobre uma fixture — e
 // inspecionar/injetar o stream, no mesmo espírito de newLocalCommand).
-func newSSHCommand(name, dest, remoteCmd, prog string, buildArgs func(dest, remoteCmd, resumeID string) []string) *SSHTarget {
+func newSSHCommand(name, dest, remoteCmd, prog string, buildArgs func(dest, remoteCmd, resumeID, cwd string) []string) *SSHTarget {
 	return &SSHTarget{name: name, dest: dest, remoteCmd: remoteCmd, prog: prog, buildArgs: buildArgs}
 }
 
@@ -275,9 +280,10 @@ func (t *SSHTarget) Name() string { return t.name }
 
 // Start conecta via ssh e liga stdin/stdout (pipes limpos, sem PTY) ao Handle.
 // Fechar o Handle fecha o stdin do ssh local (EOF chega ao `claude` remoto) e
-// espera o processo ssh terminar — mesmo shape do LocalTarget.Start.
-func (t *SSHTarget) Start(ctx context.Context, resumeID string) (*Handle, error) {
-	cmd := exec.CommandContext(ctx, t.prog, t.buildArgs(t.dest, t.remoteCmd, resumeID)...)
+// espera o processo ssh terminar — mesmo shape do LocalTarget.Start. cwd != ""
+// vira um `cd <cwd> &&` antes do comando remoto (ver remoteClaudeCommand).
+func (t *SSHTarget) Start(ctx context.Context, resumeID, cwd string) (*Handle, error) {
+	cmd := exec.CommandContext(ctx, t.prog, t.buildArgs(t.dest, t.remoteCmd, resumeID, cwd)...)
 	// Mesma allowlist do LocalTarget (SEC-006): o processo ssh NÃO herda o
 	// ambiente do hub além do necessário. HOME é essencial para o ssh achar
 	// ~/.ssh/config, as chaves privadas e o known_hosts.
@@ -311,7 +317,7 @@ func (t *SSHTarget) Start(ctx context.Context, resumeID string) (*Handle, error)
 //     protocolo stream-json — um PTY reescreveria/misturaria os bytes.
 //   - o comando remoto roda o claude dentro de um login shell (ver comentário
 //     do SSHTarget).
-func sshClaudeArgs(dest, remoteCmd, resumeID string) []string {
+func sshClaudeArgs(dest, remoteCmd, resumeID, cwd string) []string {
 	return []string{
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=10", // não pendura no connect de host lento/inalcançável (review F5, #1)
@@ -321,15 +327,17 @@ func sshClaudeArgs(dest, remoteCmd, resumeID string) []string {
 		"-T",
 		"--", // separador: um dest começando com "-" nunca é reinterpretado como opção (review F5, injeção)
 		dest,
-		remoteClaudeCommand(remoteCmd, resumeID),
+		remoteClaudeCommand(remoteCmd, resumeID, cwd),
 	}
 }
 
 // remoteClaudeCommand monta a linha de comando remota como UMA única string
 // (para sobreviver à concatenação por espaço que o próprio ssh faz dos args
 // finais antes de mandar ao shell de login remoto): `bash -lc '<claude com as
-// flags verificadas>'`.
-func remoteClaudeCommand(claudeCmd, resumeID string) string {
+// flags verificadas>'`. cwd != "" prefixa com `cd <cwd> &&` (single-quoted);
+// como `cd` é builtin do shell não-interativo que o sshd invoca, o diretório
+// já está setado quando o `bash -lc` seguinte é executado (herda o cwd do pai).
+func remoteClaudeCommand(claudeCmd, resumeID, cwd string) string {
 	claudeArgs := []string{claudeCmd, "-p"}
 	if resumeID != "" {
 		claudeArgs = append(claudeArgs, "--resume", resumeID)
@@ -341,7 +349,11 @@ func remoteClaudeCommand(claudeCmd, resumeID string) string {
 		"--permission-prompt-tool", "stdio",
 		"--verbose",
 	)
-	return "bash -lc " + singleQuote(strings.Join(claudeArgs, " "))
+	cmd := "bash -lc " + singleQuote(strings.Join(claudeArgs, " "))
+	if cwd != "" {
+		cmd = "cd " + singleQuote(cwd) + " && " + cmd
+	}
+	return cmd
 }
 
 // singleQuote envolve s em aspas simples (escapando aspas simples internas) —
