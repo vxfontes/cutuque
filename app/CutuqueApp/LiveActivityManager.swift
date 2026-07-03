@@ -3,56 +3,44 @@ import Foundation
 import ActivityKit
 #endif
 
-/// Mantém as Live Activities (tela de bloqueio + Dynamic Island) em sincronia com
-/// as sessões que estão RODANDO: inicia uma quando uma sessão entra em running,
-/// atualiza o estado, e encerra (mostrando "concluiu") quando ela sai de running.
+/// Mantém UMA Live Activity agregada (Dynamic Island / tela de bloqueio) com o
+/// resumo das sessões ao vivo no Mac: total ao vivo e quantas rodando. Inicia
+/// quando há ao menos uma ao vivo, atualiza os números, e encerra quando zera.
 ///
-/// Dirigido pelo app enquanto ele está vivo (o WS alimenta `sessions`). Atualização
-/// com o app totalmente fechado exigiria push para a activity (dívida futura); a
-/// activity persiste na tela de bloqueio com o último estado até lá.
+/// Dirigido pelo app enquanto vivo (o poll de /tmux alimenta os números).
+/// Atualização com o app fechado exigiria push-to-activity (dívida futura).
 @available(iOS 16.1, *)
 @MainActor
 final class LiveActivityManager {
     static let shared = LiveActivityManager()
-    private var activities: [String: Activity<CutuqueActivityAttributes>] = [:]
-    /// Teto de activities simultâneas (o sistema também limita).
-    private let maxActivities = 3
+    private var activity: Activity<CutuqueActivityAttributes>?
     private init() {}
 
-    func sync(sessions: [Session]) {
+    /// live = sessões ao vivo (panes de tmux); active = quantas rodando agora.
+    func update(live: Int, active: Int) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
-        let running = sessions.filter { $0.state == .running }
-        let runningIDs = Set(running.map(\.id))
-
-        // Encerra as activities cujas sessões não estão mais rodando (mostra o
-        // estado final por alguns segundos antes de sumir).
-        for (id, act) in activities where !runningIDs.contains(id) {
-            let s = sessions.first { $0.id == id }
-            let finalState = s?.state.wireValue ?? "done"
-            let title = s?.title ?? act.attributes.sessionID
-            let content = CutuqueActivityAttributes.ContentState(state: finalState, title: title)
-            Task {
-                await act.end(ActivityContent(state: content, staleDate: nil),
-                              dismissalPolicy: .after(Date().addingTimeInterval(5)))
-            }
-            activities.removeValue(forKey: id)
+        // Reassume uma activity já existente (ex.: app reaberto) para não duplicar.
+        if activity == nil {
+            activity = Activity<CutuqueActivityAttributes>.activities.first
         }
+        let content = CutuqueActivityAttributes.ContentState(live: live, active: active)
 
-        // Inicia/atualiza para as sessões rodando (até o teto).
-        for s in running.prefix(maxActivities) {
-            let content = CutuqueActivityAttributes.ContentState(state: s.state.wireValue, title: s.title)
-            if let act = activities[s.id] {
-                Task { await act.update(ActivityContent(state: content, staleDate: nil)) }
-            } else {
-                do {
-                    let attr = CutuqueActivityAttributes(sessionID: s.id, machine: s.machine, startedAt: Date())
-                    let act = try Activity.request(
-                        attributes: attr,
-                        content: ActivityContent(state: content, staleDate: nil))
-                    activities[s.id] = act
-                } catch {
-                    print("[LiveActivity] falha ao iniciar: \(error.localizedDescription)")
-                }
+        if live <= 0 {
+            if let a = activity {
+                Task { await a.end(ActivityContent(state: content, staleDate: nil), dismissalPolicy: .immediate) }
+                activity = nil
+            }
+            return
+        }
+        if let a = activity {
+            Task { await a.update(ActivityContent(state: content, staleDate: nil)) }
+        } else {
+            do {
+                activity = try Activity.request(
+                    attributes: CutuqueActivityAttributes(),
+                    content: ActivityContent(state: content, staleDate: nil))
+            } catch {
+                print("[LiveActivity] falha ao iniciar: \(error.localizedDescription)")
             }
         }
     }

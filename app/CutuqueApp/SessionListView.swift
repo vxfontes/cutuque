@@ -20,16 +20,20 @@ struct ServerKill: Identifiable, Equatable {
 
 @MainActor
 final class SessionListViewModel: ObservableObject {
-    @Published var sessions: [Session] = [] {
-        didSet {
-            // Mantém as Live Activities (Dynamic Island / tela de bloqueio) em
-            // sincronia com as sessões rodando.
-            if #available(iOS 16.1, *) { LiveActivityManager.shared.sync(sessions: sessions) }
-        }
-    }
+    @Published var sessions: [Session] = []
     @Published var hubStatus: HealthStatus = .unknown
     /// Sessões vivas no Mac (rodando em tempo real), atualizadas por polling.
-    @Published var liveSessions: [LiveEntry] = []
+    @Published var liveSessions: [LiveEntry] = [] {
+        didSet {
+            // Live Activity agregada: total ao vivo + quantas rodando agora
+            // (panes de tmux nunca são subagentes, então já ficam de fora).
+            if #available(iOS 16.1, *) {
+                let live = liveSessions.count
+                let active = liveSessions.filter { $0.session.state == "running" }.count
+                LiveActivityManager.shared.update(live: live, active: active)
+            }
+        }
+    }
     /// Falso até a 1ª carga (REST) terminar — evita a home piscar "vazio" e
     /// então "brotar" sessões.
     @Published var didInitialLoad = false
@@ -175,6 +179,15 @@ final class SessionListViewModel: ObservableObject {
         Task { for id in ids { try? await api.deleteSession(id: id) } }
     }
 
+    /// Apaga (dismiss) todos os subagentes (externos sem pane) de uma vez.
+    func clearSubagents() {
+        let ids = sessions.filter { $0.isExternal && $0.tmuxTarget == nil }.map(\.id)
+        withAnimation(.snappy) {
+            sessions.removeAll { ids.contains($0.id) }
+        }
+        Task { for id in ids { try? await api.deleteSession(id: id) } }
+    }
+
     // MARK: Helpers
 
     private func upsert(_ session: Session) {
@@ -236,6 +249,7 @@ struct SessionListView: View {
     // Server tmux a encerrar (confirmação de kill-server) e estado das concluídas.
     @State private var serverToKill: ServerKill?
     @State private var confirmingClear = false
+    @State private var confirmingClearSubagents = false
     @State private var concludedExpanded = false
     @State private var subagentsExpanded = false
     // Tema de cor escolhido nos ajustes — o "ao vivo" (rodando) segue ele.
@@ -356,20 +370,23 @@ struct SessionListView: View {
         }
     }
 
-    // "Subagentes": sessões externas sem pane (subagentes do maestri etc.),
-    // arquivadas e recolhidas. Toque abre o recap da conversa (sem interação ao
-    // vivo). Não cutucam.
+    // "Subagentes": sessões externas sem pane, arquivadas e recolhidas. Toque
+    // abre o recap da conversa (sem interação ao vivo). Não cutucam. "Limpar
+    // todos" apaga de uma vez (dismiss).
     @ViewBuilder private var subagentsSection: some View {
         if !subagents.isEmpty {
             Section {
                 DisclosureGroup(isExpanded: $subagentsExpanded) {
                     ForEach(subagents) { sessionLink($0) }
+                    Button(role: .destructive) {
+                        confirmingClearSubagents = true
+                    } label: {
+                        Label("Limpar todos", systemImage: "trash")
+                    }
                 } label: {
                     Label("Subagentes (\(subagents.count))", systemImage: "square.stack.3d.up")
                         .textCase(nil)
                 }
-            } footer: {
-                Text("Sessões sem terminal ao vivo (ex.: subagentes do maestri). Toque para ver a conversa.")
             }
         }
     }
@@ -486,6 +503,18 @@ struct SessionListView: View {
                 Button("Cancelar", role: .cancel) {}
             } message: {
                 Text("Apaga da lista todas as sessões concluídas (não afeta o transcript no Mac).")
+            }
+            .confirmationDialog(
+                "Limpar os subagentes?",
+                isPresented: $confirmingClearSubagents,
+                titleVisibility: .visible
+            ) {
+                Button("Limpar \(subagents.count)", role: .destructive) {
+                    model.clearSubagents()
+                }
+                Button("Cancelar", role: .cancel) {}
+            } message: {
+                Text("Apaga da lista todos os subagentes (não afeta o transcript no Mac).")
             }
             .alert(
                 "Renomear sessão",

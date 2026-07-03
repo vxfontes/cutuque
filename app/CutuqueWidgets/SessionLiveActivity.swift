@@ -2,101 +2,92 @@ import ActivityKit
 import SwiftUI
 import WidgetKit
 
-// MARK: - Cor/rótulo por estado (espelha SessionState do app, sem depender dele)
+// Glyph "cutuque" (ondas do ícone do app) e cor de marca (a extension não lê o
+// tema do app — processo separado — então usa o azul de marca fixo).
+private let cutuqueGlyph = "dot.radiowaves.left.and.right"
+private let brand = Color.blue
 
-private func stateColor(_ state: String) -> Color {
-    switch state {
-    case "running":   return .blue
-    case "needs_you": return .orange
-    case "done":      return .green
-    case "error":     return .red
-    default:          return .gray
-    }
-}
-
-private func stateLabel(_ state: String) -> String {
-    switch state {
-    case "running":   return "rodando"
-    case "needs_you": return "precisa de você"
-    case "done":      return "concluiu"
-    case "error":     return "falhou"
-    default:          return "ocioso"
-    }
-}
-
-private func stateSymbol(_ state: String) -> String {
-    switch state {
-    case "running":   return "circle.dotted"
-    case "needs_you": return "exclamationmark.triangle.fill"
-    case "done":      return "checkmark.circle.fill"
-    case "error":     return "xmark.octagon.fill"
-    default:          return "circle"
-    }
-}
-
-// MARK: - Live Activity
-
+/// Live Activity agregada: um resumo de quantas sessões estão ao vivo/rodando.
 @available(iOS 16.1, *)
 struct SessionLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: CutuqueActivityAttributes.self) { context in
-            // Tela de bloqueio / banner.
-            LockScreenView(context: context)
-                .activityBackgroundTint(Color.black.opacity(0.35))
+            LockScreenView(state: context.state)
+                .activityBackgroundTint(Color.black.opacity(0.4))
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
-            let s = context.state.state
+            let live = context.state.live
+            let active = context.state.active
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Image(systemName: stateSymbol(s)).foregroundStyle(stateColor(s))
-                        .font(.title3)
+                    Label {
+                        Text("Cutuque").font(.caption).fontWeight(.semibold)
+                    } icon: {
+                        Image(systemName: cutuqueGlyph).foregroundStyle(brand)
+                    }
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    Text(timerInterval: context.attributes.startedAt...Date.distantFuture, countsDown: false)
-                        .font(.caption).monospacedDigit()
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: 64)
-                }
-                DynamicIslandExpandedRegion(.center) {
-                    VStack(spacing: 2) {
-                        Text(context.state.title).font(.callout).fontWeight(.semibold).lineLimit(1)
-                        Text("\(stateLabel(s)) · \(context.attributes.machine)")
-                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    HStack(spacing: 10) {
+                        countPill(value: live, label: "ao vivo", color: brand)
+                        countPill(value: active, label: "rodando", color: active > 0 ? .green : .secondary)
                     }
                 }
             } compactLeading: {
-                Image(systemName: stateSymbol(s)).foregroundStyle(stateColor(s))
+                // Ícone do Cutuque de um lado…
+                Image(systemName: cutuqueGlyph).foregroundStyle(brand)
             } compactTrailing: {
-                Text(timerInterval: context.attributes.startedAt...Date.distantFuture, countsDown: false)
-                    .font(.caption2).monospacedDigit().frame(maxWidth: 44)
+                // …e do outro, quantas ao vivo (ou o nº de rodando quando houver).
+                Text("\(live)").font(.caption2).fontWeight(.semibold).monospacedDigit()
             } minimal: {
-                Image(systemName: stateSymbol(s)).foregroundStyle(stateColor(s))
+                // Sem nada rodando → só o ícone; senão, o número ao vivo.
+                if live > 0 {
+                    Text("\(live)").font(.caption2).fontWeight(.bold).monospacedDigit()
+                } else {
+                    Image(systemName: cutuqueGlyph).foregroundStyle(brand)
+                }
             }
-            .widgetURL(URL(string: "cutuque://session/\(context.attributes.sessionID)"))
+        }
+    }
+
+    private func countPill(value: Int, label: String, color: Color) -> some View {
+        VStack(spacing: 0) {
+            Text("\(value)").font(.headline).monospacedDigit().foregroundStyle(color)
+            Text(label).font(.system(size: 9)).foregroundStyle(.secondary)
         }
     }
 }
 
 @available(iOS 16.1, *)
 private struct LockScreenView: View {
-    let context: ActivityViewContext<CutuqueActivityAttributes>
+    let state: CutuqueActivityAttributes.ContentState
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: stateSymbol(context.state.state))
-                .font(.title2)
-                .foregroundStyle(stateColor(context.state.state))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(context.state.title).font(.headline).lineLimit(1)
-                Text("\(stateLabel(context.state.state)) · \(context.attributes.machine)")
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        HStack(spacing: 14) {
+            Image(systemName: cutuqueGlyph)
+                .font(.title2).foregroundStyle(brand)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Cutuque").font(.headline)
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            Text(timerInterval: context.attributes.startedAt...Date.distantFuture, countsDown: false)
-                .font(.callout).monospacedDigit()
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: 70)
+            HStack(spacing: 16) {
+                bigCount(state.live, "ao vivo", brand)
+                bigCount(state.active, "rodando", state.active > 0 ? .green : .secondary)
+            }
         }
         .padding()
+    }
+
+    private var subtitle: String {
+        if state.active > 0 { return "\(state.active) rodando agora no seu Mac" }
+        if state.live > 0 { return "\(state.live) ao vivo, ociosas" }
+        return "nenhuma sessão ao vivo"
+    }
+
+    private func bigCount(_ value: Int, _ label: String, _ color: Color) -> some View {
+        VStack(spacing: 1) {
+            Text("\(value)").font(.title2).fontWeight(.bold).monospacedDigit().foregroundStyle(color)
+            Text(label).font(.system(size: 10)).foregroundStyle(.secondary)
+        }
     }
 }
