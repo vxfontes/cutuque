@@ -14,20 +14,23 @@ type RenudgeController interface {
 }
 
 // ForegroundController marca se o app está em foreground (para suprimir push).
+// `at` é um timestamp monotônico do cliente para ordenar updates concorrentes.
 // *notifier.Notifier o satisfaz.
 type ForegroundController interface {
-	SetForeground(active bool)
+	SetForeground(active bool, at int64)
 }
 
-// foregroundBody é o corpo de POST /app/foreground.
+// foregroundBody é o corpo de POST /app/foreground. `at` (ms monotônicos do
+// cliente) ordena updates que podem chegar fora de ordem (SEC-102).
 type foregroundBody struct {
-	Active bool `json:"active"`
+	Active bool  `json:"active"`
+	At     int64 `json:"at"`
 }
 
 // ForegroundHandler recebe o estado de foreground do app (heartbeat enquanto
 // aberto; false ao ir pro background). Enquanto ativo, o hub não dispara push.
 //
-//	POST {"active":true|false} → 200 {"ok":true}
+//	POST {"active":true|false,"at":<ms>} → 200 {"ok":true}
 func ForegroundHandler(fc ForegroundController) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
@@ -36,7 +39,7 @@ func ForegroundHandler(fc ForegroundController) http.HandlerFunc {
 			writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "bad_request"})
 			return
 		}
-		fc.SetForeground(b.Active)
+		fc.SetForeground(b.Active, b.At)
 		writeJSONResp(w, http.StatusOK, map[string]bool{"ok": true})
 	}
 }

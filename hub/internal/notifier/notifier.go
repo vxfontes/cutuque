@@ -51,11 +51,15 @@ type Notifier struct {
 
 	renudgeNanos atomic.Int64 // intervalo do re-cutucão (ns); ajustável em runtime
 
-	// foregroundUntil: unix nano até quando o app está em foreground. Enquanto
-	// válido, o push é suprimido (o app já recebe tudo ao vivo pelo WS — não faz
-	// sentido cutucar quem está com o app aberto). O app renova por heartbeat; o
-	// TTL evita supressão eterna se o app morrer sem avisar "background".
-	foregroundUntil atomic.Int64
+	// Estado de foreground do app (suprime push enquanto aberto). fgUntil é o
+	// unix-nano até quando suprimir; fgLastAt é o maior timestamp monotônico do
+	// cliente já aceito — updates que chegam FORA DE ORDEM (ex.: um heartbeat
+	// `true` em voo chegando depois do `false` de background) são descartados,
+	// para não reabrir a supressão com o app já em background (SEC-102). Um
+	// mutex dedicado garante check+store atômico do par.
+	fgMu     sync.Mutex
+	fgUntil  int64
+	fgLastAt int64
 
 	mu     sync.Mutex
 	closed bool                          // Close() em curso: não spawna novos nudges
@@ -87,21 +91,31 @@ func (n *Notifier) RenudgeInterval() time.Duration {
 // morrer sem mandar "background" (senão o push ficaria suprimido para sempre).
 const foregroundTTL = 150 * time.Second
 
-// SetForeground marca se o app está aberto/em foreground. Enquanto ativo (e
-// dentro do TTL), fanout suprime o push — o app já recebe tudo pelo WS.
-func (n *Notifier) SetForeground(active bool) {
+// SetForeground marca se o app está aberto/em foreground. `at` é um timestamp
+// monotônico do cliente (ms): updates com `at` menor que o último aceito são
+// ignorados (chegaram fora de ordem) — assim um `true` atrasado nunca reabre a
+// supressão depois de um `false` mais recente (SEC-102). Enquanto ativo e dentro
+// do TTL, fanout suprime o push (o app já recebe tudo pelo WS).
+func (n *Notifier) SetForeground(active bool, at int64) {
+	n.fgMu.Lock()
+	defer n.fgMu.Unlock()
+	if at < n.fgLastAt {
+		return // update fora de ordem: descarta
+	}
+	n.fgLastAt = at
 	if active {
-		n.foregroundUntil.Store(time.Now().Add(foregroundTTL).UnixNano())
+		n.fgUntil = time.Now().Add(foregroundTTL).UnixNano()
 	} else {
-		n.foregroundUntil.Store(0)
+		n.fgUntil = 0
 	}
 }
 
 // foregroundSuppressed diz se o push deve ser suprimido agora (app em foreground
 // e dentro do TTL).
 func (n *Notifier) foregroundSuppressed() bool {
-	until := n.foregroundUntil.Load()
-	return until > 0 && time.Now().UnixNano() < until
+	n.fgMu.Lock()
+	defer n.fgMu.Unlock()
+	return n.fgUntil > 0 && time.Now().UnixNano() < n.fgUntil
 }
 
 // New cria um Notifier. Se logger for nil, descarta logs (não é fatal).

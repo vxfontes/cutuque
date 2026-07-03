@@ -31,12 +31,19 @@ final class ForegroundReporter: ObservableObject {
         }
     }
 
+    /// Relógio monotônico do cliente em ms (systemUptime não anda pra trás com
+    /// ajuste de relógio; cresce entre launches até um reboot). Ordena os
+    /// updates de foreground no hub (SEC-102).
+    private func nowMs() -> Int64 {
+        Int64(ProcessInfo.processInfo.systemUptime * 1000)
+    }
+
     private func startHeartbeat() {
         guard task == nil else { return }
         task = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
-                await self.api.setForeground(true)
+                await self.api.setForeground(true, at: self.nowMs())
                 try? await Task.sleep(for: self.heartbeat)
             }
         }
@@ -45,7 +52,9 @@ final class ForegroundReporter: ObservableObject {
     private func stopHeartbeat() {
         task?.cancel()
         task = nil
-        // Avisa o hub na hora que saiu (não espera o TTL expirar).
-        Task { await api.setForeground(false) }
+        // Avisa o hub na hora que saiu (não espera o TTL expirar). `at` maior que
+        // o último heartbeat garante que este `false` vença um `true` atrasado.
+        let at = nowMs()
+        Task { await api.setForeground(false, at: at) }
     }
 }

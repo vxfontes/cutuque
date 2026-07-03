@@ -133,7 +133,7 @@ func TestNotifiesOnlyOnceForNeedsYou(t *testing.T) {
 // normalmente cutuca (done) NÃO dispara push.
 func TestForegroundSuppressesPush(t *testing.T) {
 	eng, _, _, fake, n := fixture(t)
-	n.SetForeground(true)
+	n.SetForeground(true, 1)
 	startSession(eng, "s1")
 	eng.Apply(event.Event{SessionID: "s1", Type: event.Finished, At: time.Now()})
 
@@ -148,14 +148,30 @@ func TestForegroundSuppressesPush(t *testing.T) {
 // TestForegroundFalseResumesPush: ao voltar pro background (false), o push volta.
 func TestForegroundFalseResumesPush(t *testing.T) {
 	eng, _, _, fake, n := fixture(t)
-	n.SetForeground(true)
-	n.SetForeground(false) // app foi pro background
+	n.SetForeground(true, 1)
+	n.SetForeground(false, 2) // app foi pro background (at maior)
 	startSession(eng, "s1")
 	eng.Apply(event.Event{SessionID: "s1", Type: event.Finished, At: time.Now()})
 
 	p := recv(t, fake)
 	if !strings.Contains(string(p.payload), `"state":"done"`) {
 		t.Errorf("push esperado após background: %s", p.payload)
+	}
+}
+
+// TestForegroundIgnoresOutOfOrder é a regressão do SEC-102: um `true` atrasado
+// (at menor) chegando DEPOIS do `false` de background NÃO pode reabrir a
+// supressão — senão pushes críticos somem com o app em background.
+func TestForegroundIgnoresOutOfOrder(t *testing.T) {
+	eng, _, _, fake, n := fixture(t)
+	n.SetForeground(false, 10) // background aconteceu em at=10
+	n.SetForeground(true, 5)   // heartbeat atrasado (at=5) chega depois: deve ser IGNORADO
+	startSession(eng, "s1")
+	eng.Apply(event.Event{SessionID: "s1", Type: event.Finished, At: time.Now()})
+
+	p := recv(t, fake)
+	if !strings.Contains(string(p.payload), `"state":"done"`) {
+		t.Errorf("push deveria ter disparado (true fora de ordem ignorado): %s", p.payload)
 	}
 }
 
