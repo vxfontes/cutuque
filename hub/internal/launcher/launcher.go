@@ -225,6 +225,105 @@ func (l *Launcher) Discover(machine string) ([]session.Discovered, error) {
 	return list, nil
 }
 
+// TmuxList lista os panes do tmux rodando claude na máquina (a ponte para
+// controlar/observar sessões vivas de terminal). Devolve no shape Discovered
+// (id = pane_id) para o app reusar o mesmo modelo.
+func (l *Launcher) TmuxList(machine string) ([]session.Discovered, error) {
+	tgt, ok := l.targets[machine]
+	if !ok {
+		return nil, ErrUnknownMachine
+	}
+	tm, ok := tgt.(claudecode.Tmuxer)
+	if !ok {
+		return nil, ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	panes, err := tm.TmuxList(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrDiscoverFailed, err)
+	}
+	out := make([]session.Discovered, 0, len(panes))
+	for _, p := range panes {
+		out = append(out, claudecode.TmuxPaneAsDiscovered(p))
+	}
+	return out, nil
+}
+
+// TmuxCapture devolve a tela atual do pane (espelho ao vivo).
+func (l *Launcher) TmuxCapture(machine, target string) (string, error) {
+	tgt, ok := l.targets[machine]
+	if !ok {
+		return "", ErrUnknownMachine
+	}
+	tm, ok := tgt.(claudecode.Tmuxer)
+	if !ok {
+		return "", ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	screen, err := tm.TmuxCapture(ctx, target)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrDiscoverFailed, err)
+	}
+	return screen, nil
+}
+
+// TmuxResize fixa/restaura o tamanho da janela do pane (para caber no celular).
+func (l *Launcher) TmuxResize(machine, target string, cols, rows int) error {
+	tgt, ok := l.targets[machine]
+	if !ok {
+		return ErrUnknownMachine
+	}
+	tm, ok := tgt.(claudecode.Tmuxer)
+	if !ok {
+		return ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	if err := tm.TmuxResize(ctx, target, cols, rows); err != nil {
+		return fmt.Errorf("%w: %v", ErrDiscoverFailed, err)
+	}
+	return nil
+}
+
+// TmuxSend digita texto no pane e submete (Enter) — a mensagem do celular caindo
+// no terminal que já roda.
+func (l *Launcher) TmuxSend(machine, target, text string) error {
+	tgt, ok := l.targets[machine]
+	if !ok {
+		return ErrUnknownMachine
+	}
+	tm, ok := tgt.(claudecode.Tmuxer)
+	if !ok {
+		return ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	if err := tm.TmuxSend(ctx, target, text); err != nil {
+		return fmt.Errorf("%w: %v", ErrDiscoverFailed, err)
+	}
+	return nil
+}
+
+// TmuxKey envia uma tecla nomeada (Ctrl+C, setas, Esc…) ao pane.
+func (l *Launcher) TmuxKey(machine, target, key string) error {
+	tgt, ok := l.targets[machine]
+	if !ok {
+		return ErrUnknownMachine
+	}
+	tm, ok := tgt.(claudecode.Tmuxer)
+	if !ok {
+		return ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	if err := tm.TmuxKey(ctx, target, key); err != nil {
+		return fmt.Errorf("%w: %v", ErrDiscoverFailed, err)
+	}
+	return nil
+}
+
 // Live lista as sessões do Claude Code que estão RODANDO agora na máquina
 // (processo vivo + transcript recente). Mesmos erros/timeout do Discover.
 func (l *Launcher) Live(machine string) ([]session.Discovered, error) {
@@ -259,9 +358,6 @@ func (l *Launcher) Adopt(machine, id, cwd, title string) (session.Session, error
 	if !sessionIDPattern.MatchString(id) {
 		return session.Session{}, ErrInvalidSessionID
 	}
-	if s, ok := l.reg.Get(id); ok {
-		return s, nil // já conhecida (evita sobrescrever estado vivo/histórico já importado)
-	}
 	now := time.Now()
 	s := session.Session{
 		ID:        id,
@@ -273,7 +369,13 @@ func (l *Launcher) Adopt(machine, id, cwd, title string) (session.Session, error
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	l.reg.Add(s)
+	// Reivindicação atômica: se já existir (inclusive numa corrida entre dois
+	// Adopt do mesmo id), devolve a existente e NÃO reimporta o histórico —
+	// senão as mensagens apareceriam duplicadas no chat (review 2026-07-03, #3).
+	existing, added := l.reg.AddIfAbsent(s)
+	if !added {
+		return existing, nil
+	}
 	// Importa o histórico do transcript do Mac (se o alvo suportar) para o chat
 	// mostrar as mensagens anteriores ao abrir a sessão adotada — sem isso o
 	// output começaria vazio e só o `--resume` traria conteúdo novo. Feito ANTES

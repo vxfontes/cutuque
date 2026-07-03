@@ -7,6 +7,8 @@ import SwiftUI
 struct HubStatusView: View {
     /// Sessões atuais (já carregadas pela lista) para o resumo de "conectado".
     let sessions: [Session]
+    /// Sessões rodando ao vivo no Mac (panes do tmux), pro status refletir isso.
+    var live: [LiveEntry] = []
 
     @Environment(\.dismiss) private var dismiss
     @State private var online: Bool?
@@ -74,6 +76,24 @@ struct HubStatusView: View {
                                 }
                             }
                         }
+                    }
+                }
+
+                if !live.isEmpty {
+                    Section {
+                        ForEach(live) { entry in
+                            HStack(spacing: 10) {
+                                Circle().fill(.green).frame(width: 8, height: 8)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(entry.session.title).lineLimit(1)
+                                    Text("\(entry.machine) · \(entry.session.folderName)")
+                                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                            }
+                        }
+                    } header: {
+                        Label("Ao vivo no Mac (\(live.count))", systemImage: "dot.radiowaves.left.and.right")
+                            .foregroundStyle(.green).textCase(nil)
                     }
                 }
             }

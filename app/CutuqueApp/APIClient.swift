@@ -275,6 +275,91 @@ struct APIClient {
         }
     }
 
+    /// Lista os panes do tmux rodando claude na máquina (a ponte para observar/
+    /// controlar sessões vivas de terminal). `GET /machines/{machine}/tmux`.
+    /// Erros engolidos em `[]` (poll de fundo).
+    func tmuxList(machine: String) async -> [DiscoveredSession] {
+        let url = baseURL
+            .appendingPathComponent("machines").appendingPathComponent(machine)
+            .appendingPathComponent("tmux")
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return [] }
+            return try JSONDecoder.cutuque.decode(DiscoverEnvelope.self, from: data).sessions
+        } catch {
+            return []
+        }
+    }
+
+    /// Captura a tela atual de um pane do tmux (o espelho ao vivo).
+    /// `GET /machines/{machine}/tmux/screen?target=<pane>`. Vazio em falha.
+    func tmuxScreen(machine: String, target: String) async -> String {
+        var comps = URLComponents(
+            url: baseURL.appendingPathComponent("machines").appendingPathComponent(machine)
+                .appendingPathComponent("tmux").appendingPathComponent("screen"),
+            resolvingAgainstBaseURL: false
+        )
+        comps?.queryItems = [URLQueryItem(name: "target", value: target)]
+        guard let url = comps?.url else { return "" }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        struct ScreenEnvelope: Decodable { let screen: String }
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return "" }
+            return try JSONDecoder().decode(ScreenEnvelope.self, from: data).screen
+        } catch {
+            return ""
+        }
+    }
+
+    /// Fixa (cols>0) ou restaura (cols<=0) o tamanho da janela do pane, para o
+    /// terminal caber bem no celular mesmo com o terminal do Mac enorme.
+    /// `POST /machines/{machine}/tmux/resize`. Best-effort (falha silenciosa).
+    func tmuxResize(machine: String, target: String, cols: Int, rows: Int) async {
+        let url = baseURL
+            .appendingPathComponent("machines").appendingPathComponent(machine)
+            .appendingPathComponent("tmux").appendingPathComponent("resize")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        struct ResizeBody: Encodable { let target: String; let cols: Int; let rows: Int }
+        request.httpBody = try? JSONEncoder().encode(ResizeBody(target: target, cols: cols, rows: rows))
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
+    /// Digita `text` no pane do tmux e submete (Enter) — a mensagem cai no
+    /// terminal que já roda. `POST /machines/{machine}/tmux/keys`.
+    func tmuxSendKeys(machine: String, target: String, text: String) async throws {
+        let url = baseURL
+            .appendingPathComponent("machines").appendingPathComponent(machine)
+            .appendingPathComponent("tmux").appendingPathComponent("keys")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["target": target, "text": text])
+        try await send(request)
+    }
+
+    /// Envia uma TECLA NOMEADA (Ctrl+C, setas, Esc, Enter, Tab…) ao pane do tmux
+    /// — pra interromper (Ctrl+C) e navegar o TUI (setas → subagentes).
+    /// `POST /machines/{machine}/tmux/key`.
+    func tmuxKey(machine: String, target: String, key: String) async throws {
+        let url = baseURL
+            .appendingPathComponent("machines").appendingPathComponent(machine)
+            .appendingPathComponent("tmux").appendingPathComponent("key")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["target": target, "key": key])
+        try await send(request)
+    }
+
     /// Corpo de `POST /machines/{machine}/adopt`.
     private struct AdoptBody: Encodable {
         let id: String
@@ -310,16 +395,24 @@ struct APIClient {
         }
     }
 
+    /// Corpo de POST /app/foreground. `at` (ms monotônicos) ordena updates que
+    /// podem chegar fora de ordem no hub (SEC-102).
+    private struct ForegroundBody: Encodable {
+        let active: Bool
+        let at: Int64
+    }
+
     /// Informa ao hub se o app está em foreground. Enquanto ativo (heartbeat),
-    /// o hub suprime push — o app já recebe tudo ao vivo pelo WS.
-    /// `POST /app/foreground {active}`. Falha silenciosa (é best-effort).
-    func setForeground(_ active: Bool) async {
+    /// o hub suprime push — o app já recebe tudo ao vivo pelo WS. `at` é um
+    /// relógio monotônico do cliente para o hub aplicar a ORDEM lógica (não a de
+    /// chegada na rede). `POST /app/foreground`. Falha silenciosa (best-effort).
+    func setForeground(_ active: Bool, at: Int64) async {
         let url = baseURL.appendingPathComponent("app").appendingPathComponent("foreground")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONEncoder().encode(["active": active])
+        request.httpBody = try? JSONEncoder().encode(ForegroundBody(active: active, at: at))
         _ = try? await URLSession.shared.data(for: request)
     }
 

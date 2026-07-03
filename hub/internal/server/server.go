@@ -79,6 +79,12 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		mux.Handle("GET /machines/{machine}/sessions", requireAuth(cfg.Token, DiscoverHandler(lch)))
 		mux.Handle("GET /machines/{machine}/live", requireAuth(cfg.Token, LiveHandler(lch)))
 		mux.Handle("POST /machines/{machine}/adopt", requireAuth(cfg.Token, AdoptHandler(lch)))
+		// Ponte tmux: observar (screen) e digitar (keys) em sessões de terminal.
+		mux.Handle("GET /machines/{machine}/tmux", requireAuth(cfg.Token, TmuxListHandler(lch)))
+		mux.Handle("GET /machines/{machine}/tmux/screen", requireAuth(cfg.Token, TmuxScreenHandler(lch)))
+		mux.Handle("POST /machines/{machine}/tmux/keys", requireAuth(cfg.Token, TmuxKeysHandler(lch)))
+		mux.Handle("POST /machines/{machine}/tmux/key", requireAuth(cfg.Token, TmuxKeyHandler(lch)))
+		mux.Handle("POST /machines/{machine}/tmux/resize", requireAuth(cfg.Token, TmuxResizeHandler(lch)))
 	}
 
 	// Registro de device tokens para push (Fase 4). Só quando há store.

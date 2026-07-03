@@ -29,6 +29,9 @@ type fakeLauncher struct {
 	discoverErr  error
 	liveSessions []session.Discovered
 	liveErr      error
+	tmuxPanes    []session.Discovered
+	tmuxScreen   string
+	tmuxErr      error
 	adoptSession session.Session
 	adoptErr     error
 
@@ -39,6 +42,7 @@ type fakeLauncher struct {
 	gotDiscoverMachine                      string
 	gotAdoptMachine, gotAdoptID             string
 	gotAdoptCwd, gotAdoptTitle              string
+	gotTmuxTarget, gotTmuxText              string
 }
 
 func (f *fakeLauncher) Machines() []string { return f.machines }
@@ -54,6 +58,26 @@ func (f *fakeLauncher) Discover(machine string) ([]session.Discovered, error) {
 
 func (f *fakeLauncher) Live(machine string) ([]session.Discovered, error) {
 	return f.liveSessions, f.liveErr
+}
+
+func (f *fakeLauncher) TmuxList(machine string) ([]session.Discovered, error) {
+	return f.tmuxPanes, f.tmuxErr
+}
+func (f *fakeLauncher) TmuxCapture(machine, target string) (string, error) {
+	f.gotTmuxTarget = target
+	return f.tmuxScreen, f.tmuxErr
+}
+func (f *fakeLauncher) TmuxSend(machine, target, text string) error {
+	f.gotTmuxTarget, f.gotTmuxText = target, text
+	return f.tmuxErr
+}
+func (f *fakeLauncher) TmuxResize(machine, target string, cols, rows int) error {
+	f.gotTmuxTarget = target
+	return f.tmuxErr
+}
+func (f *fakeLauncher) TmuxKey(machine, target, key string) error {
+	f.gotTmuxTarget, f.gotTmuxText = target, key
+	return f.tmuxErr
 }
 
 func (f *fakeLauncher) Adopt(machine, id, cwd, title string) (session.Session, error) {
@@ -356,6 +380,63 @@ func TestLiveDiscoverFailed(t *testing.T) {
 		t.Fatalf("status = %d, quero 502", rec.Code)
 	}
 	assertErrorCode(t, rec.Body.Bytes(), "discover_failed")
+}
+
+func TestTmuxListSessions(t *testing.T) {
+	f := &fakeLauncher{tmuxPanes: []session.Discovered{{ID: "%12", Cwd: "/x", Title: "work · main"}}}
+	rec := do(t, f, http.MethodGet, "/machines/macbook/tmux", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, quero 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"%12"`) {
+		t.Errorf("corpo sem o pane: %s", rec.Body.String())
+	}
+}
+
+func TestTmuxScreenReturnsCapture(t *testing.T) {
+	f := &fakeLauncher{tmuxScreen: "$ echo oi\noi\n$"}
+	rec := do(t, f, http.MethodGet, "/machines/macbook/tmux/screen?target=%2512", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, quero 200 (corpo: %s)", rec.Code, rec.Body.String())
+	}
+	if f.gotTmuxTarget != "%12" {
+		t.Errorf("target recebido = %q, quero \"%%12\"", f.gotTmuxTarget)
+	}
+	var resp struct {
+		Screen string `json:"screen"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || !strings.Contains(resp.Screen, "oi") {
+		t.Errorf("screen inesperado: %q (err %v)", resp.Screen, err)
+	}
+}
+
+func TestTmuxScreenRequiresTarget(t *testing.T) {
+	f := &fakeLauncher{}
+	rec := do(t, f, http.MethodGet, "/machines/macbook/tmux/screen", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, quero 400 sem target", rec.Code)
+	}
+}
+
+func TestTmuxKeysSends(t *testing.T) {
+	f := &fakeLauncher{}
+	rec := do(t, f, http.MethodPost, "/machines/macbook/tmux/keys", `{"target":"%12","text":"rode os testes"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, quero 200 (corpo: %s)", rec.Code, rec.Body.String())
+	}
+	if f.gotTmuxTarget != "%12" || f.gotTmuxText != "rode os testes" {
+		t.Errorf("TmuxSend recebeu target=%q text=%q", f.gotTmuxTarget, f.gotTmuxText)
+	}
+}
+
+func TestTmuxKeysBadRequest(t *testing.T) {
+	f := &fakeLauncher{}
+	for _, body := range []string{`{bad`, `{"target":"%12"}`, `{"text":"oi"}`} {
+		rec := do(t, f, http.MethodPost, "/machines/macbook/tmux/keys", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("body %q => %d, quero 400", body, rec.Code)
+		}
+	}
 }
 
 func TestAdoptCreated(t *testing.T) {

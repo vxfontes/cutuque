@@ -16,6 +16,9 @@ final class SessionListViewModel: ObservableObject {
     @Published var hubStatus: HealthStatus = .unknown
     /// Sessões vivas no Mac (rodando em tempo real), atualizadas por polling.
     @Published var liveSessions: [LiveEntry] = []
+    /// Falso até a 1ª carga (REST) terminar — evita a home piscar "vazio" e
+    /// então "brotar" sessões.
+    @Published var didInitialLoad = false
 
     private let api = APIClient()
     private let health = HealthClient()
@@ -37,6 +40,7 @@ final class SessionListViewModel: ObservableObject {
             // Falha na REST não derruba a UI; o indicador de saúde reflete o estado do hub.
         }
         hubStatus = await statusResult
+        didInitialLoad = true
     }
 
     // MARK: Atualização ao vivo (WebSocket)
@@ -101,22 +105,16 @@ final class SessionListViewModel: ObservableObject {
         livePollTask = nil
     }
 
-    /// Uma passada de descoberta de vivas: para cada máquina, busca /live.
+    /// Uma passada de descoberta de vivas: para cada máquina, lista os panes do
+    /// tmux rodando claude (as sessões controláveis ao vivo — send-keys/mirror).
     func refreshLive() async {
         let targets = (try? await api.targets()) ?? []
         var all: [LiveEntry] = []
         for machine in targets {
-            let sessions = await api.live(machine: machine)
-            all.append(contentsOf: sessions.map { LiveEntry(machine: machine, session: $0) })
+            let panes = await api.tmuxList(machine: machine)
+            all.append(contentsOf: panes.map { LiveEntry(machine: machine, session: $0) })
         }
-        let sorted = all.sorted { $0.session.modified > $1.session.modified }
-        withAnimation(.snappy) { liveSessions = sorted }
-    }
-
-    /// Adota uma sessão viva (registra + importa histórico) e devolve a Session
-    /// para o pai navegar. nil em falha.
-    func adoptLive(_ entry: LiveEntry) async -> Session? {
-        try? await api.adopt(machine: entry.machine, discovered: entry.session)
+        withAnimation(.snappy) { liveSessions = all }
     }
 
     // MARK: Apagar sessão
@@ -187,18 +185,14 @@ struct SessionListView: View {
     // Pilha de navegação; empurramos a sessão (criada ou deep-link) programaticamente.
     // Um único destino `for: Session.self` serve tanto o NavigationLink quanto os pushes.
     @State private var path: [Session] = []
-    // ID da sessão viva sendo adotada (spinner na linha).
-    @State private var adoptingLiveID: String?
+    // Pane do tmux aberto no espelho de terminal (nil = fechado).
+    @State private var selectedLive: LiveEntry?
 
     // Sessões que precisam de você sobem para uma seção destacada no topo.
     private var needsYou: [Session] { model.sessions.filter { $0.state == .needsYou } }
     private var others: [Session] { model.sessions.filter { $0.state != .needsYou } }
-    // Vivas no Mac que ainda NÃO estão sendo acompanhadas aqui (evita duplicar
-    // na home uma sessão já adotada/rastreada).
-    private var liveNotTracked: [LiveEntry] {
-        let known = Set(model.sessions.map(\.id))
-        return model.liveSessions.filter { !known.contains($0.id) }
-    }
+    // Sessões vivas no Mac (panes do tmux rodando claude), controláveis ao vivo.
+    private var liveNotTracked: [LiveEntry] { model.liveSessions }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -235,7 +229,9 @@ struct SessionListView: View {
                 SessionDetailView(session: session)
             }
             .overlay {
-                if model.sessions.isEmpty && liveNotTracked.isEmpty {
+                if !model.didInitialLoad {
+                    ProgressView().controlSize(.large)
+                } else if model.sessions.isEmpty && liveNotTracked.isEmpty {
                     emptyState
                 }
             }
@@ -297,8 +293,13 @@ struct SessionListView: View {
             .sheet(isPresented: $showingSettings) {
                 HubSettingsView()
             }
+            .sheet(item: $selectedLive) { entry in
+                NavigationStack {
+                    LiveDetailView(entry: entry)
+                }
+            }
             .sheet(isPresented: $showingStatus) {
-                HubStatusView(sessions: model.sessions)
+                HubStatusView(sessions: model.sessions, live: model.liveSessions)
             }
             .alert(
                 "Renomear sessão",
@@ -362,16 +363,11 @@ struct SessionListView: View {
 
     // MARK: Subviews
 
-    /// Linha de uma sessão viva no Mac: toca → adota (importa histórico) → abre.
+    /// Linha de uma sessão viva no Mac (pane do tmux): toca → abre o espelho do
+    /// terminal ao vivo (ver a tela + digitar de verdade nela).
     private func liveRow(_ entry: LiveEntry) -> some View {
         Button {
-            Task {
-                adoptingLiveID = entry.id
-                defer { adoptingLiveID = nil }
-                if let session = await model.adoptLive(entry) {
-                    if path.last?.id != session.id { path.append(session) }
-                }
-            }
+            selectedLive = entry
         } label: {
             HStack(spacing: 12) {
                 LivePulse()
@@ -383,25 +379,18 @@ struct SessionListView: View {
                     HStack(spacing: 4) {
                         Image(systemName: machineSymbol(entry.machine))
                         Text(entry.session.folderName)
-                        Text("·")
-                        RelativeTimeText(date: entry.session.modifiedAt)
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 }
                 Spacer(minLength: 8)
-                if adoptingLiveID == entry.id {
-                    ProgressView()
-                } else {
-                    Image(systemName: "arrow.right.circle").foregroundStyle(.green)
-                }
+                Image(systemName: "terminal").foregroundStyle(.green)
             }
             .padding(.vertical, 2)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(adoptingLiveID != nil)
     }
 
     private func sessionLink(_ session: Session) -> some View {

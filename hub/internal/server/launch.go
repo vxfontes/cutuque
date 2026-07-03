@@ -26,6 +26,136 @@ type Launcher interface {
 	Discover(machine string) ([]session.Discovered, error)
 	Live(machine string) ([]session.Discovered, error)
 	Adopt(machine, id, cwd, title string) (session.Session, error)
+	TmuxList(machine string) ([]session.Discovered, error)
+	TmuxCapture(machine, target string) (string, error)
+	TmuxSend(machine, target, text string) error
+	TmuxKey(machine, target, key string) error
+	TmuxResize(machine, target string, cols, rows int) error
+}
+
+// tmuxKeyRequest é o corpo de POST /machines/{machine}/tmux/key.
+type tmuxKeyRequest struct {
+	Target string `json:"target"`
+	Key    string `json:"key"`
+}
+
+// TmuxKeyHandler envia uma tecla nomeada (Ctrl+C, setas, Esc…) ao pane.
+// POST {"target","key"} → 200 {"ok":true} | 400 | 404 | 502.
+func TmuxKeyHandler(lch Launcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		machine := r.PathValue("machine")
+		r.Body = http.MaxBytesReader(w, r.Body, maxLaunchBody)
+		var req tmuxKeyRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Target == "" || req.Key == "" {
+			writeJSONError(w, http.StatusBadRequest, "bad_request")
+			return
+		}
+		err := lch.TmuxKey(machine, req.Target, req.Key)
+		switch {
+		case errors.Is(err, launcher.ErrUnknownMachine):
+			writeJSONError(w, http.StatusNotFound, "unknown_machine")
+		case err != nil:
+			writeJSONError(w, http.StatusBadGateway, "tmux_failed")
+		default:
+			writeOK(w)
+		}
+	}
+}
+
+// tmuxResizeRequest é o corpo de POST /machines/{machine}/tmux/resize. cols<=0
+// restaura o dimensionamento automático.
+type tmuxResizeRequest struct {
+	Target string `json:"target"`
+	Cols   int    `json:"cols"`
+	Rows   int    `json:"rows"`
+}
+
+// TmuxResizeHandler fixa/restaura o tamanho da janela do pane (para o terminal
+// caber no celular). POST {"target","cols","rows"} → 200 {"ok":true}.
+func TmuxResizeHandler(lch Launcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		machine := r.PathValue("machine")
+		r.Body = http.MaxBytesReader(w, r.Body, maxLaunchBody)
+		var req tmuxResizeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Target == "" {
+			writeJSONError(w, http.StatusBadRequest, "bad_request")
+			return
+		}
+		err := lch.TmuxResize(machine, req.Target, req.Cols, req.Rows)
+		switch {
+		case errors.Is(err, launcher.ErrUnknownMachine):
+			writeJSONError(w, http.StatusNotFound, "unknown_machine")
+		case err != nil:
+			writeJSONError(w, http.StatusBadGateway, "tmux_failed")
+		default:
+			writeOK(w)
+		}
+	}
+}
+
+// TmuxListHandler lista os panes do tmux rodando claude numa máquina (a ponte
+// para observar/controlar sessões vivas de terminal). Mesmo contrato do discover.
+func TmuxListHandler(lch Launcher) http.HandlerFunc {
+	return discoveryLikeHandler(func(machine string) ([]session.Discovered, error) {
+		return lch.TmuxList(machine)
+	})
+}
+
+// TmuxScreenHandler devolve a tela atual do pane (espelho ao vivo).
+//
+//	GET /machines/{machine}/tmux/screen?target=%12 → 200 {"screen":"..."} |
+//	400 bad_request | 404 unknown_machine | 502 tmux_failed
+func TmuxScreenHandler(lch Launcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		machine := r.PathValue("machine")
+		target := r.URL.Query().Get("target")
+		if target == "" {
+			writeJSONError(w, http.StatusBadRequest, "bad_request")
+			return
+		}
+		screen, err := lch.TmuxCapture(machine, target)
+		switch {
+		case errors.Is(err, launcher.ErrUnknownMachine):
+			writeJSONError(w, http.StatusNotFound, "unknown_machine")
+		case err != nil:
+			writeJSONError(w, http.StatusBadGateway, "tmux_failed")
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]string{"screen": screen})
+		}
+	}
+}
+
+// tmuxKeysRequest é o corpo de POST /machines/{machine}/tmux/keys.
+type tmuxKeysRequest struct {
+	Target string `json:"target"`
+	Text   string `json:"text"`
+}
+
+// TmuxKeysHandler digita `text` no pane e submete (Enter) — a mensagem do
+// celular caindo no terminal que já roda.
+//
+//	POST {"target":"%12","text":"..."} → 200 {"ok":true} | 400 | 404 | 502
+func TmuxKeysHandler(lch Launcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		machine := r.PathValue("machine")
+		r.Body = http.MaxBytesReader(w, r.Body, maxLaunchBody)
+		var req tmuxKeysRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Target == "" || req.Text == "" {
+			writeJSONError(w, http.StatusBadRequest, "bad_request")
+			return
+		}
+		err := lch.TmuxSend(machine, req.Target, req.Text)
+		switch {
+		case errors.Is(err, launcher.ErrUnknownMachine):
+			writeJSONError(w, http.StatusNotFound, "unknown_machine")
+		case err != nil:
+			writeJSONError(w, http.StatusBadGateway, "tmux_failed")
+		default:
+			writeOK(w)
+		}
+	}
 }
 
 // DiscoverHandler lista as sessões do Claude Code existentes numa máquina

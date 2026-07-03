@@ -465,6 +465,31 @@ func TestAdoptImportsTranscript(t *testing.T) {
 	}
 }
 
+// TestAdoptTwiceDoesNotDuplicateHistory: adotar o mesmo id duas vezes importa o
+// histórico UMA vez só (reivindicação atômica via AddIfAbsent — review #3).
+func TestAdoptTwiceDoesNotDuplicateHistory(t *testing.T) {
+	tgt := &scriptTarget{
+		name:     "macbook",
+		captured: make(chan string, 1),
+		transcript: []claudecode.TranscriptChunk{
+			{Kind: event.KindUser, Text: "oi"},
+			{Kind: event.KindAssistant, Text: "olá"},
+		},
+	}
+	l, reg := newTestLauncher(tgt)
+	id := "7b6ff87d-99ca-4bd4-a0e9-e01a4ba689af"
+
+	if _, err := l.Adopt("macbook", id, "/x", "t"); err != nil {
+		t.Fatalf("Adopt 1: %v", err)
+	}
+	if _, err := l.Adopt("macbook", id, "/x", "t"); err != nil {
+		t.Fatalf("Adopt 2: %v", err)
+	}
+	if out := reg.Output(id); len(out) != 2 {
+		t.Errorf("output = %d chunks, quero 2 (histórico importado UMA vez): %+v", len(out), out)
+	}
+}
+
 // TestAdoptTranscriptFailureStillAdopts: falha ao ler o transcript não derruba a
 // adoção — a sessão é registrada mesmo sem histórico (degradação graciosa).
 func TestAdoptTranscriptFailureStillAdopts(t *testing.T) {
