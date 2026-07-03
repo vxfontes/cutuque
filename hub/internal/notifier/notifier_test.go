@@ -236,3 +236,53 @@ func TestPayloadNeverContainsOutput(t *testing.T) {
 		t.Errorf("push não carregou o PendingPrompt esperado: %s", p.payload)
 	}
 }
+
+// TestRenudgeRepeatsWhileNeedsYou cobre a opção 1: enquanto a sessão continuar
+// em needs_you, o Notifier re-cutuca periodicamente (mais de um push).
+func TestRenudgeRepeatsWhileNeedsYou(t *testing.T) {
+	eng, _, _, fake, n := fixture(t)
+	n.SetRenudgeInterval(40 * time.Millisecond)
+	startSession(eng, "s1")
+	eng.Apply(event.Event{SessionID: "s1", Type: event.NeedsInput, Data: "aprova?", At: time.Now()})
+
+	// Push imediato + pelo menos dois re-cutucões (a sessão segue em needs_you).
+	for i := 0; i < 3; i++ {
+		p := recv(t, fake)
+		if !strings.Contains(string(p.payload), `"state":"needs_you"`) {
+			t.Fatalf("push %d não é de needs_you: %s", i, p.payload)
+		}
+	}
+}
+
+// TestRenudgeStopsAfterResolved cobre o cancelamento: ao sair de needs_you
+// (usuária respondeu → running), os re-cutucões param.
+func TestRenudgeStopsAfterResolved(t *testing.T) {
+	eng, _, _, fake, n := fixture(t)
+	n.SetRenudgeInterval(40 * time.Millisecond)
+	startSession(eng, "s1")
+	eng.Apply(event.Event{SessionID: "s1", Type: event.NeedsInput, Data: "aprova?", At: time.Now()})
+	recv(t, fake) // push imediato
+
+	// Resolve: volta para running (aprovou). Deve cancelar o re-cutucão.
+	eng.Apply(event.Event{SessionID: "s1", Type: event.UserResponded, At: time.Now()})
+
+	// Drena eventuais re-cutucões em voo e então exige silêncio por vários intervalos.
+	drainUntilQuiet(fake, 3*40*time.Millisecond)
+	select {
+	case p := <-fake.ch:
+		t.Fatalf("re-cutucão continuou após resolver: %s", p.payload)
+	case <-time.After(5 * 40 * time.Millisecond):
+		// silêncio: correto
+	}
+}
+
+// drainUntilQuiet consome pushes até não chegar nenhum por `quiet`.
+func drainUntilQuiet(f *fakePusher, quiet time.Duration) {
+	for {
+		select {
+		case <-f.ch:
+		case <-time.After(quiet):
+			return
+		}
+	}
+}

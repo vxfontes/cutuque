@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/vxfontes/cutuque/hub/internal/apns"
@@ -29,6 +30,9 @@ const pushTimeout = 10 * time.Second
 // invariante de nunca aprovar às cegas pelo pulso —, NÃO output/código.
 const promptMaxLen = 140
 
+// defaultRenudge é o intervalo do re-cutucão quando nada é configurado.
+const defaultRenudge = 15 * time.Second
+
 // Pusher é a superfície da APNs que o Notifier consome. *apns.Client a satisfaz;
 // um fake a implementa nos testes.
 type Pusher interface {
@@ -45,8 +49,30 @@ type Notifier struct {
 	sub *registry.Subscription
 	wg  sync.WaitGroup
 
+	renudgeNanos atomic.Int64 // intervalo do re-cutucão (ns); ajustável em runtime
+
 	mu     sync.Mutex
-	states map[string]session.State // último estado notificado por sessão
+	states map[string]session.State      // último estado notificado por sessão
+	nudges map[string]context.CancelFunc // re-cutucão ativo por sessão em needs_you
+}
+
+// SetRenudgeInterval ajusta o intervalo do re-cutucão em runtime (aplicado no
+// próximo ciclo de cada sessão). Só rejeita valores não-positivos; a validação
+// de faixa (min/max) é responsabilidade de quem expõe isso (o handler /settings).
+func (n *Notifier) SetRenudgeInterval(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	n.renudgeNanos.Store(int64(d))
+}
+
+// RenudgeInterval devolve o intervalo atual do re-cutucão.
+func (n *Notifier) RenudgeInterval() time.Duration {
+	d := time.Duration(n.renudgeNanos.Load())
+	if d <= 0 {
+		return defaultRenudge
+	}
+	return d
 }
 
 // New cria um Notifier. Se logger for nil, descarta logs (não é fatal).
@@ -54,13 +80,16 @@ func New(pusher Pusher, store *devices.Store, reg *registry.Registry, logger *sl
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Notifier{
+	n := &Notifier{
 		apns:    pusher,
 		devices: store,
 		reg:     reg,
 		logger:  logger,
 		states:  make(map[string]session.State),
+		nudges:  make(map[string]context.CancelFunc),
 	}
+	n.renudgeNanos.Store(int64(defaultRenudge))
+	return n
 }
 
 // Start assina o Registry e passa a processar as mudanças em background. Chame
@@ -72,12 +101,19 @@ func (n *Notifier) Start() {
 	go n.loop()
 }
 
-// Close encerra a inscrição (fecha o canal → o loop termina) e espera as
-// goroutines de fan-out pendentes. Idempotente o suficiente para os testes.
+// Close encerra a inscrição (fecha o canal → o loop termina), cancela todos os
+// re-cutucões ativos e espera as goroutines pendentes. Idempotente o suficiente
+// para os testes.
 func (n *Notifier) Close() {
 	if n.sub != nil {
 		n.reg.Unsubscribe(n.sub)
 	}
+	n.mu.Lock()
+	for id, cancel := range n.nudges {
+		cancel()
+		delete(n.nudges, id)
+	}
+	n.mu.Unlock()
 	n.wg.Wait()
 }
 
@@ -114,10 +150,12 @@ func (n *Notifier) handle(s session.Session) {
 			return
 		}
 	case session.StateDone, session.StateError:
-		// dispara na transição
+		// Saiu de needs_you (ou nunca esteve): encerra qualquer re-cutucão.
+		n.stopNudge(s.ID)
 	default:
-		// running/idle: sem push, mas registra o estado para detectar as
-		// próximas transições corretamente.
+		// running/idle: sem push. Encerra re-cutucão (ex.: aprovou → running) e
+		// registra o estado para detectar as próximas transições corretamente.
+		n.stopNudge(s.ID)
 		n.setState(s.ID, s.State)
 		return
 	}
@@ -125,6 +163,59 @@ func (n *Notifier) handle(s session.Session) {
 	n.setState(s.ID, s.State)
 	payload, opts := buildPush(s)
 	n.fanout(payload, opts)
+
+	// needs_you: além do push imediato, re-cutuca a cada renudgeInterval até a
+	// sessão sair de needs_you (opção 1 — persistência háptica).
+	if s.State == session.StateNeedsYou {
+		n.startNudge(s.ID)
+	}
+}
+
+// startNudge inicia (ou reinicia) o re-cutucão periódico de uma sessão em
+// needs_you. Substitui um re-cutucão anterior da mesma sessão, se houver.
+func (n *Notifier) startNudge(id string) {
+	ctx, cancel := context.WithCancel(context.Background())
+	n.mu.Lock()
+	if old, ok := n.nudges[id]; ok {
+		old() // cancela o anterior antes de substituir
+	}
+	n.nudges[id] = cancel
+	n.mu.Unlock()
+
+	n.wg.Add(1)
+	go n.nudgeLoop(ctx, id)
+}
+
+// stopNudge cancela e remove o re-cutucão de uma sessão, se ativo.
+func (n *Notifier) stopNudge(id string) {
+	n.mu.Lock()
+	if cancel, ok := n.nudges[id]; ok {
+		cancel()
+		delete(n.nudges, id)
+	}
+	n.mu.Unlock()
+}
+
+// nudgeLoop re-envia o push de needs_you a cada renudgeInterval enquanto a
+// sessão continuar em needs_you (o Registry é a fonte da verdade a cada tick).
+// Encerra ao ser cancelado (transição de estado ou Close).
+func (n *Notifier) nudgeLoop(ctx context.Context, id string) {
+	defer n.wg.Done()
+	for {
+		// time.After a cada volta: relê o intervalo, então mudanças em runtime
+		// (via /settings) valem já no próximo ciclo.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(n.RenudgeInterval()):
+			s, ok := n.reg.Get(id)
+			if !ok || s.State != session.StateNeedsYou {
+				return // já resolveu: para de cutucar
+			}
+			payload, opts := buildPush(s)
+			n.fanout(payload, opts)
+		}
+	}
 }
 
 // setState registra o último estado notificado de uma sessão.
