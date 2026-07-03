@@ -162,6 +162,9 @@ struct SessionListView: View {
                     } label: {
                         HubStatusIndicator(status: model.hubStatus)
                     }
+                    // .plain preserva a cor (verde/vermelho) do ícone; sem isso o
+                    // tint do botão pinta a bolinha de branco.
+                    .buttonStyle(.plain)
                     .accessibilityLabel("Status do hub")
                 }
                 ToolbarItem(placement: .topBarTrailing) {

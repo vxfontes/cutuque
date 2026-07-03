@@ -267,7 +267,9 @@ struct SessionDetailView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(displayTitle)
+            // Header (embaixo) mostra SEMPRE o título real vindo do servidor; o
+            // apelido local aparece só na nav bar (título do topo).
+            Text(model.session.title)
                 .font(.title3.weight(.semibold))
             HStack {
                 Label("\(model.session.machine) · \(model.session.agent)", systemImage: machineSymbol(model.session.machine))
