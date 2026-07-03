@@ -23,6 +23,12 @@ const subBuffer = 32
 type Subscription struct {
 	C  <-chan session.Session
 	ch chan session.Session
+	// Removed recebe o id de cada sessão removida (Registry.Remove) — o WS
+	// traduz em {"type":"session_removed",...}. Canal separado de C porque
+	// remoção não carrega uma Session; sem ordenação garantida entre os dois
+	// (best-effort, como o resto do pub/sub).
+	Removed   <-chan string
+	removedCh chan string
 }
 
 // Registry guarda as sessões em memória de forma thread-safe.
@@ -131,14 +137,15 @@ func (r *Registry) ClearPendingPrompt(id string) {
 // envia a sessão afetada para C.
 func (r *Registry) Subscribe() *Subscription {
 	ch := make(chan session.Session, subBuffer)
-	sub := &Subscription{C: ch, ch: ch}
+	rch := make(chan string, subBuffer)
+	sub := &Subscription{C: ch, ch: ch, Removed: rch, removedCh: rch}
 	r.mu.Lock()
 	r.subs[sub] = struct{}{}
 	r.mu.Unlock()
 	return sub
 }
 
-// Unsubscribe encerra a inscrição e fecha seu canal. É idempotente.
+// Unsubscribe encerra a inscrição e fecha seus canais. É idempotente.
 func (r *Registry) Unsubscribe(sub *Subscription) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -147,6 +154,39 @@ func (r *Registry) Unsubscribe(sub *Subscription) {
 	}
 	delete(r.subs, sub)
 	close(sub.ch)
+	close(sub.removedCh)
+}
+
+// Remove apaga a sessão e seu buffer de output; retorna false se não existia.
+// Notifica os subscribers pelo canal Removed. Remoção NÃO é transição de estado
+// (o Engine segue o único a fazer UpdateState) — é uma operação de ciclo de vida
+// que o Registry expõe direto, usada pelo Launcher.Remove (apagar sessão).
+func (r *Registry) Remove(id string) bool {
+	r.mu.Lock()
+	_, hadSession := r.byID[id]
+	_, hadOutput := r.outputs[id]
+	delete(r.byID, id)
+	delete(r.outputs, id)
+	r.mu.Unlock()
+	if !hadSession && !hadOutput {
+		return false
+	}
+	r.broadcastRemoved(id)
+	return true
+}
+
+// broadcastRemoved envia o id removido a todos os subscribers, sem bloquear.
+// Só corre sob RLock; Unsubscribe (que fecha removedCh) usa Lock exclusivo, então
+// close nunca corre concorrente com este send (sem panic de send-on-closed).
+func (r *Registry) broadcastRemoved(id string) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for sub := range r.subs {
+		select {
+		case sub.removedCh <- id:
+		default:
+		}
+	}
 }
 
 // broadcast envia a sessão a todos os subscribers, sem bloquear.

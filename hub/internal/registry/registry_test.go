@@ -286,3 +286,29 @@ func TestConcurrentAccessIsRaceFree(t *testing.T) {
 	close(stop)
 	<-done
 }
+
+func TestRemoveDeletesAndSignals(t *testing.T) {
+	r := New()
+	sub := r.Subscribe()
+	defer r.Unsubscribe(sub)
+	r.Add(session.Session{ID: "s1", State: session.StateRunning})
+	<-sub.C // consome o Add
+
+	if !r.Remove("s1") {
+		t.Fatal("Remove(s1) = false, quero true (existia)")
+	}
+	if _, ok := r.Get("s1"); ok {
+		t.Error("sessão ainda existe após Remove")
+	}
+	select {
+	case id := <-sub.Removed:
+		if id != "s1" {
+			t.Errorf("Removed = %q, quero s1", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("não recebeu sinal de remoção")
+	}
+	if r.Remove("s1") {
+		t.Error("Remove de sessão inexistente = true, quero false")
+	}
+}
