@@ -22,7 +22,7 @@ import (
 // io.Pipe não exercitam. Roda sob -race.
 func TestHandleCloseConcurrentIsSafe(t *testing.T) {
 	tgt := newLocalCommand("m", "cat", func(string) []string { return nil })
-	h, err := tgt.Start(context.Background(), "", "")
+	h, err := tgt.Start(context.Background(), "", "", "", "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestLocalTargetDoesNotLeakHubEnv(t *testing.T) {
 	t.Setenv("CUTUQUE_TEST_SENTINELA", "vazou")
 
 	tgt := newLocalCommand("m", "env", func(string) []string { return nil })
-	h, err := tgt.Start(context.Background(), "", "")
+	h, err := tgt.Start(context.Background(), "", "", "", "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestLocalTargetSetsCmdDirFromCwd(t *testing.T) {
 	}
 
 	tgt := newLocalCommand("m", "pwd", func(string) []string { return nil })
-	h, startErr := tgt.Start(context.Background(), "", dir)
+	h, startErr := tgt.Start(context.Background(), "", dir, "", "")
 	if startErr != nil {
 		t.Fatalf("Start: %v", startErr)
 	}
@@ -100,7 +100,7 @@ func TestLocalTargetSetsCmdDirFromCwd(t *testing.T) {
 // cmd.Dir (mantém o diretório default do processo do hub — hoje é "home").
 func TestLocalTargetEmptyCwdUsesDefault(t *testing.T) {
 	tgt := newLocalCommand("m", "pwd", func(string) []string { return nil })
-	h, err := tgt.Start(context.Background(), "", "")
+	h, err := tgt.Start(context.Background(), "", "", "", "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestSSHTargetRunnerProcessesFixtureViaFakeProgram(t *testing.T) {
 		t.Errorf("Name() = %q, quero \"macmini\"", tgt.Name())
 	}
 
-	h, err := tgt.Start(context.Background(), "", "")
+	h, err := tgt.Start(context.Background(), "", "", "", "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestSSHTargetDoesNotLeakHubEnv(t *testing.T) {
 	tgt := newSSHCommand("macmini", "dest-irrelevante-para-o-fake", defaultRemoteClaudeCmd, "env",
 		func(dest, remoteCmd, _, _ string) []string { return nil })
 
-	h, err := tgt.Start(context.Background(), "", "")
+	h, err := tgt.Start(context.Background(), "", "", "", "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -347,5 +347,26 @@ func TestSSHTargetDoesNotLeakHubEnv(t *testing.T) {
 	}
 	if !strings.Contains(env, "HOME=") {
 		t.Errorf("HOME deveria estar na allowlist (ssh precisa achar ~/.ssh/config e chaves):\n%s", env)
+	}
+}
+
+func TestModelEffortFlags(t *testing.T) {
+	// Válidos entram.
+	got := modelEffortFlags("opus", "high")
+	want := "--model opus --effort high"
+	if strings.Join(got, " ") != want {
+		t.Errorf("modelEffortFlags(opus,high) = %v, quero %q", got, want)
+	}
+	// Nome completo válido.
+	if f := modelEffortFlags("claude-opus-4-8", "max"); strings.Join(f, " ") != "--model claude-opus-4-8 --effort max" {
+		t.Errorf("nome completo/max rejeitado: %v", f)
+	}
+	// Ausentes → nada.
+	if f := modelEffortFlags("", ""); len(f) != 0 {
+		t.Errorf("vazios deviam dar nada, got %v", f)
+	}
+	// Effort inválido é descartado; model com metachar é rejeitado.
+	if f := modelEffortFlags("opus; rm -rf ~", "turbo"); len(f) != 0 {
+		t.Errorf("valores inválidos deviam ser rejeitados, got %v", f)
 	}
 }

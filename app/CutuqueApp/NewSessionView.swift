@@ -33,8 +33,19 @@ struct NewSessionView: View {
     /// Pasta onde o claude roda (opcional). Vazio = home da máquina.
     @State private var cwd = ""
     @State private var showingFolderPicker = false
+    // Modelo + effort do claude (vazio = default do CLI).
+    @State private var model = ""
+    @State private var effort = ""
     @State private var isLaunching = false
     @State private var alertMessage: String?
+
+    // Opções de modelo (aliases do claude) e effort. "" = default.
+    private let modelOptions: [(id: String, label: String)] = [
+        ("", "Padrão"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku"), ("fable", "Fable"),
+    ]
+    private let effortOptions: [(id: String, label: String)] = [
+        ("", "Padrão"), ("low", "Baixo"), ("medium", "Médio"), ("high", "Alto"), ("xhigh", "Muito alto"), ("max", "Máximo"),
+    ]
 
     private var canLaunch: Bool {
         !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isLaunching
@@ -46,6 +57,7 @@ struct NewSessionView: View {
                 machineSection
                 agentSection
                 folderSection
+                modelSection
                 promptSection
             }
             .navigationTitle("Nova tarefa")
@@ -181,6 +193,22 @@ struct NewSessionView: View {
         }
     }
 
+    /// Modelo do Claude + effort (opcionais). Vazio = default do CLI.
+    private var modelSection: some View {
+        Section {
+            Picker("Modelo", selection: $model) {
+                ForEach(modelOptions, id: \.id) { Text($0.label).tag($0.id) }
+            }
+            Picker("Effort", selection: $effort) {
+                ForEach(effortOptions, id: \.id) { Text($0.label).tag($0.id) }
+            }
+        } header: {
+            Text("Modelo (opcional)")
+        } footer: {
+            Text("Modelo e esforço de raciocínio do Claude. Padrão = o que o CLI já usa.")
+        }
+    }
+
     private var promptSection: some View {
         Section("Prompt") {
             // Mínimo ~3 linhas de altura.
@@ -205,7 +233,7 @@ struct NewSessionView: View {
         isLaunching = true
         defer { isLaunching = false }
         do {
-            let session = try await api.createSession(machine: machine, agent: agent, prompt: prompt, cwd: cwd)
+            let session = try await api.createSession(machine: machine, agent: agent, prompt: prompt, cwd: cwd, model: model, effort: effort)
             onCreated(session)
         } catch let CutuqueError.server(status, message) {
             // 504 tem UX própria: a sessão pode aparecer na lista mesmo assim.

@@ -6,10 +6,32 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
+
+var (
+	// Effort do claude: só os níveis válidos passam (--effort <level>).
+	validEffortLevel = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
+	// Model: alias (opus/sonnet/haiku/fable) ou nome completo (claude-...). Padrão
+	// estrito — defesa em profundidade além do single-quote (SEC-101).
+	modelNamePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,40}$`)
+)
+
+// modelEffortFlags devolve as flags --model/--effort do claude, VALIDADAS: só
+// valores conhecidos passam; ausente/inválido → nada.
+func modelEffortFlags(model, effort string) []string {
+	var f []string
+	if modelNamePattern.MatchString(model) {
+		f = append(f, "--model", model)
+	}
+	if validEffortLevel[effort] {
+		f = append(f, "--effort", effort)
+	}
+	return f
+}
 
 // closeWaitTimeout é quanto Close espera o processo sair sozinho (após fechar
 // stdin/stdout) antes de matar com SIGKILL. Sem esse teto, um filho pendurado
@@ -133,7 +155,7 @@ func (h *Handle) SendUserMessage(text string) error {
 // cwd é a pasta onde o `claude` roda; vazio → home (comportamento atual).
 type Target interface {
 	Name() string
-	Start(ctx context.Context, resumeID, cwd string) (*Handle, error)
+	Start(ctx context.Context, resumeID, cwd, model, effort string) (*Handle, error)
 }
 
 // LocalTarget roda o Claude Code como um processo local, em modo stream-json
@@ -184,8 +206,10 @@ func (t *LocalTarget) Name() string { return t.name }
 // encerra o processo (via cancelamento do ctx + close do stdin) e libera os
 // recursos. resumeID != "" continua a conversa existente. cwd != "" muda o
 // diretório de trabalho do processo (vazio → home, herdado do hub).
-func (t *LocalTarget) Start(ctx context.Context, resumeID, cwd string) (*Handle, error) {
-	cmd := exec.CommandContext(ctx, t.prog, t.buildArgs(resumeID)...)
+func (t *LocalTarget) Start(ctx context.Context, resumeID, cwd, model, effort string) (*Handle, error) {
+	// model/effort (quando escolhidos no app) viram flags extras do claude.
+	args := append(t.buildArgs(resumeID), modelEffortFlags(model, effort)...)
+	cmd := exec.CommandContext(ctx, t.prog, args...)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -282,8 +306,19 @@ func (t *SSHTarget) Name() string { return t.name }
 // Fechar o Handle fecha o stdin do ssh local (EOF chega ao `claude` remoto) e
 // espera o processo ssh terminar — mesmo shape do LocalTarget.Start. cwd != ""
 // vira um `cd <cwd> &&` antes do comando remoto (ver remoteClaudeCommand).
-func (t *SSHTarget) Start(ctx context.Context, resumeID, cwd string) (*Handle, error) {
-	cmd := exec.CommandContext(ctx, t.prog, t.buildArgs(t.dest, t.remoteCmd, resumeID, cwd)...)
+func (t *SSHTarget) Start(ctx context.Context, resumeID, cwd, model, effort string) (*Handle, error) {
+	sshArgs := t.buildArgs(t.dest, t.remoteCmd, resumeID, cwd)
+	// model/effort entram como MAIS parâmetros posicionais do `exec "$0" "$@"`
+	// remoto (single-quoted, mesmo escape do SEC-101), anexados ao comando remoto
+	// (último arg). Só quando escolhidos, então o fake dos testes ("", "") não muda.
+	if extra := modelEffortFlags(model, effort); len(extra) > 0 && len(sshArgs) > 0 {
+		q := make([]string, len(extra))
+		for i, a := range extra {
+			q[i] = singleQuote(a)
+		}
+		sshArgs[len(sshArgs)-1] += " " + strings.Join(q, " ")
+	}
+	cmd := exec.CommandContext(ctx, t.prog, sshArgs...)
 	// Mesma allowlist do LocalTarget (SEC-006): o processo ssh NÃO herda o
 	// ambiente do hub além do necessário. HOME é essencial para o ssh achar
 	// ~/.ssh/config, as chaves privadas e o known_hosts.

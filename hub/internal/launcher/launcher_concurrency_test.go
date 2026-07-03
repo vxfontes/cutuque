@@ -38,7 +38,7 @@ func TestConcurrentApproveDenyWritesSingleResponse(t *testing.T) {
 	tgt := &scriptTarget{name: "macbook", run: greedyPermissionScript, captured: make(chan string, 4)}
 	l, reg := newTestLauncher(tgt)
 
-	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "faça algo", ""); err != nil {
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "faça algo", "", "", ""); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	waitFor(t, func() bool {

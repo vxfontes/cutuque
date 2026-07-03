@@ -36,7 +36,7 @@ const (
 type scriptTarget struct{ name string }
 
 func (s scriptTarget) Name() string { return s.name }
-func (s scriptTarget) Start(_ context.Context, _, _ string) (*claudecode.Handle, error) {
+func (s scriptTarget) Start(_ context.Context, _, _, _, _ string) (*claudecode.Handle, error) {
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
 	go func() {

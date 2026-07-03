@@ -39,6 +39,7 @@ type fakeLauncher struct {
 	adoptErr     error
 
 	gotMachine, gotAgent, gotPrompt, gotCwd string
+	gotModel, gotEffort                     string
 	gotApproveID, gotDenyID                 string
 	gotInputID, gotInputText                string
 	gotRemoveID                             string
@@ -110,8 +111,9 @@ func (f *fakeLauncher) Adopt(machine, id, cwd, title string) (session.Session, e
 	return f.adoptSession, f.adoptErr
 }
 
-func (f *fakeLauncher) Launch(_ context.Context, machine, agent, prompt, cwd string) (session.Session, error) {
+func (f *fakeLauncher) Launch(_ context.Context, machine, agent, prompt, cwd, model, effort string) (session.Session, error) {
 	f.gotMachine, f.gotAgent, f.gotPrompt, f.gotCwd = machine, agent, prompt, cwd
+	f.gotModel, f.gotEffort = model, effort
 	return f.launchSession, f.launchErr
 }
 func (f *fakeLauncher) Approve(id string) error { f.gotApproveID = id; return f.approveErr }

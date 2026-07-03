@@ -193,11 +193,14 @@ struct APIClient {
         let agent: String
         let prompt: String
         let cwd: String?
+        let model: String?  // alias/nome do modelo (nil = default do claude)
+        let effort: String? // low|medium|high|xhigh|max (nil = default)
     }
 
     /// Dispara uma nova sessão. `201` → Session; `400`/`504` → `CutuqueError.server`.
     /// `cwd` opcional: pasta onde o claude roda; vazio/nil = home da máquina.
-    func createSession(machine: String, agent: String, prompt: String, cwd: String? = nil) async throws -> Session {
+    func createSession(machine: String, agent: String, prompt: String, cwd: String? = nil,
+                       model: String? = nil, effort: String? = nil) async throws -> Session {
         var request = URLRequest(url: baseURL.appendingPathComponent("sessions"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -206,7 +209,9 @@ struct APIClient {
         let trimmedCwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = CreateSessionBody(
             machine: machine, agent: agent, prompt: prompt,
-            cwd: (trimmedCwd?.isEmpty ?? true) ? nil : trimmedCwd
+            cwd: (trimmedCwd?.isEmpty ?? true) ? nil : trimmedCwd,
+            model: (model?.isEmpty ?? true) ? nil : model,
+            effort: (effort?.isEmpty ?? true) ? nil : effort
         )
         request.httpBody = try JSONEncoder().encode(body)
 
