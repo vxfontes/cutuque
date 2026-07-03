@@ -1,0 +1,40 @@
+# Deploy do Cutuque Hub no ZimaOS (192.0.2.10), Fase 5.
+#
+# Ver docs/12-deploy-zimaos.md para o passo a passo completo (clonar, criar
+# ./config/hub.env + ./config/key.p8, subir, healthcheck, rollback).
+
+services:
+  cutuque-hub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cutuque-hub
+    # host: o hub precisa bindar DIRETO na interface Tailscale
+    # (192.0.2.10, ver internal/config CUTUQUE_BIND) — sem isso, o
+    # bridge network padrão do Docker exigiria port-forward manual e o hub
+    # ficaria acessível só via a rede interna do Docker, não na Tailscale.
+    network_mode: host
+    # restart always: o hub deve voltar sozinho depois de reboot do ZimaOS ou
+    # crash do processo — é o serviço que segura TODAS as sessões de agente
+    # (docs/03) e o único canal de notificação (APNs); ninguém deve precisar
+    # entrar por ssh para religar manualmente.
+    restart: always
+    env_file:
+      - ./config/hub.env
+    volumes:
+      # Credencial APNs (.p8) — nunca versionada (ver .gitignore), montada
+      # read-only. O caminho dentro do container tem que casar com
+      # CUTUQUE_APNS_KEY_PATH no hub.env (ex.: /config/key.p8).
+      - ./config/key.p8:/config/key.p8:ro
+      # ~/.ssh do host, read-only: é de onde o `ssh` DENTRO do container lê a
+      # chave privada, o known_hosts e (se usado) o ~/.ssh/config com os
+      # aliases passados em CUTUQUE_SSH_TARGETS (ex. "remote-host"). No
+      # ZimaOS a sessão de gerência roda como root com HOME=/DATA (recon da
+      # Fase 5), então o path real do host é `/DATA/.ssh` (ou onde a chave
+      # server->MacBook foi colocada, ex. /DATA/AppData/cutuque/ssh/ — nesse
+      # caso ajuste o bind mount abaixo para apontar pra lá em vez de
+      # `/DATA/.ssh`). O container roda como root (ver Dockerfile) justamente
+      # para conseguir ler essa chave com as permissões 600 herdadas do host.
+      - /DATA/.ssh:/root/.ssh:ro
+    # A porta 8787 já é exposta via host network (network_mode: host) — sem
+    # necessidade de "ports:" aqui.

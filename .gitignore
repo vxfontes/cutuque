@@ -17,6 +17,11 @@ secrets/
 /app/**/*.xcuserstate
 DerivedData/
 
-# Credenciais locais (APNs .p8 etc)
-/config/
+# Credenciais locais (hub.env, key.p8 etc) — mas os templates *.example
+# versionam normalmente (Fase 5, docs/12-deploy-zimaos.md). Precisa ser
+# `/config/*` (não `/config/`): excluir o DIRETÓRIO impede git de reconsiderar
+# arquivos dentro dele mesmo com "!", só excluir os arquivos permite a
+# negação abaixo.
+/config/*
+!/config/*.example
 /app/build/
