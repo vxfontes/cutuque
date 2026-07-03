@@ -44,9 +44,10 @@ func TestShutdownClosesAllHandlesAndReturns(t *testing.T) {
 		t.Fatal("Shutdown travou esperando as sessões encerrarem")
 	}
 
-	// Handle removido: SendText já não acha canal vivo.
-	if err := l.SendText(sid, "oi"); err != ErrNoHandle {
-		t.Errorf("SendText após Shutdown = %v, quero ErrNoHandle", err)
+	// Após Shutdown, a porta está fechada: SendText tenta retomar (sem handle
+	// vivo) mas o resume é recusado com ErrShuttingDown (não spawna novo processo).
+	if err := l.SendText(sid, "oi"); err != ErrShuttingDown {
+		t.Errorf("SendText após Shutdown = %v, quero ErrShuttingDown", err)
 	}
 
 	// Chamada tardia é segura (idempotente o suficiente: não deve travar nem

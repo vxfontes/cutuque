@@ -180,14 +180,14 @@ func TestLocalTargetExecsCommand(t *testing.T) {
 	// LocalTarget genérico rodando `cat` sobre a fixture prova que a execução
 	// de comando local e o pipe de stdout funcionam.
 	path := filepath.Join("testdata", "fixture-simple.jsonl")
-	tgt := newLocalCommand("macbook", "cat", func() []string {
+	tgt := newLocalCommand("macbook", "cat", func(string) []string {
 		return []string{path}
 	})
 	if tgt.Name() != "macbook" {
 		t.Errorf("Name() = %q, quero \"macbook\"", tgt.Name())
 	}
 
-	h, err := tgt.Start(context.Background())
+	h, err := tgt.Start(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}

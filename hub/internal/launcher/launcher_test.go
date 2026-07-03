@@ -26,7 +26,7 @@ type scriptTarget struct {
 
 func (s *scriptTarget) Name() string { return s.name }
 
-func (s *scriptTarget) Start(ctx context.Context) (*claudecode.Handle, error) {
+func (s *scriptTarget) Start(_ context.Context, _ string) (*claudecode.Handle, error) {
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
 	go func() {
@@ -222,12 +222,16 @@ func TestApproveStaleWhenNotNeedsYou(t *testing.T) {
 	}
 }
 
-func TestSendTextNoHandle(t *testing.T) {
-	l, reg := newTestLauncher(nil)
+// TestSendTextEndedResumes: sessão encerrada (sem handle vivo) → SendText tenta
+// RETOMAR (--resume) na máquina da sessão. Sem target registrado para essa
+// máquina, o caminho de resume falha com ErrUnknownMachine (não ErrNoHandle —
+// a semântica antiga). Prova que SendText não erra "sem canal", e sim resume.
+func TestSendTextEndedResumes(t *testing.T) {
+	l, reg := newTestLauncher(nil) // sem targets
 	now := time.Now()
-	reg.Add(session.Session{ID: "s", State: session.StateDone, CreatedAt: now, UpdatedAt: now})
-	if err := l.SendText("s", "continue"); err != ErrNoHandle {
-		t.Errorf("err = %v, quero ErrNoHandle", err)
+	reg.Add(session.Session{ID: "s", Machine: "macbook", State: session.StateDone, CreatedAt: now, UpdatedAt: now})
+	if err := l.SendText("s", "continue"); err != ErrUnknownMachine {
+		t.Errorf("err = %v, quero ErrUnknownMachine (caminho de resume)", err)
 	}
 }
 

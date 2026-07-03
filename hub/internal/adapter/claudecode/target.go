@@ -127,9 +127,12 @@ func (h *Handle) SendUserMessage(text string) error {
 // Target é uma máquina/canal onde uma sessão do Claude Code é lançada e
 // observada. Start dispara a sessão e devolve um Handle bidirecional; o prompt
 // inicial é enviado por quem lança, via Handle.SendUserMessage.
+// resumeID != "" → continua a conversa existente (claude --resume <id>),
+// preservando o contexto do turno anterior (mesmo session_id — verificado na
+// CLI 2.1.199). Vazio → sessão nova.
 type Target interface {
 	Name() string
-	Start(ctx context.Context) (*Handle, error)
+	Start(ctx context.Context, resumeID string) (*Handle, error)
 }
 
 // LocalTarget roda o Claude Code como um processo local, em modo stream-json
@@ -143,26 +146,33 @@ type Target interface {
 type LocalTarget struct {
 	name      string
 	prog      string
-	buildArgs func() []string
+	buildArgs func(resumeID string) []string
+}
+
+// claudeFlags monta as flags do `claude` verificadas, com `--resume <id>` quando
+// resumeID != "" (continuar a conversa anterior).
+func claudeFlags(resumeID string) []string {
+	args := []string{"-p"}
+	if resumeID != "" {
+		args = append(args, "--resume", resumeID)
+	}
+	return append(args,
+		"--input-format", "stream-json",
+		"--output-format", "stream-json",
+		"--permission-mode", "default",
+		"--permission-prompt-tool", "stdio",
+		"--verbose",
+	)
 }
 
 // NewLocalTarget cria um LocalTarget que roda o `claude` real localmente.
 func NewLocalTarget(name string) *LocalTarget {
-	return newLocalCommand(name, "claude", func() []string {
-		return []string{
-			"-p",
-			"--input-format", "stream-json",
-			"--output-format", "stream-json",
-			"--permission-mode", "default",
-			"--permission-prompt-tool", "stdio",
-			"--verbose",
-		}
-	})
+	return newLocalCommand(name, "claude", claudeFlags)
 }
 
 // newLocalCommand cria um LocalTarget parametrizável (usado em teste para trocar
 // `claude` por um comando como `cat` de uma fixture).
-func newLocalCommand(name, prog string, buildArgs func() []string) *LocalTarget {
+func newLocalCommand(name, prog string, buildArgs func(resumeID string) []string) *LocalTarget {
 	return &LocalTarget{name: name, prog: prog, buildArgs: buildArgs}
 }
 
@@ -171,9 +181,9 @@ func (t *LocalTarget) Name() string { return t.name }
 
 // Start executa o comando e liga stdin/stdout ao Handle. Fechar o Handle
 // encerra o processo (via cancelamento do ctx + close do stdin) e libera os
-// recursos.
-func (t *LocalTarget) Start(ctx context.Context) (*Handle, error) {
-	cmd := exec.CommandContext(ctx, t.prog, t.buildArgs()...)
+// recursos. resumeID != "" continua a conversa existente.
+func (t *LocalTarget) Start(ctx context.Context, resumeID string) (*Handle, error) {
+	cmd := exec.CommandContext(ctx, t.prog, t.buildArgs(resumeID)...)
 	// Ambiente mínimo explícito: o filho NÃO herda o ambiente do hub, que
 	// carrega CUTUQUE_TOKEN (e, no futuro, credenciais APNs). Sem isso, um
 	// `printenv` — que roda sem passar pelo gate de aprovação (docs/10,
@@ -234,7 +244,7 @@ type SSHTarget struct {
 	dest      string // destino ssh: alias do ~/.ssh/config OU user@host
 	remoteCmd string // caminho/comando do claude remoto (default: "claude")
 	prog      string // programa ssh local (parametrizável em teste)
-	buildArgs func(dest, remoteCmd string) []string
+	buildArgs func(dest, remoteCmd, resumeID string) []string
 }
 
 // NewSSHTarget cria um SSHTarget que conecta a `dest` (alias do ~/.ssh/config
@@ -247,7 +257,7 @@ func NewSSHTarget(name, dest string) *SSHTarget {
 // newSSHCommand cria um SSHTarget parametrizável (usado em teste para trocar o
 // binário `ssh` local por um fake — ex. `cat`/`env` sobre uma fixture — e
 // inspecionar/injetar o stream, no mesmo espírito de newLocalCommand).
-func newSSHCommand(name, dest, remoteCmd, prog string, buildArgs func(dest, remoteCmd string) []string) *SSHTarget {
+func newSSHCommand(name, dest, remoteCmd, prog string, buildArgs func(dest, remoteCmd, resumeID string) []string) *SSHTarget {
 	return &SSHTarget{name: name, dest: dest, remoteCmd: remoteCmd, prog: prog, buildArgs: buildArgs}
 }
 
@@ -266,8 +276,8 @@ func (t *SSHTarget) Name() string { return t.name }
 // Start conecta via ssh e liga stdin/stdout (pipes limpos, sem PTY) ao Handle.
 // Fechar o Handle fecha o stdin do ssh local (EOF chega ao `claude` remoto) e
 // espera o processo ssh terminar — mesmo shape do LocalTarget.Start.
-func (t *SSHTarget) Start(ctx context.Context) (*Handle, error) {
-	cmd := exec.CommandContext(ctx, t.prog, t.buildArgs(t.dest, t.remoteCmd)...)
+func (t *SSHTarget) Start(ctx context.Context, resumeID string) (*Handle, error) {
+	cmd := exec.CommandContext(ctx, t.prog, t.buildArgs(t.dest, t.remoteCmd, resumeID)...)
 	// Mesma allowlist do LocalTarget (SEC-006): o processo ssh NÃO herda o
 	// ambiente do hub além do necessário. HOME é essencial para o ssh achar
 	// ~/.ssh/config, as chaves privadas e o known_hosts.
@@ -301,7 +311,7 @@ func (t *SSHTarget) Start(ctx context.Context) (*Handle, error) {
 //     protocolo stream-json — um PTY reescreveria/misturaria os bytes.
 //   - o comando remoto roda o claude dentro de um login shell (ver comentário
 //     do SSHTarget).
-func sshClaudeArgs(dest, remoteCmd string) []string {
+func sshClaudeArgs(dest, remoteCmd, resumeID string) []string {
 	return []string{
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=10", // não pendura no connect de host lento/inalcançável (review F5, #1)
@@ -311,7 +321,7 @@ func sshClaudeArgs(dest, remoteCmd string) []string {
 		"-T",
 		"--", // separador: um dest começando com "-" nunca é reinterpretado como opção (review F5, injeção)
 		dest,
-		remoteClaudeCommand(remoteCmd),
+		remoteClaudeCommand(remoteCmd, resumeID),
 	}
 }
 
@@ -319,15 +329,18 @@ func sshClaudeArgs(dest, remoteCmd string) []string {
 // (para sobreviver à concatenação por espaço que o próprio ssh faz dos args
 // finais antes de mandar ao shell de login remoto): `bash -lc '<claude com as
 // flags verificadas>'`.
-func remoteClaudeCommand(claudeCmd string) string {
-	claudeArgs := []string{
-		claudeCmd, "-p",
+func remoteClaudeCommand(claudeCmd, resumeID string) string {
+	claudeArgs := []string{claudeCmd, "-p"}
+	if resumeID != "" {
+		claudeArgs = append(claudeArgs, "--resume", resumeID)
+	}
+	claudeArgs = append(claudeArgs,
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
 		"--permission-mode", "default",
 		"--permission-prompt-tool", "stdio",
 		"--verbose",
-	}
+	)
 	return "bash -lc " + singleQuote(strings.Join(claudeArgs, " "))
 }
 

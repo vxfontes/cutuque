@@ -152,7 +152,7 @@ func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt string) (s
 	// abaixo; defer wg.Done na goroutine no caminho feliz). Usa l.baseCtx (não o
 	// ctx do request, que é Background e nunca cancela) para que o Shutdown mate
 	// o processo em voo cancelando baseCtx.
-	handle, err := tgt.Start(l.baseCtx)
+	handle, err := tgt.Start(l.baseCtx, "")
 	if err != nil {
 		l.wg.Done()
 		return session.Session{}, err
@@ -258,22 +258,70 @@ func (l *Launcher) respond(id string, allow bool) error {
 	return nil
 }
 
-// SendText envia um input textual arbitrário à sessão viva e aplica
-// user_responded (→ running). Exige um canal vivo (ErrNoHandle caso contrário).
+// SendText continua a conversa da sessão. Se há um processo VIVO (turno em
+// andamento / needs_you), manda o texto pro stdin dele. Se a sessão já ENCERROU
+// (done/error/idle, sem processo), retoma a MESMA conversa com `claude --resume`
+// — preservando o contexto (mesmo session_id, verificado na CLI 2.1.199). É o
+// que dá continuidade: perguntar de novo responde na mesma sessão.
 func (l *Launcher) SendText(id, text string) error {
-	if _, ok := l.reg.Get(id); !ok {
+	s, ok := l.reg.Get(id)
+	if !ok {
 		return ErrUnknownSession
 	}
 	l.mu.Lock()
-	h, ok := l.handles[id]
+	h, live := l.handles[id]
 	l.mu.Unlock()
-	if !ok {
-		return ErrNoHandle
+
+	if live {
+		if err := h.SendUserMessage(text); err != nil {
+			return err
+		}
+		l.eng.Apply(event.Event{SessionID: id, Type: event.UserResponded, At: time.Now()})
+		return nil
 	}
-	if err := h.SendUserMessage(text); err != nil {
+	// Sessão encerrada: retoma com --resume, roteando tudo para o MESMO id.
+	return l.resume(s, text)
+}
+
+// resume retoma uma conversa encerrada rodando `claude --resume <id>` na mesma
+// máquina, roteando TODO o stream para o mesmo session id (forcedID). Espelha o
+// Launch, mas não espera um novo session_started nem checa teto (é continuação).
+func (l *Launcher) resume(s session.Session, prompt string) error {
+	tgt, ok := l.targets[s.Machine]
+	if !ok {
+		return ErrUnknownMachine
+	}
+
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		return ErrShuttingDown
+	}
+	l.wg.Add(1)
+	l.mu.Unlock()
+
+	handle, err := tgt.Start(l.baseCtx, s.ID) // --resume s.ID
+	if err != nil {
+		l.wg.Done()
 		return err
 	}
-	l.eng.Apply(event.Event{SessionID: id, Type: event.UserResponded, At: time.Now()})
+	if err := handle.SendUserMessage(prompt); err != nil {
+		_ = handle.Close()
+		l.wg.Done()
+		return err
+	}
+	// Registra o handle já para o id conhecido: aprovar/negar do turno retomado
+	// funciona mesmo antes do session_started chegar.
+	l.setHandle(s.ID, handle)
+
+	app := &launchApplier{l: l, handle: handle, forcedID: s.ID}
+	runner := claudecode.NewRunner(app)
+	go func() {
+		defer l.wg.Done()
+		_ = runner.Run(l.baseCtx, handle, claudecode.Meta{Machine: s.Machine, Prompt: prompt})
+		l.removeHandle(s.ID)
+		_ = handle.Close()
+	}()
 	return nil
 }
 
@@ -344,9 +392,15 @@ type launchApplier struct {
 	handle    *claudecode.Handle
 	started   chan session.Session
 	sessionID string // preenchido no session_started (usado na limpeza ao fim)
+	forcedID  string // resume: força todos os eventos para este id (continuidade)
 }
 
 func (a *launchApplier) Apply(ev event.Event) {
+	// Resume: garante que TODO evento vá para a sessão que estamos continuando,
+	// independente do que o claude reporte no init (defesa; o id é o mesmo).
+	if a.forcedID != "" {
+		ev.SessionID = a.forcedID
+	}
 	switch ev.Type {
 	case event.PermissionRequested:
 		a.l.setPending(ev.SessionID, pending{requestID: ev.ControlID, input: ev.Input})

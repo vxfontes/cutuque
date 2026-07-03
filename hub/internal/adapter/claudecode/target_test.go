@@ -19,8 +19,8 @@ import (
 // Usa o processo REAL (cat espera EOF do stdin) — é o cenário que os fakes de
 // io.Pipe não exercitam. Roda sob -race.
 func TestHandleCloseConcurrentIsSafe(t *testing.T) {
-	tgt := newLocalCommand("m", "cat", func() []string { return nil })
-	h, err := tgt.Start(context.Background())
+	tgt := newLocalCommand("m", "cat", func(string) []string { return nil })
+	h, err := tgt.Start(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -46,8 +46,8 @@ func TestLocalTargetDoesNotLeakHubEnv(t *testing.T) {
 	t.Setenv("CUTUQUE_TOKEN", "super-secreto-sentinela")
 	t.Setenv("CUTUQUE_TEST_SENTINELA", "vazou")
 
-	tgt := newLocalCommand("m", "env", func() []string { return nil })
-	h, err := tgt.Start(context.Background())
+	tgt := newLocalCommand("m", "env", func(string) []string { return nil })
+	h, err := tgt.Start(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestSetRemoteClaudeCmdOverridesDefault(t *testing.T) {
 // reais passados ao `ssh`: BatchMode, keepalive, -T (sem PTY), destino, e o
 // comando remoto num login shell.
 func TestSSHClaudeArgsHaveKeepaliveBatchModeNoPTY(t *testing.T) {
-	args := sshClaudeArgs("macmini", defaultRemoteClaudeCmd)
+	args := sshClaudeArgs("macmini", defaultRemoteClaudeCmd, "")
 
 	wantPrefix := []string{
 		"-o", "BatchMode=yes",
@@ -152,7 +152,7 @@ func TestSSHClaudeArgsHaveKeepaliveBatchModeNoPTY(t *testing.T) {
 // TestRemoteClaudeCommandUsesConfiguredPath garante que trocar o comando/caminho
 // do claude remoto (SetRemoteClaudeCmd) se reflete no comando enviado por ssh.
 func TestRemoteClaudeCommandUsesConfiguredPath(t *testing.T) {
-	got := remoteClaudeCommand("/Users/example/.local/bin/claude")
+	got := remoteClaudeCommand("/Users/example/.local/bin/claude", "")
 	if !strings.Contains(got, "/Users/example/.local/bin/claude") {
 		t.Errorf("remoteClaudeCommand = %q, quero usar o caminho configurado", got)
 	}
@@ -170,13 +170,13 @@ func TestRemoteClaudeCommandUsesConfiguredPath(t *testing.T) {
 func TestSSHTargetRunnerProcessesFixtureViaFakeProgram(t *testing.T) {
 	path := filepath.Join("testdata", "fixture-simple.jsonl")
 	tgt := newSSHCommand("macmini", "dest-irrelevante-para-o-fake", defaultRemoteClaudeCmd, "cat",
-		func(dest, remoteCmd string) []string { return []string{path} })
+		func(dest, remoteCmd, _ string) []string { return []string{path} })
 
 	if tgt.Name() != "macmini" {
 		t.Errorf("Name() = %q, quero \"macmini\"", tgt.Name())
 	}
 
-	h, err := tgt.Start(context.Background())
+	h, err := tgt.Start(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -208,9 +208,9 @@ func TestSSHTargetDoesNotLeakHubEnv(t *testing.T) {
 	t.Setenv("CUTUQUE_TEST_SENTINELA", "vazou")
 
 	tgt := newSSHCommand("macmini", "dest-irrelevante-para-o-fake", defaultRemoteClaudeCmd, "env",
-		func(dest, remoteCmd string) []string { return nil })
+		func(dest, remoteCmd, _ string) []string { return nil })
 
-	h, err := tgt.Start(context.Background())
+	h, err := tgt.Start(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
