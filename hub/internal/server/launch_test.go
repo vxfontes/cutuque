@@ -22,8 +22,11 @@ type fakeLauncher struct {
 	denyErr       error
 	sendErr       error
 
-	machines  []string
-	removeErr error
+	machines   []string
+	removeErr  error
+	historyErr error
+	dirListing session.DirListing
+	dirsErr    error
 
 	discovered   []session.Discovered
 	discoverErr  error
@@ -39,6 +42,8 @@ type fakeLauncher struct {
 	gotApproveID, gotDenyID                 string
 	gotInputID, gotInputText                string
 	gotRemoveID                             string
+	gotHistoryID                            string
+	gotDirsMachine, gotDirsPath             string
 	gotDiscoverMachine                      string
 	gotAdoptMachine, gotAdoptID             string
 	gotAdoptCwd, gotAdoptTitle              string
@@ -49,6 +54,18 @@ func (f *fakeLauncher) Machines() []string { return f.machines }
 func (f *fakeLauncher) Remove(id string) error {
 	f.gotRemoveID = id
 	return f.removeErr
+}
+func (f *fakeLauncher) Resolve(id string) error {
+	f.gotRemoveID = id
+	return f.removeErr
+}
+func (f *fakeLauncher) ImportHistory(id string) error {
+	f.gotHistoryID = id
+	return f.historyErr
+}
+func (f *fakeLauncher) ListDirs(machine, path string) (session.DirListing, error) {
+	f.gotDirsMachine, f.gotDirsPath = machine, path
+	return f.dirListing, f.dirsErr
 }
 
 func (f *fakeLauncher) Discover(machine string) ([]session.Discovered, error) {
@@ -77,6 +94,10 @@ func (f *fakeLauncher) TmuxResize(machine, target string, cols, rows int) error 
 }
 func (f *fakeLauncher) TmuxKey(machine, target, key string) error {
 	f.gotTmuxTarget, f.gotTmuxText = target, key
+	return f.tmuxErr
+}
+func (f *fakeLauncher) TmuxKill(machine, target string) error {
+	f.gotTmuxTarget = target
 	return f.tmuxErr
 }
 
@@ -373,6 +394,37 @@ func TestLiveListsSessions(t *testing.T) {
 	}
 }
 
+func TestDirsListsFolders(t *testing.T) {
+	f := &fakeLauncher{dirListing: session.DirListing{
+		Path:   "/Users/example",
+		Parent: "/Users",
+		Dirs:   []session.DirEntry{{Name: "Desktop", Path: "/Users/example/Desktop"}},
+	}}
+	rec := do(t, f, http.MethodGet, "/machines/macbook/dirs?path=/Users/example", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, quero 200 (corpo: %s)", rec.Code, rec.Body.String())
+	}
+	if f.gotDirsMachine != "macbook" || f.gotDirsPath != "/Users/example" {
+		t.Errorf("machine/path repassados errados: %q %q", f.gotDirsMachine, f.gotDirsPath)
+	}
+	var resp session.DirListing
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("corpo inválido: %v", err)
+	}
+	if resp.Parent != "/Users" || len(resp.Dirs) != 1 || resp.Dirs[0].Name != "Desktop" {
+		t.Errorf("listing = %+v", resp)
+	}
+}
+
+func TestDirsUnknownMachine(t *testing.T) {
+	f := &fakeLauncher{dirsErr: launcher.ErrUnknownMachine}
+	rec := do(t, f, http.MethodGet, "/machines/x/dirs", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, quero 404", rec.Code)
+	}
+	assertErrorCode(t, rec.Body.Bytes(), "unknown_machine")
+}
+
 func TestLiveDiscoverFailed(t *testing.T) {
 	f := &fakeLauncher{liveErr: launcher.ErrDiscoverFailed}
 	rec := do(t, f, http.MethodGet, "/machines/macbook/live", "")
@@ -436,6 +488,25 @@ func TestTmuxKeysBadRequest(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("body %q => %d, quero 400", body, rec.Code)
 		}
+	}
+}
+
+func TestTmuxKillPane(t *testing.T) {
+	f := &fakeLauncher{}
+	rec := do(t, f, http.MethodPost, "/machines/macbook/tmux/kill", `{"target":"/tmp/tmux-501/main\t%0"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, quero 200 (corpo: %s)", rec.Code, rec.Body.String())
+	}
+	if f.gotTmuxTarget != "/tmp/tmux-501/main\t%0" {
+		t.Errorf("TmuxKill recebeu target=%q", f.gotTmuxTarget)
+	}
+}
+
+func TestTmuxKillBadRequest(t *testing.T) {
+	f := &fakeLauncher{}
+	rec := do(t, f, http.MethodPost, "/machines/macbook/tmux/kill", `{"target":""}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("target vazio => %d, quero 400", rec.Code)
 	}
 }
 

@@ -23,14 +23,18 @@ type Launcher interface {
 	SendText(id, text string) error
 	Machines() []string
 	Remove(id string) error
+	Resolve(id string) error
+	ImportHistory(id string) error
 	Discover(machine string) ([]session.Discovered, error)
 	Live(machine string) ([]session.Discovered, error)
+	ListDirs(machine, path string) (session.DirListing, error)
 	Adopt(machine, id, cwd, title string) (session.Session, error)
 	TmuxList(machine string) ([]session.Discovered, error)
 	TmuxCapture(machine, target string) (string, error)
 	TmuxSend(machine, target, text string) error
 	TmuxKey(machine, target, key string) error
 	TmuxResize(machine, target string, cols, rows int) error
+	TmuxKill(machine, target string) error
 }
 
 // tmuxKeyRequest é o corpo de POST /machines/{machine}/tmux/key.
@@ -70,6 +74,37 @@ type tmuxResizeRequest struct {
 	Rows   int    `json:"rows"`
 }
 
+// tmuxKillRequest é o corpo de POST /machines/{machine}/tmux/kill.
+type tmuxKillRequest struct {
+	Target string `json:"target"`
+}
+
+// TmuxKillHandler encerra o pane alvo (kill-pane): fecha o Claude daquele
+// terminal. Destrutivo — o app confirma antes de chamar.
+//
+//	POST /machines/{machine}/tmux/kill {"target":"<socket>\t<pane>"} → 200 ok |
+//	400 bad_request | 404 unknown_machine | 502 tmux_failed
+func TmuxKillHandler(lch Launcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		machine := r.PathValue("machine")
+		r.Body = http.MaxBytesReader(w, r.Body, maxLaunchBody)
+		var req tmuxKillRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Target == "" {
+			writeJSONError(w, http.StatusBadRequest, "bad_request")
+			return
+		}
+		err := lch.TmuxKill(machine, req.Target)
+		switch {
+		case errors.Is(err, launcher.ErrUnknownMachine):
+			writeJSONError(w, http.StatusNotFound, "unknown_machine")
+		case err != nil:
+			writeJSONError(w, http.StatusBadGateway, "tmux_failed")
+		default:
+			writeOK(w)
+		}
+	}
+}
+
 // TmuxResizeHandler fixa/restaura o tamanho da janela do pane (para o terminal
 // caber no celular). POST {"target","cols","rows"} → 200 {"ok":true}.
 func TmuxResizeHandler(lch Launcher) http.HandlerFunc {
@@ -99,6 +134,27 @@ func TmuxListHandler(lch Launcher) http.HandlerFunc {
 	return discoveryLikeHandler(func(machine string) ([]session.Discovered, error) {
 		return lch.TmuxList(machine)
 	})
+}
+
+// DirsHandler lista as subpastas de um caminho na máquina, para o seletor de
+// pastas do app navegar as pastas do Mac ao criar uma sessão.
+//
+//	GET /machines/{machine}/dirs?path=/Users/example → 200 {path,parent,dirs}
+//	(path vazio → home da máquina) | 404 unknown_machine | 502 discover_failed
+func DirsHandler(lch Launcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		listing, err := lch.ListDirs(r.PathValue("machine"), r.URL.Query().Get("path"))
+		switch {
+		case errors.Is(err, launcher.ErrUnknownMachine):
+			writeJSONError(w, http.StatusNotFound, "unknown_machine")
+		case err != nil:
+			writeJSONError(w, http.StatusBadGateway, "discover_failed")
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(listing)
+		}
+	}
 }
 
 // TmuxScreenHandler devolve a tela atual do pane (espelho ao vivo).
@@ -244,6 +300,35 @@ func TargetsHandler(lch Launcher) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string][]string{"targets": lch.Machines()})
+	}
+}
+
+// ResolveHandler tira a sessão de needs_you (marca concluída) sem apagá-la.
+//
+//	200 {"ok":true} | 404 unknown_session
+func ResolveHandler(lch Launcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := lch.Resolve(r.PathValue("id")); err != nil {
+			writeJSONError(w, http.StatusNotFound, "unknown_session")
+			return
+		}
+		writeOK(w)
+	}
+}
+
+// HistoryHandler importa, sob demanda, o transcript de uma sessão externa já
+// registrada, para o chat mostrar a conversa ao abrir (em vez de "sem mensagens
+// ainda"). Idempotente no Launcher. O app chama isto ao abrir o detalhe de uma
+// sessão externa; depois relê GET /output para exibir o histórico.
+//
+//	POST /sessions/{id}/history → 200 ok | 404 unknown_session
+func HistoryHandler(lch Launcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := lch.ImportHistory(r.PathValue("id")); err != nil {
+			writeJSONError(w, http.StatusNotFound, "unknown_session")
+			return
+		}
+		writeOK(w)
 	}
 }
 

@@ -13,6 +13,19 @@ func TestParseTmuxJSON(t *testing.T) {
 	}
 }
 
+// TestParseTmuxJSONState: o campo state (lido do terminal) é preservado.
+func TestParseTmuxJSONState(t *testing.T) {
+	out := []byte(`[{"id":"%0","cmd":"claude","cwd":"/p","session":"a","window":"w","state":"running"},{"id":"%1","cmd":"claude","cwd":"/q","session":"b","window":"w","state":"idle"}]`)
+	panes := parseTmuxJSON(out)
+	if len(panes) != 2 || panes[0].State != "running" || panes[1].State != "idle" {
+		t.Fatalf("state não preservado: %+v", panes)
+	}
+	// E vira Discovered.State para o app colorir.
+	if d := TmuxPaneAsDiscovered(panes[0]); d.State != "running" {
+		t.Errorf("Discovered.State = %q, quero running", d.State)
+	}
+}
+
 func TestParseTmuxJSONEmpty(t *testing.T) {
 	for _, in := range []string{"", "  ", "\n", "não-json"} {
 		if got := parseTmuxJSON([]byte(in)); got != nil {
@@ -43,15 +56,19 @@ func TestTmuxPaneAsDiscoveredTitle(t *testing.T) {
 	}
 }
 
-func TestValidTarget(t *testing.T) {
-	for _, ok := range []string{"%0", "%12", "%9999"} {
-		if err := validTarget(ok); err != nil {
-			t.Errorf("validTarget(%q) = %v, quero nil", ok, err)
-		}
+func TestParseTarget(t *testing.T) {
+	// pane simples (servidor default)
+	if s, p, err := parseTarget("%12"); err != nil || s != "" || p != "%12" {
+		t.Errorf("parseTarget(%%12) = (%q,%q,%v)", s, p, err)
 	}
-	for _, bad := range []string{"", "12", "%", "%1a", "$1", "%1; rm -rf ~", "%1 "} {
-		if err := validTarget(bad); err == nil {
-			t.Errorf("validTarget(%q) devia falhar", bad)
+	// composto socket\tpane
+	if s, p, err := parseTarget("/private/tmp/tmux-501/main\t%3"); err != nil || s != "/private/tmp/tmux-501/main" || p != "%3" {
+		t.Errorf("parseTarget composto = (%q,%q,%v)", s, p, err)
+	}
+	// inválidos (pane ou socket fora do formato / injeção)
+	for _, bad := range []string{"", "12", "%1a", "$1", "%1; rm -rf ~", "rel/path\t%1", "/x;rm\t%1"} {
+		if _, _, err := parseTarget(bad); err == nil {
+			t.Errorf("parseTarget(%q) devia falhar", bad)
 		}
 	}
 }

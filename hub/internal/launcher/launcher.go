@@ -99,6 +99,7 @@ type Launcher struct {
 	handles     map[string]*claudecode.Handle // canal stdin/stdout por sessão viva
 	pending     map[string]pending            // permissão aguardando resposta, por sessão
 	maxSessions int                           // teto de sessões concorrentes vivas (SEC-007)
+	histImport  map[string]struct{}           // sessões cujo transcript já foi importado (evita duplicar)
 }
 
 // New cria um Launcher sobre o Engine/Registry dados e o mapa de alvos
@@ -116,6 +117,7 @@ func New(eng *engine.Engine, reg *registry.Registry, targets map[string]claudeco
 		handles:     make(map[string]*claudecode.Handle),
 		pending:     make(map[string]pending),
 		maxSessions: defaultMaxSessions,
+		histImport:  make(map[string]struct{}),
 	}
 }
 
@@ -324,6 +326,24 @@ func (l *Launcher) TmuxKey(machine, target, key string) error {
 	return nil
 }
 
+// TmuxKill encerra o pane alvo (kill-pane): fecha o Claude daquele terminal.
+func (l *Launcher) TmuxKill(machine, target string) error {
+	tgt, ok := l.targets[machine]
+	if !ok {
+		return ErrUnknownMachine
+	}
+	tm, ok := tgt.(claudecode.Tmuxer)
+	if !ok {
+		return ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	if err := tm.TmuxKill(ctx, target); err != nil {
+		return fmt.Errorf("%w: %v", ErrDiscoverFailed, err)
+	}
+	return nil
+}
+
 // Live lista as sessões do Claude Code que estão RODANDO agora na máquina
 // (processo vivo + transcript recente). Mesmos erros/timeout do Discover.
 func (l *Launcher) Live(machine string) ([]session.Discovered, error) {
@@ -358,6 +378,7 @@ func (l *Launcher) Adopt(machine, id, cwd, title string) (session.Session, error
 	if !sessionIDPattern.MatchString(id) {
 		return session.Session{}, ErrInvalidSessionID
 	}
+	l.reg.Undismiss(id) // adoção explícita cancela um "apagar" anterior
 	now := time.Now()
 	s := session.Session{
 		ID:        id,
@@ -366,6 +387,7 @@ func (l *Launcher) Adopt(machine, id, cwd, title string) (session.Session, error
 		Title:     title,
 		State:     session.StateIdle,
 		Cwd:       cwd,
+		External:  true, // adotada (não lançada pelo hub)
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -383,6 +405,37 @@ func (l *Launcher) Adopt(machine, id, cwd, title string) (session.Session, error
 	// Falha (ssh/python/timeout) degrada graciosamente: adota sem histórico.
 	l.importTranscript(tgt, id)
 	return s, nil
+}
+
+// ImportHistory carrega, SOB DEMANDA, o histórico (transcript) de uma sessão já
+// registrada — usado quando a usuária abre no app uma sessão externa (de hook)
+// que não foi lançada nem adotada pelo hub, para o chat mostrar a conversa em vez
+// de "sem mensagens ainda" (ideia da usuária: registrar tudo e dar o recap ao
+// entrar). Idempotente: importa só na primeira vez por sessão (histImport),
+// senão as mensagens duplicariam. Best-effort — falha degrada para "sem histórico".
+func (l *Launcher) ImportHistory(id string) error {
+	s, ok := l.reg.Get(id)
+	if !ok {
+		return ErrUnknownSession
+	}
+	tgt, ok := l.targets[s.Machine]
+	if !ok {
+		return ErrUnknownMachine
+	}
+	// id vira `--resume`/glob num comando remoto lá no adapter: valida o formato.
+	if !sessionIDPattern.MatchString(id) {
+		return ErrInvalidSessionID
+	}
+	l.mu.Lock()
+	if _, done := l.histImport[id]; done {
+		l.mu.Unlock()
+		return nil // já importado nesta vida do hub
+	}
+	l.histImport[id] = struct{}{}
+	l.mu.Unlock()
+
+	l.importTranscript(tgt, id)
+	return nil
 }
 
 // importTranscript lê o transcript da sessão no alvo e o adiciona ao output do
@@ -403,6 +456,34 @@ func (l *Launcher) importTranscript(tgt claudecode.Target, id string) {
 	for _, ch := range chunks {
 		l.reg.AppendOutput(id, ch.Kind, ch.Text)
 	}
+}
+
+// ListDirs lista as subpastas de path na máquina (seletor de pastas do app ao
+// criar uma sessão). path vazio → home da máquina. ErrUnknownMachine se a
+// máquina não existe ou não suporta listar pastas.
+func (l *Launcher) ListDirs(machine, path string) (session.DirListing, error) {
+	tgt, ok := l.targets[machine]
+	if !ok {
+		return session.DirListing{}, ErrUnknownMachine
+	}
+	lister, ok := tgt.(claudecode.DirLister)
+	if !ok {
+		return session.DirListing{}, ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	return lister.ListDirs(ctx, path)
+}
+
+// Resolve tira uma sessão de needs_you marcando-a como concluída (done), sem
+// apagá-la — usado pelo swipe "Concluir" no app quando a usuária já respondeu no
+// terminal. Não marca como dismissed: a sessão pode voltar a precisar de você e
+// cutucar de novo. ErrUnknownSession se não existir.
+func (l *Launcher) Resolve(id string) error {
+	if err := l.reg.UpdateState(id, session.StateDone); err != nil {
+		return ErrUnknownSession
+	}
+	return nil
 }
 
 // Machines devolve os nomes dos alvos registrados, ordenados. targets é fixado

@@ -490,6 +490,43 @@ func TestAdoptTwiceDoesNotDuplicateHistory(t *testing.T) {
 	}
 }
 
+// TestImportHistoryLoadsTranscriptOnce: sessão externa já registrada (por hook)
+// ganha o histórico sob demanda ao abrir no app, e importar duas vezes NÃO
+// duplica (guarda histImport) — ideia da usuária: registrar tudo, recap ao entrar.
+func TestImportHistoryLoadsTranscriptOnce(t *testing.T) {
+	tgt := &scriptTarget{
+		name:     "macbook",
+		captured: make(chan string, 1),
+		transcript: []claudecode.TranscriptChunk{
+			{Kind: event.KindUser, Text: "roda o deploy"},
+			{Kind: event.KindAssistant, Text: "feito"},
+		},
+	}
+	l, reg := newTestLauncher(tgt)
+	id := "7b6ff87d-99ca-4bd4-a0e9-e01a4ba689af"
+	// Sessão pré-registrada por hook (external, sem output ainda).
+	reg.Add(session.Session{ID: id, Machine: "macbook", Agent: "claude-code", State: session.StateNeedsYou, External: true})
+
+	if err := l.ImportHistory(id); err != nil {
+		t.Fatalf("ImportHistory: %v", err)
+	}
+	if err := l.ImportHistory(id); err != nil { // 2ª vez: no-op
+		t.Fatalf("ImportHistory 2: %v", err)
+	}
+	if out := reg.Output(id); len(out) != 2 {
+		t.Fatalf("output = %d chunks, quero 2 (importado UMA vez): %+v", len(out), out)
+	}
+}
+
+// TestImportHistoryUnknownSession: sessão desconhecida → erro (não cria nada).
+func TestImportHistoryUnknownSession(t *testing.T) {
+	tgt := &scriptTarget{name: "macbook", captured: make(chan string, 1)}
+	l, _ := newTestLauncher(tgt)
+	if err := l.ImportHistory("7b6ff87d-99ca-4bd4-a0e9-e01a4ba689af"); err != ErrUnknownSession {
+		t.Errorf("erro = %v, quero ErrUnknownSession", err)
+	}
+}
+
 // TestAdoptTranscriptFailureStillAdopts: falha ao ler o transcript não derruba a
 // adoção — a sessão é registrada mesmo sem histórico (degradação graciosa).
 func TestAdoptTranscriptFailureStillAdopts(t *testing.T) {

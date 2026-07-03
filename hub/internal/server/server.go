@@ -74,16 +74,20 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		// Máquinas disponíveis (picker do app) e apagar sessão (swipe-to-delete).
 		mux.Handle("GET /targets", requireAuth(cfg.Token, TargetsHandler(lch)))
 		mux.Handle("DELETE /sessions/{id}", requireAuth(cfg.Token, DeleteSessionHandler(lch)))
+		mux.Handle("POST /sessions/{id}/resolve", requireAuth(cfg.Token, ResolveHandler(lch)))
+		mux.Handle("POST /sessions/{id}/history", requireAuth(cfg.Token, HistoryHandler(lch)))
 		// Descobrir sessões do Claude já existentes numa máquina + adotar uma
 		// para continuar (acompanhar sessões ativas do Mac).
 		mux.Handle("GET /machines/{machine}/sessions", requireAuth(cfg.Token, DiscoverHandler(lch)))
 		mux.Handle("GET /machines/{machine}/live", requireAuth(cfg.Token, LiveHandler(lch)))
+		mux.Handle("GET /machines/{machine}/dirs", requireAuth(cfg.Token, DirsHandler(lch)))
 		mux.Handle("POST /machines/{machine}/adopt", requireAuth(cfg.Token, AdoptHandler(lch)))
 		// Ponte tmux: observar (screen) e digitar (keys) em sessões de terminal.
 		mux.Handle("GET /machines/{machine}/tmux", requireAuth(cfg.Token, TmuxListHandler(lch)))
 		mux.Handle("GET /machines/{machine}/tmux/screen", requireAuth(cfg.Token, TmuxScreenHandler(lch)))
 		mux.Handle("POST /machines/{machine}/tmux/keys", requireAuth(cfg.Token, TmuxKeysHandler(lch)))
 		mux.Handle("POST /machines/{machine}/tmux/key", requireAuth(cfg.Token, TmuxKeyHandler(lch)))
+		mux.Handle("POST /machines/{machine}/tmux/kill", requireAuth(cfg.Token, TmuxKillHandler(lch)))
 		mux.Handle("POST /machines/{machine}/tmux/resize", requireAuth(cfg.Token, TmuxResizeHandler(lch)))
 	}
 

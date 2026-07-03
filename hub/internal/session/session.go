@@ -35,6 +35,16 @@ type Session struct {
 	// Cwd é a pasta onde o claude roda. Preenchido no launch com pasta e nas
 	// sessões descobertas/adotadas do Mac (para o --resume rodar no dir certo).
 	Cwd string `json:"cwd,omitempty"`
+	// External = sessão que NÃO foi lançada pelo hub (veio de hook do Claude ou
+	// de adoção/tmux). O hub não controla o gate de permissão dela (a resposta é
+	// no terminal), então o notifier não re-cutuca nem cutuca "concluído" a cada
+	// turno — só avisa uma vez que precisa de você.
+	External bool `json:"external,omitempty"`
+	// Pane é o alvo composto do tmux ("<socket>\t<pane>") quando a sessão roda
+	// dentro do tmux (reportado pelo hook via $TMUX/$TMUX_PANE). Vazio = sessão
+	// local fora do tmux. Permite ao app abrir o terminal ao vivo dessa exata
+	// sessão (correlação robusta, mesmo com várias sessões na mesma pasta).
+	Pane string `json:"pane,omitempty"`
 }
 
 // Discovered é uma sessão do Claude Code encontrada no disco de uma máquina
@@ -47,4 +57,22 @@ type Discovered struct {
 	Last     string `json:"last"`     // última mensagem do usuário (preview)
 	Count    int    `json:"count"`    // nº de mensagens do usuário (preview)
 	Modified int64  `json:"modified"` // unix epoch (mtime do transcript)
+	// State só é preenchido para panes vivos do tmux (TmuxList): "running"|
+	// "waiting"|"idle", lido do próprio terminal. Vazio para descobertas de disco.
+	State string `json:"state,omitempty"`
+}
+
+// DirEntry é uma subpasta de um diretório na máquina (seletor de pastas do app).
+type DirEntry struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+// DirListing é o conteúdo navegável de um diretório: o caminho atual, o pai
+// (para "subir um nível") e as subpastas. Alimenta o seletor de pastas ao criar
+// uma sessão nova, para a usuária navegar as pastas do Mac em vez de digitar o cwd.
+type DirListing struct {
+	Path   string     `json:"path"`
+	Parent string     `json:"parent"`
+	Dirs   []DirEntry `json:"dirs"`
 }
