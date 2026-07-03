@@ -42,6 +42,11 @@ final class SessionListViewModel: ObservableObject {
     private let health = HealthClient()
     private var liveTask: Task<Void, Never>?
     private var livePollTask: Task<Void, Never>?
+    // Resiliência do poll de vivas: cacheia as máquinas (falha de fetch não zera
+    // o "Ao vivo") e exige 2 leituras vazias seguidas antes de limpar (evita o
+    // "some e volta" de um hiccup transitório).
+    private var cachedMachines: [String] = []
+    private var emptyLiveStreak = 0
 
     // Haptics locais: "gostinho do cutucão" antes do push da Fase 4.
     private let haptics = UINotificationFeedbackGenerator()
@@ -126,13 +131,34 @@ final class SessionListViewModel: ObservableObject {
     /// Uma passada de descoberta de vivas: para cada máquina, lista os panes do
     /// tmux rodando claude (as sessões controláveis ao vivo — send-keys/mirror).
     func refreshLive() async {
-        let targets = (try? await api.targets()) ?? []
+        // Máquinas com cache: se o fetch falhar (hiccup), reusa as últimas — assim
+        // uma falha transitória NÃO zera o "Ao vivo".
+        let machines = (try? await api.targets()).flatMap { $0.isEmpty ? nil : $0 } ?? cachedMachines
+        guard !machines.isEmpty else { return } // sem como consultar → mantém o estado
+        cachedMachines = machines
+
         var all: [LiveEntry] = []
-        for machine in targets {
+        for machine in machines {
             let panes = await api.tmuxList(machine: machine)
             all.append(contentsOf: panes.map { LiveEntry(machine: machine, session: $0) })
         }
-        withAnimation(.snappy) { liveSessions = all }
+
+        // Veio vazio mas tínhamos sessões? Pode ser hiccup do SSH — só limpa após
+        // 2 leituras vazias seguidas (mata o "some e volta").
+        if all.isEmpty && !liveSessions.isEmpty {
+            emptyLiveStreak += 1
+            if emptyLiveStreak < 2 { return }
+        } else {
+            emptyLiveStreak = 0
+        }
+
+        // Só re-anima quando o CONJUNTO de panes muda; mudança só de estado (cor)
+        // aplica sem animar a lista inteira → menos piscada.
+        if all.map(\.id) != liveSessions.map(\.id) {
+            withAnimation(.snappy) { liveSessions = all }
+        } else {
+            liveSessions = all
+        }
     }
 
     // MARK: Apagar sessão
