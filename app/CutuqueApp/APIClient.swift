@@ -255,6 +255,29 @@ struct APIClient {
         let sessions: [DiscoveredSession]
     }
 
+    /// Lista as subpastas de um caminho no Mac (seletor de pastas ao criar uma
+    /// sessão). path vazio = home da máquina. `GET /machines/{machine}/dirs?path=`.
+    func listDirs(machine: String, path: String) async throws -> DirListing {
+        var comps = URLComponents(
+            url: baseURL.appendingPathComponent("machines").appendingPathComponent(machine).appendingPathComponent("dirs"),
+            resolvingAgainstBaseURL: false
+        )!
+        if !path.isEmpty { comps.queryItems = [URLQueryItem(name: "path", value: path)] }
+        var request = URLRequest(url: comps.url!)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        switch http.statusCode {
+        case 200:
+            return try JSONDecoder.cutuque.decode(DirListing.self, from: data)
+        case 502, 503:
+            throw CutuqueError.server(status: http.statusCode, message: "o Mac não respondeu (tente de novo)")
+        default:
+            throw CutuqueError.unexpected(status: http.statusCode)
+        }
+    }
+
     /// Lista as sessões do Claude RODANDO agora numa máquina (processo vivo +
     /// transcript recente) — as "ao vivo" que aparecem na home.
     /// `GET /machines/{machine}/live`. Erros são engolidos em `[]` (é um poll de
@@ -360,6 +383,20 @@ struct APIClient {
         try await send(request)
     }
 
+    /// Encerra o pane do tmux (kill-pane): fecha o Claude daquele terminal.
+    /// `POST /machines/{machine}/tmux/kill`. Destrutivo — a UI confirma antes.
+    func tmuxKill(machine: String, target: String) async throws {
+        let url = baseURL
+            .appendingPathComponent("machines").appendingPathComponent(machine)
+            .appendingPathComponent("tmux").appendingPathComponent("kill")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["target": target])
+        try await send(request)
+    }
+
     /// Corpo de `POST /machines/{machine}/adopt`.
     private struct AdoptBody: Encodable {
         let id: String
@@ -424,6 +461,19 @@ struct APIClient {
     /// Nega o pedido de permissão pendente da sessão.
     func deny(sessionID: String) async throws {
         try await postAction(sessionID: sessionID, action: "deny")
+    }
+
+    /// Marca a sessão como concluída (tira de needs_you) SEM apagá-la — usado
+    /// pelo swipe "Concluir". `POST /sessions/{id}/resolve`.
+    func resolve(sessionID: String) async throws {
+        try await postAction(sessionID: sessionID, action: "resolve")
+    }
+
+    /// Pede ao hub pra importar o transcript do Mac dessa sessão, para o chat
+    /// mostrar a conversa (recap) ao abrir uma sessão externa em vez de vazio.
+    /// Best-effort: falha não impede abrir o detalhe. `POST /sessions/{id}/history`.
+    func importHistory(sessionID: String) async {
+        try? await postAction(sessionID: sessionID, action: "history")
     }
 
     /// Envia texto livre como resposta ao agente.

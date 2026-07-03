@@ -75,6 +75,8 @@ final class TerminalMirrorModel: ObservableObject {
     @Published var screen: String = ""
     @Published var sending = false
     @Published var errorMessage: String?
+    /// Vira true quando o pane foi encerrado com sucesso (a view fecha em cima disso).
+    @Published var killed = false
 
     private let api = APIClient()
     private var pollTask: Task<Void, Never>?
@@ -106,6 +108,18 @@ final class TerminalMirrorModel: ObservableObject {
 
     func restoreSize() {
         Task { await api.tmuxResize(machine: machine, target: target, cols: 0, rows: 0) }
+    }
+
+    /// Encerra o pane do tmux (kill-pane): fecha o Claude daquele terminal. Em
+    /// sucesso, marca `killed` para a view fechar; para o poll antes.
+    func kill() async {
+        do {
+            try await api.tmuxKill(machine: machine, target: target)
+            stop()
+            killed = true
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     /// Só atualiza (e re-renderiza) quando a tela realmente muda — evita
@@ -154,7 +168,9 @@ struct TerminalMirrorView: View {
     let title: String
 
     @StateObject private var model: TerminalMirrorModel
+    @Environment(\.dismiss) private var dismiss
     @State private var input = ""
+    @State private var confirmingKill = false
     @FocusState private var inputFocused: Bool
     @AppStorage("cutuque.terminalTheme") private var themeRaw = TerminalTheme.dark.rawValue
     private var theme: TerminalTheme { TerminalTheme(rawValue: themeRaw) ?? .dark }
@@ -196,10 +212,36 @@ struct TerminalMirrorView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { themeMenu }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(role: .destructive) {
+                    confirmingKill = true
+                } label: {
+                    Image(systemName: "xmark.circle")
+                }
+                .tint(.red)
+                .accessibilityLabel("Encerrar sessão do tmux")
+            }
         }
         .onDisappear {
             model.stop()
             model.restoreSize()
+        }
+        // Encerrar é destrutivo: confirma antes. kill-pane fecha o Claude do pane.
+        .confirmationDialog(
+            "Encerrar esta sessão?",
+            isPresented: $confirmingKill,
+            titleVisibility: .visible
+        ) {
+            Button("Encerrar sessão", role: .destructive) {
+                Task { await model.kill() }
+            }
+            Button("Cancelar", role: .cancel) {}
+        } message: {
+            Text("O Claude que roda neste terminal será fechado (kill-pane).")
+        }
+        // Encerrou com sucesso: fecha o espelho e volta.
+        .onChange(of: model.killed) { _, killed in
+            if killed { dismiss() }
         }
         .alert(
             "Não foi possível enviar",
@@ -292,11 +334,12 @@ struct TerminalMirrorView: View {
                 keyButton("esc", "Escape")
                 keyButton("⌃C", "C-c", tint: .red)
                 keyButton("⇥", "Tab")
+                // Enter entre Tab e as setas: mais fácil de alcançar (é a tecla mais usada).
+                keyButton("⏎", "Enter")
                 keyButton("↑", "Up")
                 keyButton("↓", "Down")
                 keyButton("←", "Left")
                 keyButton("→", "Right")
-                keyButton("⏎", "Enter")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)

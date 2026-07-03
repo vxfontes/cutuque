@@ -115,6 +115,44 @@ struct Session: Codable, Identifiable, Equatable, Hashable {
     /// Texto do pedido de permissão/pergunta quando `state == .needsYou`.
     /// Opcional: pode faltar no payload (decode de `pending_prompt` via snake_case).
     let pendingPrompt: String?
+    /// Alvo tmux ("<socket>\t<pane>") quando a sessão roda dentro do tmux (veio
+    /// de hook com $TMUX). Vazio/nil = sessão local fora do tmux. Permite abrir o
+    /// terminal ao vivo exato dessa sessão.
+    let pane: String?
+    /// True se a sessão NÃO foi lançada pelo app (hook do Claude / adoção). Nessas
+    /// o hub não controla o gate de permissão — nada de aprovar/negar; a resposta
+    /// é no terminal.
+    let external: Bool?
+    /// Pasta onde a sessão roda (para a árvore no detalhe/ao-vivo).
+    let cwd: String?
+
+    // pane/external/cwd podem faltar em respostas de um hub antigo → default seguro.
+    private enum CodingKeys: String, CodingKey {
+        case id, machine, agent, title, state, createdAt, updatedAt, pendingPrompt, pane, external, cwd
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        machine = try c.decode(String.self, forKey: .machine)
+        agent = try c.decode(String.self, forKey: .agent)
+        title = try c.decode(String.self, forKey: .title)
+        state = try c.decode(SessionState.self, forKey: .state)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        pendingPrompt = try? c.decode(String.self, forKey: .pendingPrompt)
+        pane = try? c.decode(String.self, forKey: .pane)
+        external = try? c.decode(Bool.self, forKey: .external)
+        cwd = try? c.decode(String.self, forKey: .cwd)
+    }
+    /// True quando é uma sessão externa (hook/adoção) — o app NÃO mostra
+    /// aprovar/negar (a resposta é no terminal do Mac).
+    var isExternal: Bool { external ?? false }
+
+    /// Alvo tmux não-vazio, se a sessão for de terminal ao vivo.
+    var tmuxTarget: String? {
+        guard let p = pane, !p.isEmpty else { return nil }
+        return p
+    }
 }
 
 // MARK: - Sessão descoberta (acompanhar sessões do Mac)
@@ -130,6 +168,7 @@ struct DiscoveredSession: Decodable, Identifiable, Equatable, Hashable {
     let last: String      // última mensagem do usuário (preview)
     let count: Int        // nº de mensagens do usuário (preview)
     let modified: Int64   // mtime do transcript (epoch em segundos)
+    let state: String     // "running"|"waiting"|"idle" (só panes vivos do tmux; lido do terminal)
 
     /// Instante da última atividade, derivado do mtime.
     var modifiedAt: Date { Date(timeIntervalSince1970: TimeInterval(modified)) }
@@ -146,7 +185,7 @@ struct DiscoveredSession: Decodable, Identifiable, Equatable, Hashable {
     }
 
     // Campos novos podem faltar em respostas de um hub antigo → default seguro.
-    private enum CodingKeys: String, CodingKey { case id, cwd, title, last, count, modified }
+    private enum CodingKeys: String, CodingKey { case id, cwd, title, last, count, modified, state }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -154,8 +193,34 @@ struct DiscoveredSession: Decodable, Identifiable, Equatable, Hashable {
         title = try c.decode(String.self, forKey: .title)
         last = (try? c.decode(String.self, forKey: .last)) ?? ""
         count = (try? c.decode(Int.self, forKey: .count)) ?? 0
-        modified = try c.decode(Int64.self, forKey: .modified)
+        modified = (try? c.decode(Int64.self, forKey: .modified)) ?? 0
+        state = (try? c.decode(String.self, forKey: .state)) ?? ""
     }
+
+    /// Init direto (para sintetizar uma entrada viva a partir de uma sessão do
+    /// registry que tem um pane tmux).
+    init(id: String, cwd: String, title: String, last: String = "", count: Int = 0, modified: Int64 = 0, state: String = "") {
+        self.id = id; self.cwd = cwd; self.title = title
+        self.last = last; self.count = count; self.modified = modified; self.state = state
+    }
+}
+
+// MARK: - Seletor de pastas
+
+/// Uma subpasta no Mac (item do seletor de pastas ao criar uma sessão).
+struct DirEntry: Decodable, Identifiable, Hashable {
+    let name: String
+    let path: String
+    var id: String { path }
+    /// Pasta oculta (começa com ".") — escondida por padrão no seletor.
+    var isHidden: Bool { name.hasPrefix(".") }
+}
+
+/// Conteúdo navegável de um diretório no Mac: caminho atual, pai (subir), subpastas.
+struct DirListing: Decodable {
+    let path: String
+    let parent: String
+    let dirs: [DirEntry]
 }
 
 // MARK: - Mensagens do WebSocket

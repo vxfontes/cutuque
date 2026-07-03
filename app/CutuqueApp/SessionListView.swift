@@ -129,6 +129,16 @@ final class SessionListViewModel: ObservableObject {
         Task { try? await api.deleteSession(id: session.id) }
     }
 
+    /// Marca uma sessão como CONCLUÍDA: tira de needs_you (não apaga). Some da
+    /// seção "Precisa de você" na hora; o hub marca done e o WS reconcilia. Não
+    /// vira dismissed, então a sessão pode voltar a te avisar se precisar.
+    func resolve(_ session: Session) {
+        withAnimation(.snappy) {
+            sessions.removeAll { $0.id == session.id }
+        }
+        Task { try? await api.resolve(sessionID: session.id) }
+    }
+
     // MARK: Helpers
 
     private func upsert(_ session: Session) {
@@ -188,11 +198,25 @@ struct SessionListView: View {
     // Pane do tmux aberto no espelho de terminal (nil = fechado).
     @State private var selectedLive: LiveEntry?
 
-    // Sessões que precisam de você sobem para uma seção destacada no topo.
+    // Alvos tmux (compostos socket\tpane) que estão vivos agora.
+    private var livePaneIDs: Set<String> { Set(model.liveSessions.map(\.id)) }
+    // Panes das sessões que precisam de você (pra não duplicar em "Ao vivo").
+    private var needsYouPaneIDs: Set<String> { Set(needsYou.compactMap(\.tmuxTarget)) }
+
+    // "Precisa de você": qualquer sessão em needs_you (a área de notificação).
     private var needsYou: [Session] { model.sessions.filter { $0.state == .needsYou } }
-    private var others: [Session] { model.sessions.filter { $0.state != .needsYou } }
-    // Sessões vivas no Mac (panes do tmux rodando claude), controláveis ao vivo.
-    private var liveNotTracked: [LiveEntry] { model.liveSessions }
+    // "Ao vivo no Mac": panes do tmux vivos que NÃO estão em needs_you (esses já
+    // aparecem em "Precisa de você" e abrem o terminal ao tocar).
+    private var liveNotTracked: [LiveEntry] {
+        model.liveSessions.filter { !needsYouPaneIDs.contains($0.id) }
+    }
+    // "Sessões": registry que não é needs_you e NÃO é uma sessão viva do tmux
+    // (dedup: a viva aparece em "Ao vivo"/"Precisa de você", não aqui).
+    private var others: [Session] {
+        model.sessions.filter { s in
+            s.state != .needsYou && !(s.tmuxTarget.map { livePaneIDs.contains($0) } ?? false)
+        }
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -202,19 +226,21 @@ struct SessionListView: View {
                         ForEach(liveNotTracked) { liveRow($0) }
                     } header: {
                         Label("Ao vivo no Mac", systemImage: "dot.radiowaves.left.and.right")
-                            .foregroundStyle(.green)
+                            .foregroundStyle(.blue)
                             .textCase(nil)
                     } footer: {
-                        Text("Sessões rodando agora no seu Mac. Toque para dar continuidade ao vivo.")
+                        Text("Sessões rodando agora no seu Mac (azul = rodando, verde = concluiu). Toque para acompanhar ao vivo.")
                     }
                 }
                 if !needsYou.isEmpty {
                     Section {
-                        ForEach(needsYou) { sessionLink($0) }
+                        ForEach(needsYou) { needsYouRow($0) }
                     } header: {
                         Label("Precisa de você", systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
                             .textCase(nil)
+                    } footer: {
+                        Text("Toque para responder — as do tmux abrem o terminal ao vivo.")
                     }
                 }
                 if !others.isEmpty {
@@ -353,8 +379,16 @@ struct SessionListView: View {
     private func resolveDeepLink() {
         guard !showingNew, !showingDiscover, let id = router.pendingSessionID else { return }
         if let session = model.sessions.first(where: { $0.id == id }) {
-            // Evita empurrar duas vezes o mesmo detalhe.
-            if path.last?.id != session.id {
+            if let target = session.tmuxTarget {
+                // Sessão do tmux: o push abre o TERMINAL AO VIVO correspondente,
+                // não o detalhe (que fica vazio para sessões externas — bug antigo
+                // de "cair numa página sem mensagem nenhuma").
+                selectedLive = LiveEntry(
+                    machine: session.machine,
+                    session: DiscoveredSession(id: target, cwd: session.cwd ?? "", title: namer.displayTitle(for: session))
+                )
+            } else if path.last?.id != session.id {
+                // Sessão orquestrada pelo app (sem tmux): abre o detalhe/chat normal.
                 path.append(session)
             }
             router.pendingSessionID = nil
@@ -366,11 +400,13 @@ struct SessionListView: View {
     /// Linha de uma sessão viva no Mac (pane do tmux): toca → abre o espelho do
     /// terminal ao vivo (ver a tela + digitar de verdade nela).
     private func liveRow(_ entry: LiveEntry) -> some View {
-        Button {
+        let state = liveState(entry)
+        return Button {
             selectedLive = entry
         } label: {
             HStack(spacing: 12) {
-                LivePulse()
+                // Azul enquanto roda, verde quando a sessão do tmux concluiu.
+                LivePulse(color: state.color)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(entry.session.title)
                         .font(.body)
@@ -385,12 +421,60 @@ struct SessionListView: View {
                     .lineLimit(1)
                 }
                 Spacer(minLength: 8)
-                Image(systemName: "terminal").foregroundStyle(.green)
+                Image(systemName: "terminal").foregroundStyle(state.color)
             }
             .padding(.vertical, 2)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    /// Estado da sessão viva. Fonte da verdade é o estado LIDO DO TERMINAL pelo
+    /// hub (sobrevive a restart do hub, reflete a realidade): running→azul,
+    /// idle/concluído→verde, waiting→laranja. Só cai na correlação com o registry
+    /// se o hub for antigo e não mandar o estado do pane.
+    private func liveState(_ entry: LiveEntry) -> SessionState {
+        switch entry.session.state {
+        case "running": return .running
+        case "idle", "done": return .done
+        case "waiting": return .needsYou
+        default:
+            return model.sessions.first(where: { $0.tmuxTarget == entry.id })?.state ?? .running
+        }
+    }
+
+    /// Linha de uma sessão em needs_you. Se ela roda no tmux (tem pane), tocar
+    /// abre a sessão AO VIVO correspondente (respondes a múltipla escolha no
+    /// terminal); senão, o detalhe normal.
+    private func needsYouRow(_ session: Session) -> some View {
+        Group {
+            if let target = session.tmuxTarget {
+                Button {
+                    selectedLive = LiveEntry(
+                        machine: session.machine,
+                        session: DiscoveredSession(id: target, cwd: session.cwd ?? "", title: namer.displayTitle(for: session))
+                    )
+                } label: {
+                    SessionRow(session: session, title: namer.displayTitle(for: session))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                NavigationLink(value: session) {
+                    SessionRow(session: session, title: namer.displayTitle(for: session))
+                }
+            }
+        }
+        // Arrastar pro lado: concluir (tira de needs_you, sem apagar) ou apagar.
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button { model.resolve(session) } label: {
+                Label("Concluir", systemImage: "checkmark")
+            }
+            .tint(.green)
+            Button(role: .destructive) { model.delete(session) } label: {
+                Label("Apagar", systemImage: "trash")
+            }
+        }
     }
 
     private func sessionLink(_ session: Session) -> some View {
@@ -483,14 +567,16 @@ private struct SessionRow: View {
 // MARK: - Pulso "ao vivo" (bolinha verde pulsante)
 
 private struct LivePulse: View {
+    /// Cor do pulso, dirigida pelo estado da sessão (azul rodando, verde concluído).
+    var color: Color = .blue
     @State private var on = false
     var body: some View {
         Circle()
-            .fill(Color.green)
+            .fill(color)
             .frame(width: 10, height: 10)
             .overlay(
                 Circle()
-                    .stroke(Color.green, lineWidth: 2)
+                    .stroke(color, lineWidth: 2)
                     .scaleEffect(on ? 2.2 : 1)
                     .opacity(on ? 0 : 0.8)
             )

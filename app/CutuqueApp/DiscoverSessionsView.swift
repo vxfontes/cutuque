@@ -242,17 +242,30 @@ struct DiscoverPreviewView: View {
             }
 
             Section("Sessão") {
-                LabeledContent("Máquina") {
+                // Linhas compactas (HStack + Spacer) em vez de LabeledContent, que
+                // em List às vezes estica a linha num container gigante.
+                HStack {
+                    Text("Máquina").foregroundStyle(.secondary)
+                    Spacer(minLength: 12)
                     Label(machine, systemImage: machineSymbol(machine))
                 }
                 if item.count > 0 {
-                    LabeledContent("Mensagens", value: "\(item.count)")
+                    HStack {
+                        Text("Mensagens").foregroundStyle(.secondary)
+                        Spacer(minLength: 12)
+                        Text("\(item.count)")
+                    }
                 }
-                LabeledContent("Última atividade") {
+                HStack {
+                    Text("Última atividade").foregroundStyle(.secondary)
+                    Spacer(minLength: 12)
                     RelativeTimeText(date: item.modifiedAt)
                 }
-                LabeledContent("ID") {
-                    Text(item.id).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+                HStack {
+                    Text("ID").foregroundStyle(.secondary)
+                    Spacer(minLength: 12)
+                    Text(item.id).font(.caption.monospaced()).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
                 }
             }
         }

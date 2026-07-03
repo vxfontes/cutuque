@@ -70,6 +70,17 @@ final class PushManager {
         }
     }
 
+    /// Re-registra o device no hub (se já autorizado) — chamado quando o app
+    /// volta ao foreground. Recupera o registro depois de um restart do hub (os
+    /// devices ficam em memória e somem no reboot do container). registerFor…
+    /// re-dispara o callback do token, que faz o upsert no hub.
+    func refreshRegistration() {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            guard settings.authorizationStatus == .authorized else { return }
+            DispatchQueue.main.async { UIApplication.shared.registerForRemoteNotifications() }
+        }
+    }
+
     /// Define as categorias com ações conforme o contrato do hub.
     /// - NEEDS_YOU: Aprovar / Negar (destrutiva) / Abrir (foreground)
     /// - DONE e ERROR: Abrir (foreground)

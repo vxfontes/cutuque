@@ -25,6 +25,13 @@ final class SessionDetailViewModel: ObservableObject {
 
     /// Carrega o histórico de output e assina o stream ao vivo.
     func start() async {
+        // Sessão externa (detectada por hook, não lançada pelo hub): pede ao hub
+        // para importar o transcript do Mac ANTES de ler o output, para o chat
+        // mostrar a conversa (recap) em vez de "sem mensagens ainda". Idempotente
+        // no hub; best-effort (falha degrada para vazio).
+        if session.isExternal {
+            await api.importHistory(sessionID: session.id)
+        }
         // Histórico via REST (pode vir vazio se o adapter ainda não implementou o endpoint).
         // Aplica o MESMO teto do append ao vivo já no load: uma sessão adotada
         // pode trazer até maxChunks de histórico importado, e cortar aqui evita
@@ -157,6 +164,7 @@ struct SessionDetailView: View {
     @State private var showScrollToBottom = false
     @State private var renaming = false
     @State private var renameText = ""
+    @State private var showingDetails = false
     // Foco do campo de digitação — a barra sobe corretamente com o teclado
     // porque só o transcrito (ScrollView) ignora a safe area do teclado;
     // a VStack externa, essa sim, empurra a barra pra cima normalmente.
@@ -176,12 +184,22 @@ struct SessionDetailView: View {
     private var chatItems: [ChatItem] { ChatItem.grouping(model.chunks) }
 
     /// Texto do pedido de permissão, se houver, quando a sessão precisa de você.
+    /// SÓ para sessões lançadas pelo app (que o hub controla) — nessas o
+    /// aprovar/negar funciona. Sessões externas (hook/tmux) respondem no terminal.
     private var permissionPrompt: String? {
-        guard model.session.state == .needsYou,
+        guard model.session.state == .needsYou, !model.session.isExternal,
               let prompt = model.session.pendingPrompt,
               !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
         return prompt
+    }
+
+    /// Pedido de uma sessão EXTERNA (hook) em needs_you: mostra o texto mas SEM
+    /// aprovar/negar (o hub não controla o gate dela — a resposta é no terminal).
+    private var externalPrompt: String? {
+        guard model.session.state == .needsYou, model.session.isExternal else { return nil }
+        let p = model.session.pendingPrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return p.isEmpty ? "O agente está esperando você." : p
     }
 
     var body: some View {
@@ -191,6 +209,8 @@ struct SessionDetailView: View {
             // Card de permissão acima do terminal (invariante docs/04: sempre exibe o texto).
             if let prompt = permissionPrompt {
                 permissionCard(prompt)
+            } else if let prompt = externalPrompt {
+                externalPromptCard(prompt)
             }
             transcript
             // Barra de digitação SEMPRE visível. Em sessão viva, o texto responde
@@ -202,13 +222,27 @@ struct SessionDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    renameText = namer.customName(for: model.session.id) ?? model.session.title
-                    renaming = true
+                Menu {
+                    Button {
+                        showingDetails = true
+                    } label: {
+                        Label("Detalhes", systemImage: "info.circle")
+                    }
+                    Button {
+                        renameText = namer.customName(for: model.session.id) ?? model.session.title
+                        renaming = true
+                    } label: {
+                        Label("Renomear", systemImage: "pencil")
+                    }
                 } label: {
-                    Image(systemName: "pencil")
+                    Image(systemName: "ellipsis.circle")
                 }
-                .accessibilityLabel("Renomear sessão")
+                .accessibilityLabel("Mais opções")
+            }
+        }
+        .sheet(isPresented: $showingDetails) {
+            NavigationStack {
+                ChatDetailsView(session: model.session, displayTitle: displayTitle)
             }
         }
         .task { await model.start() }
@@ -281,6 +315,27 @@ struct SessionDetailView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(Color.orange.opacity(0.4), lineWidth: 1)
         )
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding()
+    }
+
+    /// Card para sessão EXTERNA em needs_you: mostra o pedido, sem aprovar/negar
+    /// (o hub não controla; responde no terminal do Mac).
+    private func externalPromptCard(_ prompt: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Precisa de você", systemImage: "exclamationmark.triangle.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.orange)
+            Text(prompt)
+                .font(.callout)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Label("Responda no terminal do Mac (ou abra o terminal ao vivo).", systemImage: "terminal")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding()
+        .background(Color.orange.opacity(0.12))
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .padding()
     }
@@ -649,5 +704,71 @@ private struct BottomOffsetKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
+    }
+}
+
+// MARK: - Detalhes da sessão (metadados + árvore de pastas)
+
+/// Sheet de detalhes de uma sessão de chat: metadados + árvore da pasta (cwd),
+/// no mesmo estilo do LiveDetailView das sessões de tmux.
+private struct ChatDetailsView: View {
+    let session: Session
+    let displayTitle: String
+    @Environment(\.dismiss) private var dismiss
+
+    /// Componentes da pasta (cwd) para a árvore, sem o "/" inicial.
+    private var pathComponents: [String] {
+        (session.cwd ?? "").split(separator: "/").map(String.init)
+    }
+
+    var body: some View {
+        List {
+            Section("Sessão") {
+                detailRow("Nome", displayTitle)
+                detailRow("Estado", session.state.label)
+                detailRow("Máquina", session.machine, symbol: machineSymbol(session.machine))
+                detailRow("Agente", session.agent)
+                detailRow("Origem", session.isExternal ? "detectada (hook/terminal)" : "lançada pelo app")
+                detailRow("ID", session.id, mono: true)
+            }
+            if !pathComponents.isEmpty {
+                Section("Pasta") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(Array(pathComponents.enumerated()), id: \.offset) { idx, comp in
+                            HStack(spacing: 6) {
+                                Image(systemName: idx == pathComponents.count - 1 ? "folder.fill" : "folder")
+                                    .foregroundStyle(.secondary).font(.caption)
+                                Text(comp).font(.system(.callout, design: .monospaced)).lineLimit(1)
+                            }
+                            .padding(.leading, CGFloat(idx) * 14)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+        .navigationTitle("Detalhes")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) { Button("Fechar") { dismiss() } }
+        }
+    }
+
+    /// Linha compacta (rótulo à esquerda, valor à direita em uma linha só). Mesma
+    /// abordagem do LiveDetailView (evita o LabeledContent que estica em List).
+    @ViewBuilder
+    private func detailRow(_ label: String, _ value: String, symbol: String? = nil, mono: Bool = false) -> some View {
+        HStack(spacing: 12) {
+            Text(label).foregroundStyle(.secondary)
+            Spacer(minLength: 12)
+            HStack(spacing: 6) {
+                if let symbol { Image(systemName: symbol).foregroundStyle(.secondary) }
+                Text(value)
+                    .font(mono ? .caption.monospaced() : .body)
+                    .foregroundStyle(mono ? .secondary : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
     }
 }

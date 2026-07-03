@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Avisa o hub quando o app está aberto (foreground), com heartbeat periódico,
 /// para o hub suprimir push enquanto isso — quando o app está aberto a usuária
@@ -23,6 +24,9 @@ final class ForegroundReporter: ObservableObject {
     func update(_ phase: ScenePhase) {
         switch phase {
         case .active:
+            // Re-registra o device (recupera de um restart do hub, que apaga os
+            // devices em memória) e começa o heartbeat de foreground.
+            PushManager.shared.refreshRegistration()
             startHeartbeat()
         case .background, .inactive:
             stopHeartbeat()
@@ -54,7 +58,17 @@ final class ForegroundReporter: ObservableObject {
         task = nil
         // Avisa o hub na hora que saiu (não espera o TTL expirar). `at` maior que
         // o último heartbeat garante que este `false` vença um `true` atrasado.
+        // beginBackgroundTask: o POST completa mesmo com o app indo pra suspensão
+        // (senão a supressão poderia "grudar" até o TTL — push perdido ao fechar).
         let at = nowMs()
-        Task { await api.setForeground(false, at: at) }
+        let app = UIApplication.shared
+        var bg: UIBackgroundTaskIdentifier = .invalid
+        bg = app.beginBackgroundTask(withName: "cutuque.foreground.off") {
+            app.endBackgroundTask(bg); bg = .invalid
+        }
+        Task {
+            await api.setForeground(false, at: at)
+            if bg != .invalid { app.endBackgroundTask(bg) }
+        }
     }
 }
