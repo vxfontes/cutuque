@@ -108,10 +108,16 @@ final class SessionListViewModel: ObservableObject {
 
 struct SessionListView: View {
     @StateObject private var model = SessionListViewModel()
+    // Apelidos locais das sessões (só no app).
+    @ObservedObject private var namer = SessionNamesStore.shared
     // Router de deep-link vindo de uma notificação (Fase 4).
     @EnvironmentObject private var router: Router
     @State private var showingNew = false
     @State private var showingSettings = false
+    @State private var showingStatus = false
+    // Sessão em processo de renomear (nil = alerta fechado) + texto do apelido.
+    @State private var renameTarget: Session?
+    @State private var renameText = ""
     // Pilha de navegação; empurramos a sessão (criada ou deep-link) programaticamente.
     // Um único destino `for: Session.self` serve tanto o NavigationLink quanto os pushes.
     @State private var path: [Session] = []
@@ -151,7 +157,12 @@ struct SessionListView: View {
             .navigationTitle("Sessões")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    HubStatusIndicator(status: model.hubStatus)
+                    Button {
+                        showingStatus = true
+                    } label: {
+                        HubStatusIndicator(status: model.hubStatus)
+                    }
+                    .accessibilityLabel("Status do hub")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -179,6 +190,26 @@ struct SessionListView: View {
             }
             .sheet(isPresented: $showingSettings) {
                 HubSettingsView()
+            }
+            .sheet(isPresented: $showingStatus) {
+                HubStatusView(sessions: model.sessions)
+            }
+            .alert(
+                "Renomear sessão",
+                isPresented: Binding(
+                    get: { renameTarget != nil },
+                    set: { if !$0 { renameTarget = nil } }
+                ),
+                presenting: renameTarget
+            ) { session in
+                TextField("Nome", text: $renameText)
+                Button("Salvar") {
+                    namer.setName(renameText, for: session.id)
+                    renameTarget = nil
+                }
+                Button("Cancelar", role: .cancel) { renameTarget = nil }
+            } message: { _ in
+                Text("Só muda o nome aqui no app; não afeta a sessão real.")
             }
             .refreshable { await model.refresh() }
             .task {
@@ -217,7 +248,22 @@ struct SessionListView: View {
 
     private func sessionLink(_ session: Session) -> some View {
         NavigationLink(value: session) {
-            SessionRow(session: session)
+            SessionRow(session: session, title: namer.displayTitle(for: session))
+        }
+        .contextMenu {
+            Button {
+                renameText = namer.customName(for: session.id) ?? session.title
+                renameTarget = session
+            } label: {
+                Label("Renomear", systemImage: "pencil")
+            }
+            if namer.customName(for: session.id) != nil {
+                Button(role: .destructive) {
+                    namer.setName("", for: session.id)
+                } label: {
+                    Label("Remover apelido", systemImage: "arrow.uturn.backward")
+                }
+            }
         }
     }
 
@@ -242,6 +288,8 @@ struct SessionListView: View {
 
 private struct SessionRow: View {
     let session: Session
+    /// Título a exibir (apelido local, se houver, senão o original).
+    let title: String
 
     var body: some View {
         HStack(spacing: 12) {
@@ -252,10 +300,12 @@ private struct SessionRow: View {
                 .accessibilityLabel(session.state.label)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(session.title)
+                Text(title)
                     .font(.body)
                     .lineLimit(1)
                 HStack(spacing: 4) {
+                    // Ícone de onde a sessão está rodando.
+                    Image(systemName: machineSymbol(session.machine))
                     Text("\(session.machine) · \(session.agent)")
                     Text("·")
                     RelativeTime(date: session.updatedAt)

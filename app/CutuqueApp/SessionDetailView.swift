@@ -118,12 +118,18 @@ final class SessionDetailViewModel: ObservableObject {
 
 struct SessionDetailView: View {
     @StateObject private var model: SessionDetailViewModel
+    @ObservedObject private var namer = SessionNamesStore.shared
     @State private var draft = ""
     @State private var showScrollToBottom = false
+    @State private var renaming = false
+    @State private var renameText = ""
 
     init(session: Session) {
         _model = StateObject(wrappedValue: SessionDetailViewModel(session: session))
     }
+
+    /// Título a exibir (apelido local, se houver, senão o original).
+    private var displayTitle: String { namer.displayTitle(for: model.session) }
 
     /// Texto do pedido de permissão, se houver, quando a sessão precisa de você.
     private var permissionPrompt: String? {
@@ -148,10 +154,28 @@ struct SessionDetailView: View {
                 inputBar
             }
         }
-        .navigationTitle(model.session.title)
+        .navigationTitle(displayTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    renameText = namer.customName(for: model.session.id) ?? model.session.title
+                    renaming = true
+                } label: {
+                    Image(systemName: "pencil")
+                }
+                .accessibilityLabel("Renomear sessão")
+            }
+        }
         .task { await model.start() }
         .onDisappear { model.stop() }
+        .alert("Renomear sessão", isPresented: $renaming) {
+            TextField("Nome", text: $renameText)
+            Button("Salvar") { namer.setName(renameText, for: model.session.id) }
+            Button("Cancelar", role: .cancel) {}
+        } message: {
+            Text("Só muda o nome aqui no app; não afeta a sessão real.")
+        }
         .alert(
             "Aviso",
             isPresented: Binding(
@@ -243,10 +267,10 @@ struct SessionDetailView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(model.session.title)
+            Text(displayTitle)
                 .font(.title3.weight(.semibold))
             HStack {
-                Text("\(model.session.machine) · \(model.session.agent)")
+                Label("\(model.session.machine) · \(model.session.agent)", systemImage: machineSymbol(model.session.machine))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()

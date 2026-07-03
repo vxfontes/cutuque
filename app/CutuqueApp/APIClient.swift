@@ -74,6 +74,30 @@ struct APIClient {
         let chunks: [String]
     }
 
+    // MARK: - Status do hub (latência)
+
+    /// Mede a latência do hub batendo em /health algumas vezes e devolvendo o
+    /// melhor tempo (ms). online=false se nenhuma amostra respondeu 200.
+    func healthLatency(samples: Int = 3) async -> (online: Bool, ms: Int?) {
+        let url = baseURL.appendingPathComponent("health")
+        var online = false
+        var best: Double?
+        for _ in 0..<max(1, samples) {
+            let t0 = Date()
+            do {
+                let (_, response) = try await URLSession.shared.data(from: url)
+                let dt = Date().timeIntervalSince(t0) * 1000
+                if let http = response as? HTTPURLResponse, http.statusCode == 200 {
+                    online = true
+                    best = min(best ?? dt, dt)
+                }
+            } catch {
+                // amostra falhou; segue tentando as demais
+            }
+        }
+        return (online, best.map { Int($0.rounded()) })
+    }
+
     // MARK: - Ajustes (intervalo do re-cutucão)
 
     private struct RenudgeBody: Codable {
