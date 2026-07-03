@@ -86,10 +86,12 @@ struct Session: Codable, Identifiable, Equatable, Hashable {
 /// - `snapshot`: lista completa recebida ao conectar (substitui o estado local).
 /// - `sessionUpdated`: uma sessão mudou (upsert na lista).
 /// - `outputChunk`: um pedaço de output de uma sessão (usado na tela de detalhe).
+/// - `sessionRemoved`: uma sessão foi apagada no hub (remover da lista).
 enum WSMessage: Decodable {
     case snapshot([Session])
     case sessionUpdated(Session)
     case outputChunk(sessionID: String, data: String)
+    case sessionRemoved(sessionID: String)
 
     private enum CodingKeys: String, CodingKey {
         case type, sessions, session, sessionId, data
@@ -110,6 +112,10 @@ enum WSMessage: Decodable {
             let sessionID = try container.decode(String.self, forKey: .sessionId)
             let data = try container.decode(String.self, forKey: .data)
             self = .outputChunk(sessionID: sessionID, data: data)
+        case "session_removed":
+            // `session_id` vira `sessionId` via convertFromSnakeCase no decoder compartilhado.
+            let sessionID = try container.decode(String.self, forKey: .sessionId)
+            self = .sessionRemoved(sessionID: sessionID)
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type,

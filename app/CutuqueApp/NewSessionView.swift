@@ -5,27 +5,30 @@ import SwiftUI
 /// Formulário para disparar uma nova sessão de agente.
 /// Ao criar com sucesso, chama `onCreated` (o chamador fecha a sheet e navega pro detalhe).
 struct NewSessionView: View {
+    /// Máquina pré-selecionada (ex.: relançar uma sessão encerrada na mesma máquina).
+    let initialMachine: String?
     /// Callback com a sessão recém-criada (o pai fecha a sheet e navega).
     let onCreated: (Session) -> Void
+
+    /// `initialMachine` opcional para os chamadores que só passam a closure.
+    init(initialMachine: String? = nil, onCreated: @escaping (Session) -> Void) {
+        self.initialMachine = initialMachine
+        self.onCreated = onCreated
+        // Pré-carrega a seleção/lista com a máquina pré-selecionada (ou o fallback)
+        // para não piscar vazio antes do /targets responder.
+        _machine = State(initialValue: initialMachine ?? "macbook")
+        _machines = State(initialValue: initialMachine.map { [$0] } ?? ["macbook"])
+    }
 
     @Environment(\.dismiss) private var dismiss
     private let api = APIClient()
 
-    // Máquinas disponíveis; só `macbook` está habilitado nesta fase.
-    private struct MachineOption: Identifiable {
-        let id: String
-        let label: String
-        let enabled: Bool
-    }
-    private let machines = [
-        MachineOption(id: "macbook", label: "macbook", enabled: true),
-        MachineOption(id: "desktop-win", label: "desktop-win", enabled: false),
-    ]
-
     // Agente fixo nesta fase.
     private let agent = "claude-code"
 
-    @State private var machine = "macbook"
+    // Máquinas disponíveis, vindas do hub via /targets (com fallback).
+    @State private var machines: [String]
+    @State private var machine: String
     @State private var prompt = ""
     @State private var isLaunching = false
     @State private var alertMessage: String?
@@ -70,6 +73,8 @@ struct NewSessionView: View {
             } message: { message in
                 Text(message)
             }
+            // Popula as máquinas do hub; primeira = default (a menos que já haja pré-seleção).
+            .task { await loadTargets() }
         }
     }
 
@@ -77,27 +82,31 @@ struct NewSessionView: View {
 
     private var machineSection: some View {
         Section("Máquina") {
-            ForEach(machines) { option in
-                Button {
-                    machine = option.id
-                } label: {
-                    HStack {
-                        Text(option.label)
-                        if !option.enabled {
-                            Text("em breve")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if machine == option.id {
-                            Image(systemName: "checkmark")
-                                .foregroundStyle(.tint)
-                        }
-                    }
+            Picker("Máquina", selection: $machine) {
+                ForEach(machines, id: \.self) { name in
+                    Label(name, systemImage: machineSymbol(name)).tag(name)
                 }
-                .disabled(!option.enabled)
-                .foregroundStyle(option.enabled ? Color.primary : Color.secondary)
             }
+        }
+    }
+
+    /// Busca as máquinas disponíveis no hub. Vazio (hub antigo/offline) → fallback.
+    private func loadTargets() async {
+        let fetched = (try? await api.targets()) ?? []
+        var list = fetched.isEmpty ? ["macbook"] : fetched
+
+        // Se veio uma máquina pré-selecionada (relançar) que não está na lista
+        // atual, ainda assim a mantemos disponível e selecionada.
+        if let initial = initialMachine, !list.contains(initial) {
+            list.insert(initial, at: 0)
+        }
+        machines = list
+
+        // Seleção: mantém a pré-selecionada se válida; senão a primeira da lista.
+        if let initial = initialMachine, list.contains(initial) {
+            machine = initial
+        } else if !list.contains(machine) {
+            machine = list.first ?? "macbook"
         }
     }
 

@@ -123,6 +123,8 @@ struct SessionDetailView: View {
     @State private var showScrollToBottom = false
     @State private var renaming = false
     @State private var renameText = ""
+    // Sheet de relançar (nova tarefa na mesma máquina de uma sessão encerrada).
+    @State private var showingRelaunch = false
 
     init(session: Session) {
         _model = StateObject(wrappedValue: SessionDetailViewModel(session: session))
@@ -149,9 +151,13 @@ struct SessionDetailView: View {
                 permissionCard(prompt)
             }
             outputTerminal
-            // Barra para responder ao agente quando ele espera por você.
-            if model.session.state == .needsYou {
+            // Sessões VIVAS (rodando/precisa de você): dá pra mandar texto pro
+            // claude em andamento. Sessões ENCERRADAS (concluído/falhou/ocioso):
+            // sem processo vivo → oferecer relançar na mesma máquina.
+            if model.session.state == .running || model.session.state == .needsYou {
                 inputBar
+            } else {
+                relaunchBar
             }
         }
         .navigationTitle(displayTitle)
@@ -169,6 +175,13 @@ struct SessionDetailView: View {
         }
         .task { await model.start() }
         .onDisappear { model.stop() }
+        // Relançar: nova tarefa já com a máquina desta sessão pré-selecionada.
+        .sheet(isPresented: $showingRelaunch) {
+            NewSessionView(initialMachine: model.session.machine) { _ in
+                // A nova sessão aparece na lista via WS; só fechamos a sheet.
+                showingRelaunch = false
+            }
+        }
         .alert("Renomear sessão", isPresented: $renaming) {
             TextField("Nome", text: $renameText)
             Button("Salvar") { namer.setName(renameText, for: model.session.id) }
@@ -259,6 +272,23 @@ struct SessionDetailView: View {
             }
             .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.actionInProgress)
         }
+        .padding()
+        .background(.bar)
+    }
+
+    // MARK: Barra de relançar (sessões encerradas)
+
+    /// Sessão sem processo vivo (concluído/falhou/ocioso): oferece disparar uma
+    /// nova tarefa na MESMA máquina (o processo antigo já morreu, não dá pra
+    /// responder — só relançar).
+    private var relaunchBar: some View {
+        Button {
+            showingRelaunch = true
+        } label: {
+            Label("Nova tarefa nesta máquina", systemImage: "arrow.clockwise")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
         .padding()
         .background(.bar)
     }

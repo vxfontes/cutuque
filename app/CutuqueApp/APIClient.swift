@@ -49,6 +49,36 @@ struct APIClient {
         let sessions: [Session]
     }
 
+    /// Lista os nomes das máquinas disponíveis. `GET /targets` (Bearer).
+    /// Em qualquer falha (hub antigo sem o endpoint, offline, corpo inválido)
+    /// devolve `[]` para a UI cair num fallback — nunca derruba a tela.
+    func targets() async throws -> [String] {
+        var request = URLRequest(url: baseURL.appendingPathComponent("targets"))
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return [] }
+            return try JSONDecoder.cutuque.decode(TargetsEnvelope.self, from: data).targets
+        } catch {
+            // Hub em construção/offline: cai no fallback da UI.
+            return []
+        }
+    }
+
+    private struct TargetsEnvelope: Decodable {
+        let targets: [String]
+    }
+
+    /// Apaga uma sessão. `DELETE /sessions/{id}` (Bearer).
+    /// 200 → sucesso; 404 → `CutuqueError.notFound`.
+    func deleteSession(id: String) async throws {
+        let url = baseURL.appendingPathComponent("sessions").appendingPathComponent(id)
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        try await send(request)
+    }
+
     /// Busca o histórico de output de uma sessão (últimos ~200 chunks).
     /// Se o endpoint ainda não existir (adapter em construção), devolve `[]` graciosamente.
     func output(sessionID: String) async throws -> [String] {

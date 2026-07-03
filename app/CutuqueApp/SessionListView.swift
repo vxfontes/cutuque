@@ -53,6 +53,11 @@ final class SessionListViewModel: ObservableObject {
                 case .outputChunk:
                     // A lista não exibe output; chunks são tratados na tela de detalhe.
                     break
+                case .sessionRemoved(let id):
+                    // Sessão apagada no hub: some da lista (com animação).
+                    withAnimation(.snappy) {
+                        self.sessions.removeAll { $0.id == id }
+                    }
                 }
                 // Qualquer mensagem recebida confirma que o hub está online.
                 self.hubStatus = .online
@@ -64,6 +69,18 @@ final class SessionListViewModel: ObservableObject {
     func stopLiveUpdates() {
         liveTask?.cancel()
         liveTask = nil
+    }
+
+    // MARK: Apagar sessão
+
+    /// Apaga uma sessão: remove da lista na hora (otimista) e dispara o DELETE
+    /// no hub. Falha do hub não reverte — o WS `session_removed` (ou o próximo
+    /// refresh) reconcilia o estado se necessário.
+    func delete(_ session: Session) {
+        withAnimation(.snappy) {
+            sessions.removeAll { $0.id == session.id }
+        }
+        Task { try? await api.deleteSession(id: session.id) }
     }
 
     // MARK: Helpers
@@ -266,6 +283,14 @@ struct SessionListView: View {
                 } label: {
                     Label("Remover apelido", systemImage: "arrow.uturn.backward")
                 }
+            }
+        }
+        // Swipe da direita: apagar a sessão (otimista + DELETE no hub).
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive) {
+                model.delete(session)
+            } label: {
+                Label("Apagar", systemImage: "trash")
             }
         }
     }
