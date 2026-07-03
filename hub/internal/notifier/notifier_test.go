@@ -286,3 +286,32 @@ func drainUntilQuiet(f *fakePusher, quiet time.Duration) {
 		}
 	}
 }
+
+// TestCloseDoesNotHangWithConcurrentNeedsYou cobre o achado bloqueante da review
+// F4.1: um needs_you disparado no instante do Close() não pode deixar uma
+// goroutine de nudge órfã travando o WaitGroup. Força a corrida N vezes e exige
+// que Close() retorne dentro de um timeout curto.
+func TestCloseDoesNotHangWithConcurrentNeedsYou(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		reg := registry.New()
+		eng := engine.New(reg)
+		store := devices.New()
+		store.Upsert("tokendevice1", "ios")
+		n := New(newFakePusher(), store, reg, nil)
+		n.SetRenudgeInterval(time.Hour) // nudge nunca dispararia sozinho; só o Close deve encerrá-lo
+		n.Start()
+
+		startSession(eng, "s1")
+		// Dispara needs_you e Close() concorrentes para provocar a corrida.
+		go eng.Apply(event.Event{SessionID: "s1", Type: event.NeedsInput, Data: "aprova?", At: time.Now()})
+
+		done := make(chan struct{})
+		go func() { n.Close(); close(done) }()
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("iteração %d: Close() travou (goroutine de nudge órfã)", i)
+		}
+	}
+}

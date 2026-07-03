@@ -52,6 +52,7 @@ type Notifier struct {
 	renudgeNanos atomic.Int64 // intervalo do re-cutucão (ns); ajustável em runtime
 
 	mu     sync.Mutex
+	closed bool                          // Close() em curso: não spawna novos nudges
 	states map[string]session.State      // último estado notificado por sessão
 	nudges map[string]context.CancelFunc // re-cutucão ativo por sessão em needs_you
 }
@@ -109,6 +110,7 @@ func (n *Notifier) Close() {
 		n.reg.Unsubscribe(n.sub)
 	}
 	n.mu.Lock()
+	n.closed = true // fecha a porta para novos nudges na MESMA seção do cancelamento
 	for id, cancel := range n.nudges {
 		cancel()
 		delete(n.nudges, id)
@@ -176,6 +178,13 @@ func (n *Notifier) handle(s session.Session) {
 func (n *Notifier) startNudge(id string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	n.mu.Lock()
+	if n.closed {
+		// Close() já cancelou tudo: não spawna nova goroutine (senão ela ficaria
+		// órfã segurando o WaitGroup e travaria o Close — review F4.1, ludmilla).
+		n.mu.Unlock()
+		cancel()
+		return
+	}
 	if old, ok := n.nudges[id]; ok {
 		old() // cancela o anterior antes de substituir
 	}
