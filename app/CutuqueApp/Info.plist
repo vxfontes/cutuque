@@ -24,9 +24,9 @@
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
 	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>O Cutuque fala com o seu hub na rede privada (Tailscale) para listar sessões e receber avisos.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>
