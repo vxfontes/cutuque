@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -183,6 +184,37 @@ func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt string) (s
 		_ = handle.Close()
 		return session.Session{}, ErrLaunchTimeout
 	}
+}
+
+// Machines devolve os nomes dos alvos registrados, ordenados. targets é fixado
+// em New e nunca mutado, então é seguro ler sem lock.
+func (l *Launcher) Machines() []string {
+	names := make([]string, 0, len(l.targets))
+	for name := range l.targets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// Remove apaga uma sessão: fecha o Handle vivo (encerra o processo ssh/claude,
+// se houver) e a remove do Registry junto do output. ErrUnknownSession se não
+// havia nem handle vivo nem sessão no Registry.
+func (l *Launcher) Remove(id string) error {
+	l.mu.Lock()
+	h, hadHandle := l.handles[id]
+	delete(l.handles, id)
+	delete(l.pending, id)
+	l.mu.Unlock()
+
+	if hadHandle {
+		_ = h.Close() // mata o processo; a goroutine de Run termina no EOF
+	}
+	removed := l.reg.Remove(id)
+	if !hadHandle && !removed {
+		return ErrUnknownSession
+	}
+	return nil
 }
 
 // Approve aprova o pedido de permissão pendente da sessão (behavior=allow, com
