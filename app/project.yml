@@ -7,7 +7,7 @@ targets:
   CutuqueApp:
     type: application
     platform: iOS
-    sources: [CutuqueApp]
+    sources: [CutuqueApp, Shared]
     # Entitlements de push (Fase 4). aps-environment=development para APNs de dev.
     # No simulador, com CODE_SIGNING_ALLOWED=NO, o arquivo não é embutido, mas o
     # build segue funcionando e o push simulado (xcrun simctl push) dispensa APNs real.
@@ -24,6 +24,11 @@ targets:
       properties:
         UILaunchScreen: {}
         CFBundleDisplayName: Cutuque
+        # Live Activities (Dynamic Island / tela de bloqueio) para sessões rodando.
+        NSSupportsLiveActivities: true
+        # Scheme para o deep-link da Live Activity (cutuque://session/<id>).
+        CFBundleURLTypes:
+          - CFBundleURLSchemes: [cutuque]
         # Sem esta chave o iOS bloqueia SILENCIOSAMENTE o app de falar com IPs
         # privados/Tailscale (o app não emite request nenhum). Com ela, o iOS
         # mostra o prompt de Rede Local e passa a permitir após o usuário aceitar.
@@ -41,3 +46,22 @@ targets:
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - target: CutuqueWidgets
+
+  # Widget extension: hospeda a Live Activity (ActivityKit vive numa extension).
+  CutuqueWidgets:
+    type: app-extension
+    platform: iOS
+    sources: [CutuqueWidgets, Shared]
+    info:
+      path: CutuqueWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: Cutuque
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vxfontes.cutuque.widgets
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"

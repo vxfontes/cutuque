@@ -20,7 +20,13 @@ struct ServerKill: Identifiable, Equatable {
 
 @MainActor
 final class SessionListViewModel: ObservableObject {
-    @Published var sessions: [Session] = []
+    @Published var sessions: [Session] = [] {
+        didSet {
+            // Mantém as Live Activities (Dynamic Island / tela de bloqueio) em
+            // sincronia com as sessões rodando.
+            if #available(iOS 16.1, *) { LiveActivityManager.shared.sync(sessions: sessions) }
+        }
+    }
     @Published var hubStatus: HealthStatus = .unknown
     /// Sessões vivas no Mac (rodando em tempo real), atualizadas por polling.
     @Published var liveSessions: [LiveEntry] = []

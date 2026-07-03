@@ -20,6 +20,12 @@ struct CutuqueApp: App {
             .environmentObject(router)
             .tint((AppAccent(rawValue: accentRaw) ?? .blue).color)
             .preferredColorScheme((AppColorScheme(rawValue: colorSchemeRaw) ?? .system).scheme)
+            // Deep-link da Live Activity: cutuque://session/<id> abre a sessão.
+            .onOpenURL { url in
+                guard url.scheme == "cutuque", url.host == "session" else { return }
+                let id = url.lastPathComponent
+                if !id.isEmpty { router.openSession(id) }
+            }
             .task {
                 // Não bloquear a UI no launch: pede autorização após ~1s.
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
