@@ -10,6 +10,14 @@ struct LiveEntry: Identifiable, Equatable {
     var id: String { session.id }
 }
 
+/// Alvo de "encerrar server" (kill-server), para a confirmação.
+struct ServerKill: Identifiable, Equatable {
+    let machine: String
+    let socket: String
+    let name: String
+    var id: String { socket }
+}
+
 @MainActor
 final class SessionListViewModel: ObservableObject {
     @Published var sessions: [Session] = []
@@ -139,6 +147,28 @@ final class SessionListViewModel: ObservableObject {
         Task { try? await api.resolve(sessionID: session.id) }
     }
 
+    /// Encerra o servidor tmux inteiro (kill-server): fecha todos os panes
+    /// daquele socket. Remove as entradas vivas na hora; o próximo poll reconcilia.
+    func killServer(machine: String, socket: String) {
+        withAnimation(.snappy) {
+            liveSessions.removeAll { $0.id.hasPrefix(socket + "\t") }
+        }
+        Task {
+            try? await api.tmuxKillServer(machine: machine, socket: socket)
+            await refreshLive()
+        }
+    }
+
+    /// Apaga (dismiss) todas as sessões concluídas (done/error) de uma vez —
+    /// limpa a seção "Concluídas". Otimista + DELETE por sessão no hub.
+    func clearConcluded() {
+        let ids = sessions.filter { $0.state == .done || $0.state == .error }.map(\.id)
+        withAnimation(.snappy) {
+            sessions.removeAll { ids.contains($0.id) }
+        }
+        Task { for id in ids { try? await api.deleteSession(id: id) } }
+    }
+
     // MARK: Helpers
 
     private func upsert(_ session: Session) {
@@ -197,6 +227,10 @@ struct SessionListView: View {
     @State private var path: [Session] = []
     // Pane do tmux aberto no espelho de terminal (nil = fechado).
     @State private var selectedLive: LiveEntry?
+    // Server tmux a encerrar (confirmação de kill-server) e estado das concluídas.
+    @State private var serverToKill: ServerKill?
+    @State private var confirmingClear = false
+    @State private var concludedExpanded = false
 
     // Alvos tmux (compostos socket\tpane) que estão vivos agora.
     private var livePaneIDs: Set<String> { Set(model.liveSessions.map(\.id)) }
@@ -217,37 +251,100 @@ struct SessionListView: View {
             s.state != .needsYou && !(s.tmuxTarget.map { livePaneIDs.contains($0) } ?? false)
         }
     }
+    // "Sessões" ativas (rodando/ociosas) ficam em destaque; concluídas (done/error)
+    // vão para a seção recolhível "Concluídas".
+    private var activeOthers: [Session] { others.filter { $0.state != .done && $0.state != .error } }
+    private var concludedOthers: [Session] { others.filter { $0.state == .done || $0.state == .error } }
+
+    // "Ao vivo" agrupado por servidor tmux (nome = basename do socket do id
+    // composto "<socket>\t<pane>"), ordenado por nome — para uma seção por server.
+    private var liveByServer: [(server: String, socket: String, entries: [LiveEntry])] {
+        let groups = Dictionary(grouping: liveNotTracked) { Self.socket(of: $0.id) }
+        return groups.keys.sorted().map { sock in
+            (server: Self.serverName(sock), socket: sock, entries: groups[sock] ?? [])
+        }
+    }
+    /// Socket (parte antes do TAB) de um id composto de pane.
+    static func socket(of id: String) -> String {
+        String(id.split(separator: "\t", maxSplits: 1).first ?? "")
+    }
+    /// Nome legível do server = último componente do socket (ex.: "main", "teste").
+    static func serverName(_ socket: String) -> String {
+        (socket as NSString).lastPathComponent
+    }
+
+    // "Ao vivo no Mac": uma seção por servidor tmux, com ação de encerrar server.
+    @ViewBuilder private var liveServerSections: some View {
+        ForEach(liveByServer, id: \.socket) { group in
+            Section {
+                ForEach(group.entries) { liveRow($0) }
+            } header: {
+                HStack {
+                    Label("Ao vivo · \(group.server)", systemImage: "dot.radiowaves.left.and.right")
+                        .foregroundStyle(.blue)
+                        .textCase(nil)
+                    Spacer()
+                    Menu {
+                        Button(role: .destructive) {
+                            serverToKill = ServerKill(
+                                machine: group.entries.first?.machine ?? "macbook",
+                                socket: group.socket, name: group.server)
+                        } label: {
+                            Label("Encerrar server", systemImage: "xmark.octagon")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
+                    }
+                    .accessibilityLabel("Ações do server \(group.server)")
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var needsYouSection: some View {
+        if !needsYou.isEmpty {
+            Section {
+                ForEach(needsYou) { needsYouRow($0) }
+            } header: {
+                Label("Precisa de você", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .textCase(nil)
+            } footer: {
+                Text("Toque para responder — as do tmux abrem o terminal ao vivo.")
+            }
+        }
+    }
+
+    @ViewBuilder private var activeSection: some View {
+        if !activeOthers.isEmpty {
+            Section("Sessões") {
+                ForEach(activeOthers) { sessionLink($0) }
+            }
+        }
+    }
+
+    @ViewBuilder private var concludedSection: some View {
+        if !concludedOthers.isEmpty {
+            Section {
+                DisclosureGroup("Concluídas (\(concludedOthers.count))", isExpanded: $concludedExpanded) {
+                    ForEach(concludedOthers) { sessionLink($0) }
+                    Button(role: .destructive) {
+                        confirmingClear = true
+                    } label: {
+                        Label("Limpar todas", systemImage: "trash")
+                    }
+                }
+            }
+        }
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
             List {
-                if !liveNotTracked.isEmpty {
-                    Section {
-                        ForEach(liveNotTracked) { liveRow($0) }
-                    } header: {
-                        Label("Ao vivo no Mac", systemImage: "dot.radiowaves.left.and.right")
-                            .foregroundStyle(.blue)
-                            .textCase(nil)
-                    } footer: {
-                        Text("Sessões rodando agora no seu Mac (azul = rodando, verde = concluiu). Toque para acompanhar ao vivo.")
-                    }
-                }
-                if !needsYou.isEmpty {
-                    Section {
-                        ForEach(needsYou) { needsYouRow($0) }
-                    } header: {
-                        Label("Precisa de você", systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                            .textCase(nil)
-                    } footer: {
-                        Text("Toque para responder — as do tmux abrem o terminal ao vivo.")
-                    }
-                }
-                if !others.isEmpty {
-                    Section("Sessões") {
-                        ForEach(others) { sessionLink($0) }
-                    }
-                }
+                liveServerSections
+                needsYouSection
+                activeSection
+                concludedSection
             }
             .listStyle(.insetGrouped)
             // Destino único para navegação por valor (NavigationLink) e por push (path).
@@ -326,6 +423,32 @@ struct SessionListView: View {
             }
             .sheet(isPresented: $showingStatus) {
                 HubStatusView(sessions: model.sessions, live: model.liveSessions)
+            }
+            // Encerrar server (kill-server) — destrutivo, confirma antes.
+            .confirmationDialog(
+                "Encerrar o server \(serverToKill?.name ?? "")?",
+                isPresented: Binding(get: { serverToKill != nil }, set: { if !$0 { serverToKill = nil } }),
+                presenting: serverToKill
+            ) { target in
+                Button("Encerrar server", role: .destructive) {
+                    model.killServer(machine: target.machine, socket: target.socket)
+                }
+                Button("Cancelar", role: .cancel) {}
+            } message: { target in
+                Text("Fecha TODOS os panes/Claudes do server \(target.name) de uma vez.")
+            }
+            // Limpar concluídas — destrutivo, confirma antes.
+            .confirmationDialog(
+                "Limpar as concluídas?",
+                isPresented: $confirmingClear,
+                titleVisibility: .visible
+            ) {
+                Button("Limpar \(concludedOthers.count)", role: .destructive) {
+                    model.clearConcluded()
+                }
+                Button("Cancelar", role: .cancel) {}
+            } message: {
+                Text("Apaga da lista todas as sessões concluídas (não afeta o transcript no Mac).")
             }
             .alert(
                 "Renomear sessão",

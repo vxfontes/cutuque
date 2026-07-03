@@ -397,6 +397,20 @@ struct APIClient {
         try await send(request)
     }
 
+    /// Encerra o SERVIDOR tmux inteiro (todos os panes daquele socket).
+    /// `POST /machines/{machine}/tmux/kill-server`. Destrutivo — a UI confirma antes.
+    func tmuxKillServer(machine: String, socket: String) async throws {
+        let url = baseURL
+            .appendingPathComponent("machines").appendingPathComponent(machine)
+            .appendingPathComponent("tmux").appendingPathComponent("kill-server")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["socket": socket])
+        try await send(request)
+    }
+
     /// Corpo de `POST /machines/{machine}/adopt`.
     private struct AdoptBody: Encodable {
         let id: String

@@ -72,3 +72,15 @@ func TestParseTarget(t *testing.T) {
 		}
 	}
 }
+
+func TestValidKillSocket(t *testing.T) {
+	if validKillSocket("") == nil {
+		t.Error("socket vazio devia ser rejeitado (não fechar o server default)")
+	}
+	if validKillSocket("/tmp/tmux-501/main") != nil {
+		t.Error("socket válido foi rejeitado")
+	}
+	if validKillSocket("foo; rm -rf /") == nil {
+		t.Error("socket com shell metachar devia ser rejeitado")
+	}
+}

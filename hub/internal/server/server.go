@@ -88,6 +88,7 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		mux.Handle("POST /machines/{machine}/tmux/keys", requireAuth(cfg.Token, TmuxKeysHandler(lch)))
 		mux.Handle("POST /machines/{machine}/tmux/key", requireAuth(cfg.Token, TmuxKeyHandler(lch)))
 		mux.Handle("POST /machines/{machine}/tmux/kill", requireAuth(cfg.Token, TmuxKillHandler(lch)))
+		mux.Handle("POST /machines/{machine}/tmux/kill-server", requireAuth(cfg.Token, TmuxKillServerHandler(lch)))
 		mux.Handle("POST /machines/{machine}/tmux/resize", requireAuth(cfg.Token, TmuxResizeHandler(lch)))
 	}
 

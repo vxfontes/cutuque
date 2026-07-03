@@ -35,6 +35,7 @@ type Launcher interface {
 	TmuxKey(machine, target, key string) error
 	TmuxResize(machine, target string, cols, rows int) error
 	TmuxKill(machine, target string) error
+	TmuxKillServer(machine, socket string) error
 }
 
 // tmuxKeyRequest é o corpo de POST /machines/{machine}/tmux/key.
@@ -94,6 +95,37 @@ func TmuxKillHandler(lch Launcher) http.HandlerFunc {
 			return
 		}
 		err := lch.TmuxKill(machine, req.Target)
+		switch {
+		case errors.Is(err, launcher.ErrUnknownMachine):
+			writeJSONError(w, http.StatusNotFound, "unknown_machine")
+		case err != nil:
+			writeJSONError(w, http.StatusBadGateway, "tmux_failed")
+		default:
+			writeOK(w)
+		}
+	}
+}
+
+// tmuxKillServerRequest é o corpo de POST /machines/{machine}/tmux/kill-server.
+type tmuxKillServerRequest struct {
+	Socket string `json:"socket"`
+}
+
+// TmuxKillServerHandler encerra o servidor tmux inteiro do socket (todos os
+// panes). Destrutivo — o app confirma antes.
+//
+//	POST /machines/{machine}/tmux/kill-server {"socket":"/tmp/tmux-501/main"} →
+//	200 ok | 400 bad_request | 404 unknown_machine | 502 tmux_failed
+func TmuxKillServerHandler(lch Launcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		machine := r.PathValue("machine")
+		r.Body = http.MaxBytesReader(w, r.Body, maxLaunchBody)
+		var req tmuxKillServerRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Socket == "" {
+			writeJSONError(w, http.StatusBadRequest, "bad_request")
+			return
+		}
+		err := lch.TmuxKillServer(machine, req.Socket)
 		switch {
 		case errors.Is(err, launcher.ErrUnknownMachine):
 			writeJSONError(w, http.StatusNotFound, "unknown_machine")

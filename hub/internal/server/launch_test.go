@@ -100,6 +100,10 @@ func (f *fakeLauncher) TmuxKill(machine, target string) error {
 	f.gotTmuxTarget = target
 	return f.tmuxErr
 }
+func (f *fakeLauncher) TmuxKillServer(machine, socket string) error {
+	f.gotTmuxTarget = socket
+	return f.tmuxErr
+}
 
 func (f *fakeLauncher) Adopt(machine, id, cwd, title string) (session.Session, error) {
 	f.gotAdoptMachine, f.gotAdoptID, f.gotAdoptCwd, f.gotAdoptTitle = machine, id, cwd, title
@@ -507,6 +511,21 @@ func TestTmuxKillBadRequest(t *testing.T) {
 	rec := do(t, f, http.MethodPost, "/machines/macbook/tmux/kill", `{"target":""}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("target vazio => %d, quero 400", rec.Code)
+	}
+}
+
+func TestTmuxKillServer(t *testing.T) {
+	f := &fakeLauncher{}
+	rec := do(t, f, http.MethodPost, "/machines/macbook/tmux/kill-server", `{"socket":"/tmp/tmux-501/main"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, quero 200 (corpo: %s)", rec.Code, rec.Body.String())
+	}
+	if f.gotTmuxTarget != "/tmp/tmux-501/main" {
+		t.Errorf("TmuxKillServer recebeu socket=%q", f.gotTmuxTarget)
+	}
+	rec = do(t, f, http.MethodPost, "/machines/macbook/tmux/kill-server", `{"socket":""}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("socket vazio => %d, quero 400", rec.Code)
 	}
 }
 

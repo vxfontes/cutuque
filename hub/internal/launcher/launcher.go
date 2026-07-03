@@ -344,6 +344,24 @@ func (l *Launcher) TmuxKill(machine, target string) error {
 	return nil
 }
 
+// TmuxKillServer encerra o servidor tmux inteiro do socket (todos os panes).
+func (l *Launcher) TmuxKillServer(machine, socket string) error {
+	tgt, ok := l.targets[machine]
+	if !ok {
+		return ErrUnknownMachine
+	}
+	tm, ok := tgt.(claudecode.Tmuxer)
+	if !ok {
+		return ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	if err := tm.TmuxKillServer(ctx, socket); err != nil {
+		return fmt.Errorf("%w: %v", ErrDiscoverFailed, err)
+	}
+	return nil
+}
+
 // Live lista as sessões do Claude Code que estão RODANDO agora na máquina
 // (processo vivo + transcript recente). Mesmos erros/timeout do Discover.
 func (l *Launcher) Live(machine string) ([]session.Discovered, error) {

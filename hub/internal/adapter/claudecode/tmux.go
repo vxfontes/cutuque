@@ -116,6 +116,17 @@ type Tmuxer interface {
 	TmuxKey(ctx context.Context, target, key string) error
 	TmuxResize(ctx context.Context, target string, cols, rows int) error
 	TmuxKill(ctx context.Context, target string) error
+	TmuxKillServer(ctx context.Context, socket string) error
+}
+
+// validKillSocket exige um socket concreto e bem-formado para kill-server —
+// nunca o server default (socket vazio), que fecharia o tmux "principal" da
+// máquina sem a usuária ter escolhido.
+func validKillSocket(socket string) error {
+	if socket == "" || !tmuxSocketPattern.MatchString(socket) {
+		return fmt.Errorf("claudecode: socket inválido para kill-server: %q", socket)
+	}
+	return nil
 }
 
 // parseTmuxJSON converte a saída do tmuxListScript em []TmuxPane.
@@ -257,6 +268,16 @@ func (t *SSHTarget) TmuxKill(ctx context.Context, target string) error {
 	return err
 }
 
+// TmuxKillServer encerra TODO o servidor tmux do socket (kill-server): fecha
+// todos os panes/janelas daquele server de uma vez.
+func (t *SSHTarget) TmuxKillServer(ctx context.Context, socket string) error {
+	if err := validKillSocket(socket); err != nil {
+		return err
+	}
+	_, err := t.runSSHTmux(ctx, tmuxBase(socket)+" kill-server")
+	return err
+}
+
 func (t *SSHTarget) TmuxSend(ctx context.Context, target, text string) error {
 	socket, pane, err := parseTarget(target)
 	if err != nil {
@@ -323,6 +344,13 @@ func (t *LocalTarget) TmuxKill(ctx context.Context, target string) error {
 		return err
 	}
 	return exec.CommandContext(ctx, "tmux", tmuxLocalArgs(socket, "kill-pane", "-t", pane)...).Run()
+}
+
+func (t *LocalTarget) TmuxKillServer(ctx context.Context, socket string) error {
+	if err := validKillSocket(socket); err != nil {
+		return err
+	}
+	return exec.CommandContext(ctx, "tmux", tmuxLocalArgs(socket, "kill-server")...).Run()
 }
 
 func (t *LocalTarget) TmuxSend(ctx context.Context, target, text string) error {
