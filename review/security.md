@@ -1,23 +1,84 @@
 # Achados de Segurança — Cutuque
 
-## SEC-102 — corrida entre heartbeat de foreground e transição para background pode suprimir push indefinidamente
-**Severidade:** R2 | **OWASP:** A04:2021 – Insecure Design (falha de design em um controle de segurança/alerta, não injeção clássica)
-**Localização:** `app/CutuqueApp/ForegroundReporter.swift:36-50` (heartbeat `active:true` + envio imediato de `active:false` ao sair), `hub/internal/notifier/notifier.go:92-98` (`SetForeground`, `atomic.Int64` sem sequência lógica), `hub/internal/notifier/notifier.go:267-272` (`fanout`, ponto onde a supressão é aplicada)
+## SEC-106 — `Engine.ensureRunning` reabre variante silenciosa da corrida de criação de sessão (residual do SEC-103)
+**Severidade:** R2 | **OWASP:** A04:2021 – Insecure Design (falha de confiabilidade de um controle de segurança/aprovação, não injeção clássica)
+**Localização:** `hub/internal/engine/engine.go:86-102` (`ensureRunning`, branch de criação: `Get` + `Add` bruto, não `AddIfAbsent`)
 **Detectado:** 2026-07-03 | **Status:** open
 
 **Descrição:**
-A feature de supressão de push por foreground (feature #3 desta leva) depende de duas requisições HTTP INDEPENDENTES e sem sequência lógica entre si:
-- Heartbeat: `active:true` a cada 60s enquanto o app está `.active` (`ForegroundReporter.swift:36-43`).
-- Saída: `active:false` disparado imediatamente ao entrar em `.background`/`.inactive` (`ForegroundReporter.swift:45-50`), sem esperar o cancelamento do heartbeat em voo terminar.
+O fix do SEC-103/da 4ª ocorrência do padrão `reivindicação-não-atômica-de-recurso-compartilhado` migrou `Engine.EnsureRegistered` para `Registry.AddIfAllowed` (atômico), mas `Engine.ensureRunning` — o caminho IRMÃO que também cria sessão do zero, usado tanto pelo `Runner` quanto pelo dispatch de hook `SessionStart`/`UserPromptSubmit` via `Apply` — não foi migrado junto. Seu branch de criação continua fazendo `e.reg.Get(ev.SessionID)` seguido de `e.reg.Add(session.Session{...})` bruto como duas aquisições de lock separadas.
 
-`Notifier.SetForeground` (`notifier.go:92-98`) só faz `n.foregroundUntil.Store(...)` — um `atomic.Int64` garante que o acesso à variável é atômico, mas não impõe nenhuma ordem causal entre requests concorrentes: o hub aplica o que CHEGA por último na rede, não o que aconteceu por último no cliente. Qualquer transição momentânea para `.inactive` (Control Center, app switcher, chamada entrando, prompt de Face ID/passcode) já é suficiente para dispersar um par de requests (`false` seguido de `true`, ou vice-versa) sem nenhum debounce ou espera entre eles — não é um cenário raro amarrado só ao ciclo de 60s do heartbeat.
+Cenário: hook e Runner recebem o `SessionStarted` de uma sessão NUNCA vista por nenhum dos dois, quase simultaneamente — a mesma premissa do SEC-103 original. Se o `Get` de um dos dois lados retornar `exists=false` e, ANTES de seu `Add` bruto rodar, o outro lado tiver inserido E JÁ AVANÇADO o estado (ex.: processou seu próprio `EnsureRegistered`+`Apply(SessionStarted)` e, em seguida, um `Notification` de permissão real chegou primeiro, levando a sessão a `needs_you` com `PendingPrompt` preenchido), o `Add` bruto do outro lado SUBSTITUI o registro inteiro por um `session.Session{}` novo em `StateRunning` — apagando silenciosamente o `needs_you`/`PendingPrompt`/`Pane` que já existiam.
 
-Se uma requisição `active:true` (heartbeat em voo no momento em que o app foi para background) chegar ao hub DEPOIS de uma `active:false` mais recente, o hub reabre a janela de supressão por até 150s (`foregroundTTL`) mesmo com o app em background — suprimindo silenciosamente pushes de `needs_you`/`done`/`error` exatamente quando a usuária não está olhando o app e mais precisa ser avisada. Isso inverte o objetivo de segurança/confiabilidade da feature ("nunca perder o cutucão crítico quando o app não está aberto").
+Diferença em relação ao SEC-103 original: lá, o sintoma era visível (sessão fica travada em `needs_you` sem os botões de aprovação — a usuária pelo menos VÊ que algo está preso). Aqui o resultado é PIOR em silêncio: a sessão volta a aparecer como `running`, sem nenhum badge `needs_you`, enquanto o processo `claude` real continua bloqueado esperando resposta no stdin — nenhum sinal visível de que algo está errado. A janela é mais estreita que a do SEC-103 original (exige 3 eventos entrelaçados, não 2), mas o dano pior compensa a menor probabilidade.
 
 **Fix recomendado:**
-1. Incluir uma sequência/timestamp monotônico do cliente no corpo de `POST /app/foreground` (ex.: `{"active": bool, "at": <ms epoch>}`).
-2. `Notifier` guarda o `at` da última atualização aceita ao lado de `foregroundUntil`; ignora qualquer update cujo `at` seja mais antigo que o último aceito — restaura ordem LÓGICA (a que importa) em vez de depender da ordem de chegada na rede.
-3. Alternativa complementar (não substitui o fix acima): no cliente, `stopHeartbeat()` poderia aguardar (`await task?.value` via `Task<Void, Never>` com cancelamento cooperativo observado) a conclusão da chamada em voo antes de disparar `active:false`, reduzindo a janela de corrida local — mas não resolve reordenamento em nível de rede sozinho.
+1. Trocar o branch de criação de `ensureRunning` para `e.reg.AddIfAbsent(novaSessao)`; se `added==false`, cair no mesmo bloco de reconciliação (`Reclaim`/`UpdateState`/`SetPane`) já existente logo abaixo, hoje só executado quando `exists==true` a partir do `Get` original.
+2. Regressão: teste de integração que dispara `Apply(SessionStarted)` concorrente de duas fontes para o MESMO id novo, com uma delas avançando para `needs_you` entre as duas chamadas de `Get`, e verifica que o estado final preserva `needs_you`/`PendingPrompt` em vez de reverter para `running`.
+
+`[→ review/patterns.md#reivindicação-não-atômica-de-recurso-compartilhado]` `[relacionado a SEC-103]`
+
+## SEC-105 — corrida de persistência em disco de device tokens (`devices/store.go`)
+**Severidade:** R3 | **OWASP:** A04:2021 – Insecure Design (perda de integridade de dados de configuração, não injeção clássica)
+**Localização:** `hub/internal/devices/store.go:78-91` (`persist()`, chamado fora do lock em `Upsert`/`Remove`, sem serialização entre chamadas concorrentes)
+**Detectado:** 2026-07-03 | **Status:** open
+
+**Descrição:**
+`persist()` é chamado FORA do `sync.RWMutex` que protege `byToken`, tanto em `Upsert` quanto em `Remove`. O padrão interno (write em `path+".tmp"` seguido de `os.Rename`) é atômico em relação ao processo morrer no meio de UMA chamada, mas nada serializa DUAS chamadas concorrentes de `persist()` entre si — ambas compartilham o mesmo `path+".tmp"`. Cenário: um `Upsert` (app re-registrando token) concorrente com um `Remove` (disparado por um 410 Unregistered detectado no fanout de push) podem interlaçar `List()`+`Marshal`+`WriteFile`+`Rename` de forma que a chamada que TERMINA por último vence, independente de qual mutação era logicamente mais recente — o arquivo em disco pode reverter silenciosamente para um snapshot mais antigo do que o estado em memória (que, esse sim, nunca fica inconsistente sozinho, protegido corretamente pelo mutex).
+
+Esta classe de corrida é invisível a `go test -race`: é uma corrida de I/O de arquivo do sistema operacional entre duas chamadas independentes de `os.WriteFile`/`os.Rename`, não uma corrida de memória gerenciada pelo runtime Go (que é tudo que o detector de race do Go instrumenta) — coerente com a suíte inteira do hub passando com `-race` sem acusar nada aqui.
+
+Impacto prático: um device removido (410 do APNs) pode "voltar" no disco se seu `Remove` perder a corrida contra um `Upsert` mais antigo que ainda não tinha terminado de persistir — na pior hipótese, reenviar push para um token morto após um restart do hub (desperdiça budget de push, gera ruído de log, não expõe dado de terceiro). No sentido oposto, um `Upsert` recém-chegado pode ser perdido do disco (embora sobreviva em memória até o próximo restart).
+
+**Fix recomendado:**
+1. Um `persistMu sync.Mutex` dedicado (separado do `mu` que protege `byToken`), adquirido no INÍCIO de `persist()` e liberado só no fim, cobrindo `List()`+`Marshal`+`WriteFile`+`Rename` como uma seção crítica única — o último a adquirir o lock sempre lê o `List()` mais fresco no momento em que roda, então o resultado final em disco sempre reflete o estado mais recente, não o mais lento a terminar.
+2. Teste de regressão com N goroutines concorrentes chamando `Upsert`/`Remove`, seguido de verificação de que o conteúdo final em disco bate com `List()` em memória.
+3. Non-blocking relacionado: `persist()`/`load()` engolem erros de I/O silenciosamente — vale um `slog.Warn` nos `return` de erro para não perder o sinal operacional de um disco cheio/sem permissão.
+
+`[→ review/patterns.md#persistência-em-disco-fora-da-seção-crítica]`
+
+## SEC-104 — colisão de pane cross-máquina (chave composta sem dimensão de `machine`)
+**Severidade:** R2 | **OWASP:** A04:2021 – Insecure Design (isolamento insuficiente entre sessões/máquinas diferentes)
+**Localização:** hub: `hub/internal/server/hooks.go:32-43` (`hookPayload.paneTarget()`, nunca inclui `machine`), `hub/internal/registry/registry.go:189-230` (`SetPane`, loop de eviction compara só `os.Pane == pane`, falta `&& os.Machine == s.Machine`). app: `app/CutuqueApp/SessionListView.swift` (`LiveEntry.id`, `livePaneIDs`, `needsYouPaneIDs`, `others`, `liveState(_:)` — todos comparam `tmuxTarget`/pane como `String` sem `machine`)
+**Detectado:** 2026-07-03 | **Status:** open
+
+**Descrição:**
+O alvo tmux composto (`"<socket>\t<pane>"`, montado em `hookPayload.paneTarget()`) nunca inclui a máquina em NENHUM lugar do código, nem no hub nem no app. Como tmux usa por padrão o socket "default" e a primeira pane de uma sessão sempre é "%0", duas máquinas diferentes rodando cada uma uma sessão tmux default colidem na MESMA string de pane com boa probabilidade na prática — o Cutuque já suporta multi-máquina nativamente (`Launcher.targets`/`SSHTarget`/`LocalTarget`, endpoints `/machines/{machine}/tmux`, `/machines/{machine}/live`), então esta não é uma configuração hipotética.
+
+No hub: `Registry.SetPane`'s loop de eviction (linhas 206-217) varre TODAS as sessões procurando `os.Pane == pane` sem checar `os.Machine == s.Machine` — uma sessão `needs_you` na Máquina A pode ser evictada (pane limpo, estado forçado para `done`) por uma sessão nova que só coincide na string de pane na Máquina B, dado de outra máquina interferindo silenciosamente no estado de uma sessão não relacionada.
+
+No app: `livePaneIDs`/`needsYouPaneIDs` (`SessionListView.swift`) são `Set<String>` construídos a partir de TODAS as máquinas configuradas sem incluir `machine` na chave, e `liveState(_:)` faz `model.sessions.first(where: { $0.tmuxTarget == entry.id })` sem filtrar por máquina — uma linha "Ao vivo" da Máquina B pode herdar o estado/dedup de uma sessão da Máquina A que colide na string de pane. Consequência mais grave: uma sessão `needs_you` mostrando um `pendingPrompt` de uma máquina, ao ser tocada, pode rotear a interação (capture-pane/send-keys) para o terminal ao vivo de OUTRA máquina/sessão que coincide na string de pane — a usuária pode digitar uma resposta pensando estar respondendo a um prompt quando na verdade está interagindo com um processo totalmente diferente.
+
+**Fix recomendado:**
+1. Patch mínimo imediato no hub: adicionar `&& os.Machine == s.Machine` à condição de eviction em `SetPane`.
+2. Fix durável: incluir `machine` na própria chave composta (`"<machine>\t<socket>\t<pane>"`) em TODO lugar onde ela é construída/comparada — `hooks.go: paneTarget()`, `registry.go: SetPane`, e no app: `LiveEntry`/`tmuxTarget`/os sets de dedup — para que nenhum código futuro que compare panes precise lembrar de checar `machine` separadamente.
+3. Regressão: teste no hub simulando duas sessões de máquinas diferentes com o mesmo `pane`/`socket`, verificando que `SetPane` não evicta a sessão da outra máquina.
+
+`[→ review/patterns.md#chave-composta-sem-dimensão-de-desambiguação]`
+
+## SEC-103 — corrida hook-vs-runner pode travar permanentemente o gate de aprovação de sessão `-p` lançada pelo hub
+**Severidade:** R2 | **OWASP:** A04:2021 – Insecure Design (falha de confiabilidade de um controle de segurança/aprovação, não injeção clássica)
+**Localização:** `hub/internal/engine/engine.go:86-107` (`ensureRunning`, nunca corrige `External`/`Title`/`Machine`/`Agent` quando a sessão já existe), `hub/internal/engine/engine.go:117-146` (`EnsureRegistered`, sempre cria com `External: true`), `hub/internal/server/hooks.go:111-125` (`HookHandler`, chama `EnsureRegistered` incondicionalmente para todo hook, inclusive de sessões `-p` lançadas pelo próprio hub), `app/CutuqueApp/SessionDetailView.swift` (`permissionPrompt`, gated a `!model.session.isExternal` — sem esse gate aberto não há canal de aprovação para sessão headless)
+**Detectado:** 2026-07-03 | **Status:** RESOLVIDO (2026-07-03, para o cenário originalmente reportado — ver ressalva)
+
+**Resolução (2026-07-03):**
+`Registry.Reclaim(id, title, machine, agent)` (`registry.go`) foi introduzido e é chamado a partir de `Engine.ensureRunning` (`engine.go`) sempre que `!ev.External && cur.External` — ou seja, quando um evento AUTORITATIVO do `Runner` (`ev.External == false`) chega para uma sessão que hoje está marcada `External == true` (criada primeiro por um hook). `Reclaim` corrige `External` para `false` e atualiza `Title`/`Machine`/`Agent` a partir do evento do Runner, fechando exatamente a janela descrita originalmente: não importa mais qual fonte chega primeiro, o Runner sempre consegue "reclamar" a sessão como hub-owned quando seu próprio evento chega. Confirmado via leitura de código (`engine.go`, `registry.go`) — o mecanismo bate com a opção 1 do fix originalmente recomendado.
+
+**Ressalva (2026-07-03):** o MESMO branch de `ensureRunning` que chama `Reclaim` (usado quando a sessão JÁ existe) está correto; mas o branch IRMÃO — criação de sessão DO ZERO, quando nenhum dos dois lados jamais viu o id antes — continua fazendo `Get`+`Add` bruto, não `AddIfAbsent`, reabrindo uma variante mais estreita (e mais silenciosa) da mesma classe de corrida. Rastreada separadamente como **SEC-106** (não reabre este ticket porque o cenário aqui descrito — sessão já registrada por um lado, reclamada pelo outro — está genuinamente fechado; o residual é uma janela de timing distinta, na criação concorrente do zero).
+
+**Descrição original (mantida para contexto histórico):**
+O forwarder de hook (`~/.cutuque/hook.sh`) é configurado a nível de usuário no Claude Code e dispara para TODA sessão `claude` rodando no Mac — inclusive as sessões `claude -p` que o próprio hub lança localmente via `Launcher`/`Runner` (stream-json), e agentes de terceiros que também chamem `claude` na mesma máquina. Isso cria DUAS fontes independentes de eventos para o MESMO `session_id`, sem nenhuma ordenação garantida entre elas. Se o hook vencesse a corrida, a sessão ficava marcada `External = true` de forma permanente, e o app (gated a `!isExternal` para mostrar os botões aprovar/negar) não oferecia nenhum canal de resposta para uma sessão `-p` headless — o agente ficava bloqueado no `control_request` indefinidamente.
+
+## SEC-102 — corrida entre heartbeat de foreground e transição para background pode suprimir push indefinidamente
+**Severidade:** R2 | **OWASP:** A04:2021 – Insecure Design (falha de design em um controle de segurança/alerta, não injeção clássica)
+**Localização:** `app/CutuqueApp/ForegroundReporter.swift:36-50` (heartbeat `active:true` + envio imediato de `active:false` ao sair), `hub/internal/notifier/notifier.go:92-111` (`SetForeground`, agora com `fgMu`/`fgLastAt`), `hub/internal/notifier/notifier.go` (`fanout`, ponto onde a supressão é aplicada)
+**Detectado:** 2026-07-03 | **Status:** RESOLVIDO (2026-07-03)
+
+**Resolução (2026-07-03):**
+`Notifier.SetForeground` (`notifier.go:94-111`) agora recebe um timestamp lógico (`at`) do cliente e usa `fgMu`/`fgLastAt` para descartar updates fora de ordem (`if at < n.fgLastAt { return }`) antes de aplicar `foregroundUntil` — exatamente o fix recomendado originalmente (timestamp/sequência monotônica do cliente, aplicado no hub por ordem LÓGICA, não por ordem de chegada na rede). Confirmado via leitura de código. Não foi verificado neste round se o cliente (`ForegroundReporter.swift`) já envia o `at` correspondente no corpo de `POST /app/foreground` — vale uma confirmação rápida do payload do app na próxima leva que tocar este arquivo, mas o mecanismo do lado do hub está correto e é a peça que fecha a corrida relatada.
+
+**Descrição original (mantida para contexto histórico):**
+A feature de supressão de push por foreground dependia de duas requisições HTTP independentes e sem sequência lógica entre si (heartbeat `active:true` a cada 60s + saída imediata `active:false`). `SetForeground` só fazia `Store` num `atomic.Int64`, que garante atomicidade de acesso mas não ordem causal — o hub aplicava o que chegasse por último na rede, não o que tivesse acontecido por último no cliente, podendo reabrir a janela de supressão por até 150s mesmo com o app em background.
 
 ## SEC-101 — OS command injection via `id` (Adopt) no SSHTarget
 **Severidade:** R1 | **OWASP:** A03:2021 – Injection
@@ -34,6 +95,12 @@ Testes de regressão: `TestRemoteClaudeCommandNeutralizesInjection` (5 payloads:
 
 **Verificação de não-regressão (2026-07-03, leva de histórico/live/foreground):**
 `SSHTarget.Transcript` (`transcript.go:124-127`) reusa o MESMO `singleQuote`/único nível de shell (sem `bash -lc` aninhado) e depende de `Launcher.Adopt` já ter validado `id` via `sessionIDPattern` antes de qualquer chamada (único call site, confirmado via grep). `Live`/`live.go` não recebe nenhum input do cliente — script é uma constante Go, `machine` só indexa o mapa fixo de targets. **SEC-101 não regrediu.**
+
+**Verificação de não-regressão (2026-07-03, leva do hook de aviso / pane composto):**
+`hub/internal/adapter/claudecode/tmux.go` estende o mesmo target composto (`"<socket>\t<pane>"`) para 4 novas operações (`TmuxCapture`/`Send`/`Key`/`Resize`), todas client-facing via HTTP (`hub/internal/server/launch.go`). Confirmado seguro: `parseTarget` valida pane (`^%[0-9]+$`) e socket (`^/[A-Za-z0-9._/ -]+$`) — ambos rejeitam `;`, `$()`, aspas, backtick — ANTES de qualquer uso; todo valor validado passa por `singleQuote` em cada call site; um único nível de shell (`ssh dest "<cmd>"`, sem `bash -lc` aninhado); `TmuxKey` restringe `key` a um allowlist fixo (`tmuxAllowedKeys`); `TmuxSend` usa `-l --` (literal + fim-de-opções) no `send-keys`. O espaço permitido no regex do socket não é explorável (sempre entra em UM argumento via `singleQuote`, com ou sem espaço). **SEC-101 não regrediu.**
+
+**Verificação de não-regressão (2026-07-03, leva de Notification ociosa / devices / Resolve):**
+Nenhuma mudança nesta leva toca `remoteClaudeCommand`/`singleQuote`/`Adopt`. O novo endpoint `POST /sessions/{id}/resolve` (`ResolveHandler`) só aceita o `id` já existente no Registry (path param, não usado para montar comando algum) e chama `Launcher.Resolve` → `reg.UpdateState(id, StateDone)` — sem tocar em `exec`/`ssh`. **SEC-101 não regrediu.**
 
 **Descrição:**
 `POST /machines/{machine}/adopt` aceita `id` livre do cliente (app) e grava como `Session.ID` no registry sem validar formato. Quando essa sessão (idle, sem handle vivo) recebe `POST /sessions/{id}/input`, `Launcher.SendText` cai em `resume()`, que chama `tgt.Start(ctx, s.ID, s.Cwd)` com `s.ID` = o `id` fornecido pelo cliente. Para `SSHTarget`, isso vira `--resume <id>` dentro de `remoteClaudeCommand`, que monta:
