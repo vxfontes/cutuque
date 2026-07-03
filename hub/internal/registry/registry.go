@@ -98,7 +98,9 @@ func (r *Registry) load() {
 	cutoff := time.Now().Add(-persistSessionTTL)
 	r.mu.Lock()
 	for _, s := range ps.Sessions {
-		if s.ID == "" || s.UpdatedAt.Before(cutoff) {
+		// Pula vazias, velhas (TTL) e probes/health-checks (ex.: ClaudeProbe) —
+		// assim um restart limpa o lixo que já estava persistido.
+		if s.ID == "" || s.UpdatedAt.Before(cutoff) || session.IsEphemeralCwd(s.Cwd) {
 			continue
 		}
 		r.byID[s.ID] = s

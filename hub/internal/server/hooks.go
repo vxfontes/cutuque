@@ -8,6 +8,7 @@ import (
 
 	"github.com/vxfontes/cutuque/hub/internal/engine"
 	"github.com/vxfontes/cutuque/hub/internal/event"
+	"github.com/vxfontes/cutuque/hub/internal/session"
 )
 
 // hookPayload é o corpo enviado pelos hooks do Claude Code (ver docs/09). cwd e
@@ -146,6 +147,16 @@ func HookHandler(eng *engine.Engine) http.HandlerFunc {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "bad_request"})
+			return
+		}
+
+		// Probes/health-checks (ex.: CodexBar roda claude em ~/Library/Application
+		// Support/.../ClaudeProbe repetidamente) não são sessões reais do usuário —
+		// ignora tudo (não registra, não cutuca), senão inundam o app.
+		if session.IsEphemeralCwd(p.Cwd) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 			return
 		}
 

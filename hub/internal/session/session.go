@@ -2,7 +2,10 @@
 // conforme a máquina de estados do doc 03 (modelo de estado).
 package session
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // State é o estado atual de uma sessão de agente.
 type State string
@@ -60,6 +63,26 @@ type Discovered struct {
 	// State só é preenchido para panes vivos do tmux (TmuxList): "running"|
 	// "waiting"|"idle", lido do próprio terminal. Vazio para descobertas de disco.
 	State string `json:"state,omitempty"`
+}
+
+// IsEphemeralCwd diz se um cwd é um diretório INTERNO de app / cache / probe —
+// nunca um projeto real do usuário. Sessões de hook nesses caminhos são
+// health-checks automáticos (ex.: o CodexBar spawna `claude` em
+// ~/Library/Application Support/CodexBar/ClaudeProbe repetidamente), que
+// inundariam o app com "mil sessões" sem sentido. O hub as ignora (não registra,
+// não cutuca, não recarrega do disco). Comparação case-insensitive.
+func IsEphemeralCwd(cwd string) bool {
+	lc := strings.ToLower(cwd)
+	for _, p := range []string{
+		"/library/application support/",
+		"/library/caches/",
+		"/claudeprobe",
+	} {
+		if strings.Contains(lc, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // DirEntry é uma subpasta de um diretório na máquina (seletor de pastas do app).
