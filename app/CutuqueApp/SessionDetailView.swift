@@ -274,7 +274,7 @@ struct SessionDetailView: View {
     private var interactionBar: some View {
         HStack(spacing: 8) {
             TextField(
-                isLive ? "responder ao agente..." : "nova tarefa nesta máquina...",
+                isLive ? "responder ao agente..." : "continuar a conversa...",
                 text: $draft, axis: .vertical
             )
             .textFieldStyle(.roundedBorder)
@@ -283,23 +283,16 @@ struct SessionDetailView: View {
             Button {
                 let text = draft
                 Task {
-                    if isLive {
-                        // Sessão viva: manda o texto pro claude em andamento.
-                        if await model.sendInput(text) { draft = "" }
-                    } else {
-                        // Encerrada: lança nova tarefa na mesma máquina e navega
-                        // pra ela (o processo antigo morreu — não dá pra responder).
-                        if let s = await model.launchNew(text) {
-                            draft = ""
-                            router.openSession(s.id)
-                        }
-                    }
+                    // Sempre a MESMA sessão: viva → responde ao agente em
+                    // andamento; encerrada → o hub retoma a conversa (claude
+                    // --resume) e a resposta chega nesta mesma tela via WS.
+                    if await model.sendInput(text) { draft = "" }
                 }
             } label: {
-                Image(systemName: isLive ? "paperplane.fill" : "play.fill")
+                Image(systemName: "paperplane.fill")
             }
             .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.actionInProgress)
-            .accessibilityLabel(isLive ? "Enviar ao agente" : "Lançar nova tarefa")
+            .accessibilityLabel("Enviar mensagem")
         }
         .padding()
         .background(.bar)
