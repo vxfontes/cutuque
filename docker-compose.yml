@@ -26,15 +26,12 @@ services:
       # read-only. O caminho dentro do container tem que casar com
       # CUTUQUE_APNS_KEY_PATH no hub.env (ex.: /config/key.p8).
       - ./config/key.p8:/config/key.p8:ro
-      # ~/.ssh do host, read-only: é de onde o `ssh` DENTRO do container lê a
-      # chave privada, o known_hosts e (se usado) o ~/.ssh/config com os
-      # aliases passados em CUTUQUE_SSH_TARGETS (ex. "remote-host"). No
-      # ZimaOS a sessão de gerência roda como root com HOME=/DATA (recon da
-      # Fase 5), então o path real do host é `/DATA/.ssh` (ou onde a chave
-      # server->MacBook foi colocada, ex. /DATA/AppData/cutuque/ssh/ — nesse
-      # caso ajuste o bind mount abaixo para apontar pra lá em vez de
-      # `/DATA/.ssh`). O container roda como root (ver Dockerfile) justamente
-      # para conseguir ler essa chave com as permissões 600 herdadas do host.
-      - /DATA/.ssh:/root/.ssh:ro
+      # ssh DEDICADO do container (isolado do ~/.ssh do host, para não interferir
+      # no ssh de gerência do ZimaOS): contém só a chave cutuque_hub, o
+      # known_hosts (Mac + macmini) e um config com os aliases usados em
+      # CUTUQUE_SSH_TARGETS (mac-cutuque, macmini-self → IdentityFile
+      # /root/.ssh/cutuque_hub). Read-only; o container roda como root para ler
+      # a chave 600 herdada do host.
+      - ./config/ssh:/root/.ssh:ro
     # A porta 8787 já é exposta via host network (network_mode: host) — sem
     # necessidade de "ports:" aqui.
