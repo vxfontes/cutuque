@@ -57,6 +57,17 @@ func recv(t *testing.T, f *fakePusher) recordedPush {
 	}
 }
 
+// tryRecv espera um push por até d; got=false se nada chegou (para asserir
+// AUSÊNCIA de push, ex.: coalescing).
+func tryRecv(f *fakePusher, d time.Duration) (recordedPush, bool) {
+	select {
+	case p := <-f.ch:
+		return p, true
+	case <-time.After(d):
+		return recordedPush{}, false
+	}
+}
+
 // fixture monta registry+engine+notifier com um device registrado e o inicia.
 func fixture(t *testing.T) (*engine.Engine, *registry.Registry, *devices.Store, *fakePusher, *Notifier) {
 	t.Helper()
@@ -66,6 +77,9 @@ func fixture(t *testing.T) (*engine.Engine, *registry.Registry, *devices.Store, 
 	store.Upsert("tokendevice1", "ios")
 	fake := newFakePusher()
 	n := New(fake, store, reg, nil)
+	// Prazo curto do push adiado de done externo (default é 45s): mantém os testes
+	// rápidos. Setado ANTES do Start (happens-before a goroutine) para não correr.
+	n.doneDelay = 50 * time.Millisecond
 	n.Start()
 	t.Cleanup(n.Close)
 	return eng, reg, store, fake, n
@@ -190,6 +204,54 @@ func TestNotifiesOnDone(t *testing.T) {
 	}
 	if !strings.Contains(body, `"category":"DONE"`) {
 		t.Errorf("push de done sem category DONE: %s", body)
+	}
+}
+
+func startExternal(eng *engine.Engine, id string) {
+	eng.Apply(event.Event{
+		SessionID: id, Type: event.SessionStarted,
+		Machine: "macbook", Agent: "claude-code", Title: "tmux task",
+		External: true, At: time.Now(),
+	})
+}
+
+// TestNotifiesOnDoneExternal: sessão externa (tmux/hook) cutuca ao concluir —
+// depois do prazo de coalescing (aqui curto), se continuar concluída.
+func TestNotifiesOnDoneExternal(t *testing.T) {
+	eng, _, _, fake, _ := fixture(t)
+	startExternal(eng, "ext1")
+	eng.Apply(event.Event{SessionID: "ext1", Type: event.Finished, At: time.Now()})
+
+	p := recv(t, fake)
+	if !strings.Contains(string(p.payload), `"state":"done"`) {
+		t.Errorf("sessão externa devia cutucar done: %s", p.payload)
+	}
+}
+
+// TestDonePushCoalescedOnResume: sessão externa interativa — done seguido de um
+// novo turno (running) ANTES do prazo NÃO deve cutucar; só quando de fato para.
+func TestDonePushCoalescedOnResume(t *testing.T) {
+	eng, _, _, fake, _ := fixture(t)
+	startExternal(eng, "ext1")
+
+	// Turno 1 termina; a usuária retoma logo (novo prompt → running) antes do prazo.
+	eng.Apply(event.Event{SessionID: "ext1", Type: event.Finished, At: time.Now()})
+	eng.Apply(event.Event{SessionID: "ext1", Type: event.SessionStarted, External: true, At: time.Now()})
+
+	// Nada deve chegar dentro do prazo (o push de done do turno 1 foi cancelado).
+	if p, got := tryRecv(fake, 200*time.Millisecond); got {
+		t.Fatalf("push indevido (deveria ter sido coalescido): %s", p.payload)
+	}
+
+	// Turno 2 termina e agora ela para de verdade → UM push.
+	eng.Apply(event.Event{SessionID: "ext1", Type: event.Finished, At: time.Now()})
+	p := recv(t, fake)
+	if !strings.Contains(string(p.payload), `"state":"done"`) {
+		t.Errorf("devia cutucar done ao parar de vez: %s", p.payload)
+	}
+	// E só um: nada mais depois.
+	if p2, got := tryRecv(fake, 200*time.Millisecond); got {
+		t.Fatalf("push de done duplicado: %s", p2.payload)
 	}
 }
 

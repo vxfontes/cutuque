@@ -90,6 +90,79 @@ func TestHookStopSetsDone(t *testing.T) {
 	}
 }
 
+// TestHookNotificationPermissionBlocks: a mensagem real de permissão do Claude
+// ("Claude needs your permission") é bloqueio → needs_you.
+func TestHookNotificationPermissionBlocks(t *testing.T) {
+	cfg, reg := testDeps()
+	now := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	reg.Add(session.Session{ID: "s", Machine: "macbook", Agent: "claude-code", Title: "t", State: session.StateRunning, External: true, CreatedAt: now, UpdatedAt: now})
+
+	body := `{"session_id":"s","hook_event_name":"Notification","message":"Claude needs your permission to use Bash"}`
+	req := httptest.NewRequest(http.MethodPost, "/hooks/claude", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
+
+	if s, _ := reg.Get("s"); s.State != session.StateNeedsYou {
+		t.Errorf("permissão devia dar needs_you; State = %q", s.State)
+	}
+}
+
+// TestHookPermissionMessageLocalized: a mensagem de permissão do Claude é
+// traduzida para PT-BR no prompt (preservando o nome da ferramenta).
+func TestHookPermissionMessageLocalized(t *testing.T) {
+	cfg, reg := testDeps()
+	now := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	reg.Add(session.Session{ID: "s", Machine: "macbook", Agent: "claude-code", Title: "t", State: session.StateRunning, External: true, CreatedAt: now, UpdatedAt: now})
+
+	body := `{"session_id":"s","hook_event_name":"Notification","message":"Claude needs your permission to use Bash"}`
+	req := httptest.NewRequest(http.MethodPost, "/hooks/claude", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
+
+	s, _ := reg.Get("s")
+	if s.PendingPrompt != "Claude precisa da sua permissão para usar Bash" {
+		t.Errorf("prompt não traduzido: %q", s.PendingPrompt)
+	}
+}
+
+// TestHookIdleNotificationBecomesDone: a mensagem ociosa do Claude ("waiting for
+// your input") NÃO é bloqueio — vira done, não needs_you.
+func TestHookIdleNotificationBecomesDone(t *testing.T) {
+	cfg, reg := testDeps()
+	now := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	reg.Add(session.Session{ID: "s", Machine: "macbook", Agent: "claude-code", Title: "t", State: session.StateRunning, External: true, CreatedAt: now, UpdatedAt: now})
+
+	body := `{"session_id":"s","hook_event_name":"Notification","message":"Claude is waiting for your input"}`
+	req := httptest.NewRequest(http.MethodPost, "/hooks/claude", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
+
+	if s, _ := reg.Get("s"); s.State != session.StateDone {
+		t.Errorf("espera ociosa devia dar done; State = %q", s.State)
+	}
+}
+
+// TestHookIdleDoesNotResurrectDone: o bug relatado — uma sessão JÁ concluída
+// recebe o Notification ocioso e NÃO deve voltar para needs_you.
+func TestHookIdleDoesNotResurrectDone(t *testing.T) {
+	cfg, reg := testDeps()
+	now := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	reg.Add(session.Session{ID: "s", Machine: "macbook", Agent: "claude-code", Title: "t", State: session.StateDone, External: true, CreatedAt: now, UpdatedAt: now})
+
+	body := `{"session_id":"s","hook_event_name":"Notification","message":"Claude is waiting for your input"}`
+	req := httptest.NewRequest(http.MethodPost, "/hooks/claude", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
+
+	if s, _ := reg.Get("s"); s.State != session.StateDone {
+		t.Errorf("sessão concluída não pode voltar pra needs_you; State = %q", s.State)
+	}
+}
+
 func TestHookUnknownEventIsNoOp(t *testing.T) {
 	cfg, reg := testDeps()
 	now := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)

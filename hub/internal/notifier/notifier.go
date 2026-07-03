@@ -65,7 +65,18 @@ type Notifier struct {
 	closed bool                          // Close() em curso: não spawna novos nudges
 	states map[string]session.State      // último estado notificado por sessão
 	nudges map[string]context.CancelFunc // re-cutucão ativo por sessão em needs_you
+	// donePushes: push de "concluído" AGENDADO (adiado) por sessão externa —
+	// cancelado se a sessão voltar a rodar antes do prazo, para coalescer os
+	// vários Stop de uma conversa interativa em um único push (review #1).
+	donePushes map[string]context.CancelFunc
+	doneDelay  time.Duration // prazo do push adiado; injetável nos testes
 }
+
+// doneCoalesceDelay é quanto o push de "concluído" de uma sessão externa espera
+// antes de disparar. Se a sessão receber um novo turno (→ running) nesse intervalo,
+// o push é cancelado. Perto do timeout de ociosidade do próprio Claude (~60s) para
+// não cutucar enquanto a usuária ainda está lendo/pensando entre turnos.
+const doneCoalesceDelay = 45 * time.Second
 
 // SetRenudgeInterval ajusta o intervalo do re-cutucão em runtime (aplicado no
 // próximo ciclo de cada sessão). Só rejeita valores não-positivos; a validação
@@ -124,12 +135,14 @@ func New(pusher Pusher, store *devices.Store, reg *registry.Registry, logger *sl
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	n := &Notifier{
-		apns:    pusher,
-		devices: store,
-		reg:     reg,
-		logger:  logger,
-		states:  make(map[string]session.State),
-		nudges:  make(map[string]context.CancelFunc),
+		apns:       pusher,
+		devices:    store,
+		reg:        reg,
+		logger:     logger,
+		states:     make(map[string]session.State),
+		nudges:     make(map[string]context.CancelFunc),
+		donePushes: make(map[string]context.CancelFunc),
+		doneDelay:  doneCoalesceDelay,
 	}
 	n.renudgeNanos.Store(int64(defaultRenudge))
 	return n
@@ -156,6 +169,10 @@ func (n *Notifier) Close() {
 	for id, cancel := range n.nudges {
 		cancel()
 		delete(n.nudges, id)
+	}
+	for id, cancel := range n.donePushes {
+		cancel()
+		delete(n.donePushes, id)
 	}
 	n.mu.Unlock()
 	n.wg.Wait()
@@ -193,13 +210,29 @@ func (n *Notifier) handle(s session.Session) {
 			// ainda, para o próximo (com texto) contar como a transição.
 			return
 		}
+		// Novo pedido cancela um push de "concluído" adiado (a sessão não estava
+		// realmente ociosa).
+		n.cancelDonePush(s.ID)
 	case session.StateDone, session.StateError:
 		// Saiu de needs_you (ou nunca esteve): encerra qualquer re-cutucão.
 		n.stopNudge(s.ID)
+		if s.External {
+			// Sessão externa (hook/tmux): a usuária quer ser avisada quando a
+			// sessão CONCLUI. Mas o Stop do Claude dispara a cada turno, então
+			// cutucar na hora viraria um push por turno numa conversa interativa
+			// (review #1). Em vez disso, AGENDA o push e o cancela se a sessão
+			// voltar a rodar (novo prompt) antes do prazo — resultado: UM push
+			// quando a usuária de fato parou, não a cada resposta.
+			n.setState(s.ID, s.State)
+			n.scheduleDonePush(s.ID)
+			return
+		}
+		// Sessão lançada pelo hub: push imediato (segue abaixo).
 	default:
-		// running/idle: sem push. Encerra re-cutucão (ex.: aprovou → running) e
-		// registra o estado para detectar as próximas transições corretamente.
+		// running/idle: sem push. Encerra re-cutucão (ex.: aprovou → running),
+		// cancela push de done adiado (novo turno começou) e registra o estado.
 		n.stopNudge(s.ID)
+		n.cancelDonePush(s.ID)
 		n.setState(s.ID, s.State)
 		return
 	}
@@ -209,8 +242,11 @@ func (n *Notifier) handle(s session.Session) {
 	n.fanout(payload, opts)
 
 	// needs_you: além do push imediato, re-cutuca a cada renudgeInterval até a
-	// sessão sair de needs_you (opção 1 — persistência háptica).
-	if s.State == session.StateNeedsYou {
+	// sessão sair de needs_you. SÓ para sessões lançadas pelo hub (que a usuária
+	// resolve no app). Sessões externas (hook/tmux) são resolvidas no terminal —
+	// o hub não sabe quando isso aconteceu, então re-cutucar seria infinito: elas
+	// avisam uma vez só (review: "push sem parar").
+	if s.State == session.StateNeedsYou && !s.External {
 		n.startNudge(s.ID)
 	}
 }
@@ -245,6 +281,59 @@ func (n *Notifier) stopNudge(id string) {
 		delete(n.nudges, id)
 	}
 	n.mu.Unlock()
+}
+
+// scheduleDonePush agenda (ou reagenda) o push de "concluído" de uma sessão
+// externa para daqui a doneCoalesceDelay. Se a sessão sair de done/error antes
+// disso (novo turno → running), cancelDonePush o cancela — assim uma conversa
+// interativa no tmux gera UM push (quando a usuária de fato para), não um por
+// turno (review #1).
+func (n *Notifier) scheduleDonePush(id string) {
+	ctx, cancel := context.WithCancel(context.Background())
+	n.mu.Lock()
+	if n.closed {
+		n.mu.Unlock()
+		cancel()
+		return
+	}
+	if old, ok := n.donePushes[id]; ok {
+		old() // cancela o agendamento anterior antes de substituir
+	}
+	n.donePushes[id] = cancel
+	n.mu.Unlock()
+
+	n.wg.Add(1)
+	go n.donePushLoop(ctx, id)
+}
+
+// cancelDonePush cancela e remove o push de done agendado de uma sessão, se houver.
+func (n *Notifier) cancelDonePush(id string) {
+	n.mu.Lock()
+	if cancel, ok := n.donePushes[id]; ok {
+		cancel()
+		delete(n.donePushes, id)
+	}
+	n.mu.Unlock()
+}
+
+// donePushLoop espera doneCoalesceDelay e, se a sessão AINDA estiver done/error
+// (a usuária não retomou), dispara o push uma única vez. Encerra ao ser cancelado.
+func (n *Notifier) donePushLoop(ctx context.Context, id string) {
+	defer n.wg.Done()
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(n.doneDelay):
+		s, ok := n.reg.Get(id)
+		if !ok || (s.State != session.StateDone && s.State != session.StateError) {
+			return // retomou ou sumiu: não cutuca
+		}
+		n.mu.Lock()
+		delete(n.donePushes, id) // este timer cumpriu seu papel
+		n.mu.Unlock()
+		payload, opts := buildPush(s)
+		n.fanout(payload, opts)
+	}
 }
 
 // nudgeLoop re-envia o push de needs_you a cada renudgeInterval enquanto a
