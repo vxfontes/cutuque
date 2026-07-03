@@ -26,12 +26,14 @@ import (
 
 // Erros tipados, mapeados para os status HTTP pelos handlers REST.
 var (
-	ErrUnknownMachine = errors.New("launcher: máquina desconhecida")
-	ErrUnknownAgent   = errors.New("launcher: agente desconhecido")
-	ErrLaunchTimeout  = errors.New("launcher: timeout esperando session_started")
-	ErrUnknownSession = errors.New("launcher: sessão desconhecida")
-	ErrStaleState     = errors.New("launcher: estado obsoleto (não está em needs_you)")
-	ErrNoHandle       = errors.New("launcher: sessão sem canal vivo")
+	ErrUnknownMachine  = errors.New("launcher: máquina desconhecida")
+	ErrUnknownAgent    = errors.New("launcher: agente desconhecido")
+	ErrLaunchTimeout   = errors.New("launcher: timeout esperando session_started")
+	ErrUnknownSession  = errors.New("launcher: sessão desconhecida")
+	ErrStaleState      = errors.New("launcher: estado obsoleto (não está em needs_you)")
+	ErrNoHandle        = errors.New("launcher: sessão sem canal vivo")
+	ErrTooManySessions = errors.New("launcher: limite de sessões concorrentes atingido (SEC-007)")
+	ErrShuttingDown    = errors.New("launcher: hub está encerrando")
 )
 
 // agentClaudeCode é o único agente suportado nesta fase (dev).
@@ -39,6 +41,10 @@ const agentClaudeCode = "claude-code"
 
 // denyMessage é a justificativa enviada ao agente ao negar uma permissão.
 const denyMessage = "negado pela usuária via Cutuque"
+
+// defaultMaxSessions é o teto de sessões concorrentes vivas quando ninguém
+// chama SetMaxSessions (SEC-007). cmd/hub sobrescreve com CUTUQUE_MAX_SESSIONS.
+const defaultMaxSessions = 20
 
 // launchTimeout é quanto Launch espera pelo session_started antes de desistir.
 // Var (não const) para os testes poderem encurtar.
@@ -58,26 +64,60 @@ type Launcher struct {
 	reg     *registry.Registry
 	targets map[string]claudecode.Target
 
-	mu      sync.Mutex
-	handles map[string]*claudecode.Handle // canal stdin/stdout por sessão viva
-	pending map[string]pending            // permissão aguardando resposta, por sessão
+	// wg rastreia as goroutines de observação (uma por Launch, rodando
+	// runner.Run) ainda vivas. Shutdown espera todas terminarem depois de
+	// fechar os Handles — mesmo padrão do notifier (Close cancela e só
+	// depois dá wg.Wait) para não vazar goroutine (review/patterns.md,
+	// "recurso-de-longa-duração-sem-cancelamento").
+	wg sync.WaitGroup
+
+	// baseCtx é o contexto de vida das sessões (NÃO o ctx do request, que é
+	// Background e nunca cancela). Shutdown cancela baseCancel para matar os
+	// processos em voo — inclusive sessões cujo Handle ainda nem foi registrado
+	// (review F5, achado bloqueante #2).
+	baseCtx    context.Context
+	baseCancel context.CancelFunc
+
+	mu          sync.Mutex
+	closed      bool                          // Shutdown em curso: Launch falha rápido
+	handles     map[string]*claudecode.Handle // canal stdin/stdout por sessão viva
+	pending     map[string]pending            // permissão aguardando resposta, por sessão
+	maxSessions int                           // teto de sessões concorrentes vivas (SEC-007)
 }
 
 // New cria um Launcher sobre o Engine/Registry dados e o mapa de alvos
 // (nome da máquina → Target). O Registry é consultado para validar o estado
-// antes de aprovar/negar.
+// antes de aprovar/negar. O teto de sessões concorrentes começa em
+// defaultMaxSessions; cmd/hub ajusta via SetMaxSessions com CUTUQUE_MAX_SESSIONS.
 func New(eng *engine.Engine, reg *registry.Registry, targets map[string]claudecode.Target) *Launcher {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Launcher{
-		eng:     eng,
-		reg:     reg,
-		targets: targets,
-		handles: make(map[string]*claudecode.Handle),
-		pending: make(map[string]pending),
+		eng:         eng,
+		reg:         reg,
+		targets:     targets,
+		baseCtx:     ctx,
+		baseCancel:  cancel,
+		handles:     make(map[string]*claudecode.Handle),
+		pending:     make(map[string]pending),
+		maxSessions: defaultMaxSessions,
 	}
+}
+
+// SetMaxSessions ajusta o teto de sessões concorrentes vivas (SEC-007).
+// Valores não-positivos são ignorados (mantém o teto atual) — mesmo padrão de
+// validação do Notifier.SetRenudgeInterval.
+func (l *Launcher) SetMaxSessions(n int) {
+	if n <= 0 {
+		return
+	}
+	l.mu.Lock()
+	l.maxSessions = n
+	l.mu.Unlock()
 }
 
 // Launch inicia uma tarefa na máquina dada com o prompt dado, observando-a em
 // uma goroutine. Valida machine/agent (dev: só máquinas registradas + claude-code),
+// rejeita acima do teto de sessões concorrentes (SEC-007, ErrTooManySessions),
 // envia o prompt inicial pelo stdin e espera o session_started (até launchTimeout)
 // para devolver a Session criada.
 func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt string) (session.Session, error) {
@@ -89,13 +129,37 @@ func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt string) (s
 		return session.Session{}, ErrUnknownAgent
 	}
 
-	handle, err := tgt.Start(ctx)
+	// Porta fechada + teto + registro do em-voo, tudo sob o MESMO mutex:
+	//   - closed: se o Shutdown começou, Launch falha rápido (não cria órfão).
+	//   - teto de sessões (SEC-007): rejeita acima de maxSessions.
+	//   - wg.Add ANTES do Start: a sessão em voo já conta no WaitGroup, então
+	//     Shutdown sempre a espera, mesmo antes do Handle ser registrado no
+	//     session_started (review F5, achado bloqueante #2).
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		return session.Session{}, ErrShuttingDown
+	}
+	if len(l.handles) >= l.maxSessions {
+		l.mu.Unlock()
+		return session.Session{}, ErrTooManySessions
+	}
+	l.wg.Add(1)
+	l.mu.Unlock()
+
+	// A partir do wg.Add, TODA saída precisa liberar o wg (Done manual nos erros
+	// abaixo; defer wg.Done na goroutine no caminho feliz). Usa l.baseCtx (não o
+	// ctx do request, que é Background e nunca cancela) para que o Shutdown mate
+	// o processo em voo cancelando baseCtx.
+	handle, err := tgt.Start(l.baseCtx)
 	if err != nil {
+		l.wg.Done()
 		return session.Session{}, err
 	}
 	// Prompt inicial pelo stdin (canal verificado): a fake/real lê a user message.
 	if err := handle.SendUserMessage(prompt); err != nil {
 		_ = handle.Close()
+		l.wg.Done()
 		return session.Session{}, err
 	}
 
@@ -103,7 +167,8 @@ func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt string) (s
 	app := &launchApplier{l: l, handle: handle, started: started}
 	runner := claudecode.NewRunner(app)
 	go func() {
-		_ = runner.Run(ctx, handle, claudecode.Meta{Machine: machine, Prompt: prompt})
+		defer l.wg.Done()
+		_ = runner.Run(l.baseCtx, handle, claudecode.Meta{Machine: machine, Prompt: prompt})
 		// Fim do stream: a sessão não tem mais canal vivo.
 		if app.sessionID != "" {
 			l.removeHandle(app.sessionID)
@@ -202,6 +267,42 @@ func (l *Launcher) removeHandle(id string) {
 	l.mu.Lock()
 	delete(l.handles, id)
 	l.mu.Unlock()
+}
+
+// Shutdown encerra TODAS as sessões vivas: fecha cada Handle (sinaliza EOF ao
+// agente e espera o processo terminar, via Handle.Close) e limpa os mapas
+// internos. Chamado no graceful shutdown do processo (cmd/hub/main.go), DEPOIS
+// de srv.Shutdown ter parado de aceitar requests novos — se um Launch ainda
+// estivesse em voo, seu Handle não estaria em l.handles ainda (só entra no
+// session_started) e não seria fechado aqui; a ordem do main.go evita essa
+// janela.
+//
+// Fecha os Handles FORA do lock: Close() pode bloquear esperando o processo
+// terminar, e a goroutine de observação de cada Launch (Run) também precisa do
+// mesmo mutex para chamar removeHandle no fim natural do stream — segurar o
+// lock durante o Close causaria deadlock. Só depois de soltar o lock e fechar
+// tudo é que esperamos wg.Wait(): mesmo padrão do Notifier.Close (cancela
+// primeiro, espera depois) para não vazar goroutine
+// (review/patterns.md#recurso-de-longa-duração-sem-cancelamento).
+func (l *Launcher) Shutdown() {
+	l.mu.Lock()
+	l.closed = true // fecha a porta na MESMA seção do snapshot: Launch novo falha rápido
+	handles := make([]*claudecode.Handle, 0, len(l.handles))
+	for _, h := range l.handles {
+		handles = append(handles, h)
+	}
+	l.handles = make(map[string]*claudecode.Handle)
+	l.pending = make(map[string]pending)
+	l.mu.Unlock()
+
+	// Cancela o contexto-base: mata os processos em voo, inclusive sessões cujo
+	// Handle ainda não foi registrado (Start em andamento) — sem isso, wg.Wait
+	// abaixo travaria esperando uma goroutine cujo processo ninguém fechou.
+	l.baseCancel()
+	for _, h := range handles {
+		_ = h.Close()
+	}
+	l.wg.Wait()
 }
 
 // launchApplier decora o Engine para uma sessão em observação: guarda/limpa o
