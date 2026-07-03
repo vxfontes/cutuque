@@ -82,12 +82,6 @@ struct HubSettingsView: View {
                         Text(err).font(.footnote).foregroundStyle(.red)
                     }
                 }
-
-                Section {
-                    Text("No simulador, use 127.0.0.1. No iPhone, use o IP Tailscale da máquina onde o hub roda.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
             }
             .navigationTitle("Ajustes")
             .navigationBarTitleDisplayMode(.inline)
