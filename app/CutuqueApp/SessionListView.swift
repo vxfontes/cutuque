@@ -238,6 +238,9 @@ struct SessionListView: View {
     @State private var confirmingClear = false
     @State private var concludedExpanded = false
     @State private var subagentsExpanded = false
+    // Tema de cor escolhido nos ajustes — o "ao vivo" (rodando) segue ele.
+    @AppStorage(AppThemeKeys.accent) private var accentRaw = AppAccent.blue.rawValue
+    private var accentColor: Color { (AppAccent(rawValue: accentRaw) ?? .blue).color }
 
     // Alvos tmux (compostos socket\tpane) que estão vivos agora.
     private var livePaneIDs: Set<String> { Set(model.liveSessions.map(\.id)) }
@@ -296,7 +299,7 @@ struct SessionListView: View {
             } header: {
                 HStack {
                     Label("Ao vivo · \(group.server)", systemImage: "dot.radiowaves.left.and.right")
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(accentColor)
                         .textCase(nil)
                     Spacer()
                     Menu {
@@ -556,14 +559,21 @@ struct SessionListView: View {
 
     /// Linha de uma sessão viva no Mac (pane do tmux): toca → abre o espelho do
     /// terminal ao vivo (ver a tela + digitar de verdade nela).
+    /// Cor da linha ao vivo: "rodando" segue o TEMA (accent); os demais estados
+    /// mantêm a cor semântica (verde concluiu / laranja espera).
+    private func liveColor(_ entry: LiveEntry) -> Color {
+        let s = liveState(entry)
+        return s == .running ? accentColor : s.color
+    }
+
     private func liveRow(_ entry: LiveEntry) -> some View {
-        let state = liveState(entry)
+        let color = liveColor(entry)
         return Button {
             selectedLive = entry
         } label: {
             HStack(spacing: 12) {
-                // Azul enquanto roda, verde quando a sessão do tmux concluiu.
-                LivePulse(color: state.color)
+                // Cor do tema enquanto roda, verde quando concluiu.
+                LivePulse(color: color)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(entry.session.title)
                         .font(.body)
@@ -578,7 +588,7 @@ struct SessionListView: View {
                     .lineLimit(1)
                 }
                 Spacer(minLength: 8)
-                Image(systemName: "terminal").foregroundStyle(state.color)
+                Image(systemName: "terminal").foregroundStyle(color)
             }
             .padding(.vertical, 2)
             .contentShape(Rectangle())
