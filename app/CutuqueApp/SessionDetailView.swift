@@ -26,11 +26,18 @@ final class SessionDetailViewModel: ObservableObject {
     /// Carrega o histórico de output e assina o stream ao vivo.
     func start() async {
         // Histórico via REST (pode vir vazio se o adapter ainda não implementou o endpoint).
+        // Aplica o MESMO teto do append ao vivo já no load: uma sessão adotada
+        // pode trazer até maxChunks de histórico importado, e cortar aqui evita
+        // que o 1º chunk ao vivo descarte o histórico de uma vez (review #2).
         if let history = try? await api.output(sessionID: session.id) {
-            chunks = history
+            chunks = Array(history.suffix(Self.maxChunks))
         }
         startLiveUpdates()
     }
+
+    /// Teto de chunks mantidos, alinhado ao `maxOutputChunks` do hub (500) para
+    /// caber o histórico importado ao adotar uma sessão do Mac.
+    static let maxChunks = 500
 
     /// Assina o /ws e reage a mudanças de estado e a chunks da sessão aberta.
     private func startLiveUpdates() {
@@ -48,12 +55,13 @@ final class SessionDetailViewModel: ObservableObject {
                     self.session = updated
                 case .outputChunk(let sessionID, let kind, let text) where sessionID == self.session.id:
                     // Appenda apenas chunks da sessão aberta, espelhando o teto
-                    // de 200 do hub para não crescer sem limite (review F2, #6).
+                    // do hub (maxChunks=500) para não crescer sem limite e não
+                    // descartar o histórico importado (review #2).
                     withAnimation(.easeOut(duration: 0.2)) {
                         self.chunks.append(OutputChunk(kind: kind, text: text))
                     }
-                    if self.chunks.count > 200 {
-                        self.chunks.removeFirst(self.chunks.count - 200)
+                    if self.chunks.count > Self.maxChunks {
+                        self.chunks.removeFirst(self.chunks.count - Self.maxChunks)
                     }
                 case .snapshot(let all):
                     // Um snapshot pode trazer estado mais recente da sessão aberta.

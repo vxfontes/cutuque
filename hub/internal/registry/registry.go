@@ -58,6 +58,24 @@ func (r *Registry) Add(s session.Session) {
 	r.broadcast(s)
 }
 
+// AddIfAbsent insere a sessão só se o id ainda não existir, sob o mesmo lock do
+// lookup (reivindicação atômica). Devolve added=true quando inseriu; caso
+// contrário devolve a sessão já existente e added=false — o chamador usa isso
+// para não repetir efeitos colaterais (ex.: importar histórico do transcript
+// duas vezes numa corrida entre dois Adopt do mesmo id). Só faz broadcast quando
+// de fato insere.
+func (r *Registry) AddIfAbsent(s session.Session) (existing session.Session, added bool) {
+	r.mu.Lock()
+	if cur, ok := r.byID[s.ID]; ok {
+		r.mu.Unlock()
+		return cur, false
+	}
+	r.byID[s.ID] = s
+	r.mu.Unlock()
+	r.broadcast(s)
+	return s, true
+}
+
 // Get retorna a sessão pelo id; ok é false se não existir.
 func (r *Registry) Get(id string) (session.Session, bool) {
 	r.mu.RLock()
