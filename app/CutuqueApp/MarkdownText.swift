@@ -31,14 +31,8 @@ struct MarkdownText: View {
                 .font(.body)
                 .fixedSize(horizontal: false, vertical: true)
 
-        case .code(let code):
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(code)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .padding(10)
-            }
-            .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        case .code(let lang, let code):
+            codeCard(lang: lang, code: code)
 
         case .bullet(let items):
             VStack(alignment: .leading, spacing: 4) {
@@ -72,6 +66,66 @@ struct MarkdownText: View {
         case .rule:
             Divider()
         }
+    }
+
+    // MARK: Bloco de código (com chip de linguagem e coloração de diff)
+
+    @ViewBuilder
+    private func codeCard(lang: String, code: String) -> some View {
+        let isDiff = Self.looksLikeDiff(lang: lang, code: code)
+        VStack(alignment: .leading, spacing: 0) {
+            if !lang.isEmpty || isDiff {
+                Text(isDiff ? "diff" : lang.lowercased())
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10).padding(.top, 6)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                if isDiff {
+                    diffBody(code)
+                } else {
+                    Text(code)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding(10)
+                }
+            }
+        }
+        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    /// Renderiza um diff colorindo + (verde) / - (vermelho) / @@ (destaque).
+    private func diffBody(_ code: String) -> some View {
+        let lines = code.components(separatedBy: "\n")
+        return VStack(alignment: .leading, spacing: 1) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                Text(line.isEmpty ? " " : line)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(Self.diffColor(line))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(10)
+    }
+
+    private static func diffColor(_ line: String) -> Color {
+        if line.hasPrefix("@@") { return .cyan }
+        if line.hasPrefix("+++") || line.hasPrefix("---") { return .secondary }
+        if line.hasPrefix("+") { return .green }
+        if line.hasPrefix("-") { return .red }
+        return .primary
+    }
+
+    /// Diff se a linguagem é "diff"/"patch", ou se o conteúdo tem cara de diff
+    /// (hunk @@ ou várias linhas +/-).
+    private static func looksLikeDiff(lang: String, code: String) -> Bool {
+        let l = lang.lowercased()
+        if l == "diff" || l == "patch" { return true }
+        let lines = code.components(separatedBy: "\n")
+        if lines.contains(where: { $0.hasPrefix("@@ ") }) { return true }
+        let pm = lines.filter { ($0.hasPrefix("+") && !$0.hasPrefix("+++")) || ($0.hasPrefix("-") && !$0.hasPrefix("---")) }.count
+        return pm >= 3
     }
 
     // MARK: Tabela
@@ -134,7 +188,7 @@ struct MarkdownText: View {
 enum MarkdownBlock {
     case heading(level: Int, text: String)
     case paragraph(String)
-    case code(String)
+    case code(lang: String, String)
     case bullet([String])
     case numbered([String])
     case quote(String)
@@ -164,13 +218,15 @@ enum MarkdownBlock {
             if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
                 flushPara()
                 let fence = String(trimmed.prefix(3))
+                // A linguagem vem logo após a cerca de abertura (```swift, ```diff).
+                let lang = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
                 var code: [String] = []
                 i += 1
                 while i < lines.count && !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix(fence) {
                     code.append(lines[i]); i += 1
                 }
                 i += 1 // pula a cerca de fechamento
-                blocks.append(.code(code.joined(separator: "\n")))
+                blocks.append(.code(lang: lang, code.joined(separator: "\n")))
                 continue
             }
 
