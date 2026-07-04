@@ -38,6 +38,7 @@ struct HubSettingsView: View {
     @AppStorage(HubSettings.tokenKey) private var token = HubSettings.defaultToken
     @AppStorage(AppThemeKeys.colorScheme) private var colorSchemeRaw = AppColorScheme.system.rawValue
     @AppStorage(AppThemeKeys.accent) private var accentRaw = AppAccent.blue.rawValue
+    @AppStorage(LiveActivityKeys.enabled) private var liveActivityEnabled = true
 
     @State private var renudge = 15
     @State private var renudgeAvailable = false
@@ -76,6 +77,15 @@ struct HubSettingsView: View {
                     Text("Aparência")
                 } footer: {
                     Text("Modo claro/escuro (ou seguir o sistema) e a cor de realce do app.")
+                }
+
+                Section {
+                    Toggle("Live Activity (Dynamic Island)", isOn: $liveActivityEnabled)
+                        .onChange(of: liveActivityEnabled) { _, on in
+                            if !on, #available(iOS 16.1, *) { LiveActivityManager.shared.endActive() }
+                        }
+                } footer: {
+                    Text("Mostra as sessões na ilha dinâmica / tela de bloqueio. Desligue para o app não deixar nada em segundo plano.")
                 }
 
                 Section {

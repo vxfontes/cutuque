@@ -151,8 +151,13 @@ func (c *Client) Push(ctx context.Context, deviceToken string, payload []byte, o
 	if priority == 0 {
 		priority = 10
 	}
+	// Live Activity usa um topic dedicado (<bundle>.push-type.liveactivity).
+	topic := c.topic
+	if pushType == "liveactivity" {
+		topic = c.topic + ".push-type.liveactivity"
+	}
 	req.Header.Set("authorization", "bearer "+tok)
-	req.Header.Set("apns-topic", c.topic)
+	req.Header.Set("apns-topic", topic)
 	req.Header.Set("apns-push-type", pushType)
 	req.Header.Set("apns-priority", strconv.Itoa(priority))
 	if opts.ThreadID != "" {

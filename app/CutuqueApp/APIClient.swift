@@ -168,13 +168,13 @@ struct APIClient {
 
     /// Registra o device token de APNs no hub. `POST /devices` (Bearer).
     /// Body: {"token":"<hex>","platform":"ios"}. Espera 200 {"ok":true}.
-    func registerDevice(token deviceToken: String) async throws {
+    func registerDevice(token deviceToken: String, platform: String = "ios") async throws {
         var request = URLRequest(url: baseURL.appendingPathComponent("devices"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode([
-            "token": deviceToken, "platform": "ios",
+            "token": deviceToken, "platform": platform,
         ])
 
         let (_, response) = try await URLSession.shared.data(for: request)

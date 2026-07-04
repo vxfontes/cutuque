@@ -70,6 +70,11 @@ type Notifier struct {
 	// vários Stop de uma conversa interativa em um único push (review #1).
 	donePushes map[string]context.CancelFunc
 	doneDelay  time.Duration // prazo do push adiado; injetável nos testes
+
+	// Última contagem agregada empurrada pra Live Activity (evita push repetido).
+	// -1 = ainda não empurrou.
+	laLive   int
+	laActive int
 }
 
 // doneCoalesceDelay é quanto o push de "concluído" de uma sessão externa espera
@@ -143,6 +148,8 @@ func New(pusher Pusher, store *devices.Store, reg *registry.Registry, logger *sl
 		nudges:     make(map[string]context.CancelFunc),
 		donePushes: make(map[string]context.CancelFunc),
 		doneDelay:  doneCoalesceDelay,
+		laLive:     -1,
+		laActive:   -1,
 	}
 	n.renudgeNanos.Store(int64(defaultRenudge))
 	return n
@@ -195,6 +202,10 @@ func (n *Notifier) loop() {
 // broadcast (com texto) é que conta como a transição. done/error disparam
 // direto na transição.
 func (n *Notifier) handle(s session.Session) {
+	// Qualquer mudança no registry pode mexer no agregado da Live Activity —
+	// recomputa e (se o app estiver fechado) empurra a atualização.
+	n.maybePushLiveActivity()
+
 	n.mu.Lock()
 	prev, seen := n.states[s.ID]
 	n.mu.Unlock()
@@ -374,6 +385,73 @@ func (n *Notifier) setState(id string, st session.State) {
 	n.mu.Lock()
 	n.states[id] = st
 	n.mu.Unlock()
+}
+
+// maybePushLiveActivity recomputa o agregado (sessões ao vivo / rodando) e, se
+// mudou E o app NÃO estiver em foreground (aí é o app quem dirige a activity
+// localmente), empurra uma atualização de Live Activity para os tokens de
+// activity registrados. Assim a ilha/tela de bloqueio atualiza com o app fechado.
+func (n *Notifier) maybePushLiveActivity() {
+	live, active := n.aggregateCounts()
+	n.mu.Lock()
+	changed := live != n.laLive || active != n.laActive
+	n.laLive, n.laActive = live, active
+	n.mu.Unlock()
+	if !changed || n.foregroundSuppressed() {
+		return
+	}
+	payload := buildLiveActivityPayload(live, active, live == 0)
+	for _, d := range n.devices.List() {
+		if d.Platform != "liveactivity" {
+			continue
+		}
+		n.wg.Add(1)
+		go func(token string) {
+			defer n.wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), pushTimeout)
+			defer cancel()
+			err := n.apns.Push(ctx, token, payload, apns.PushOptions{PushType: "liveactivity", Priority: 10})
+			if errors.Is(err, apns.ErrGone) {
+				n.devices.Remove(token) // activity encerrada/expirada
+			} else if err != nil {
+				n.logger.Warn("falha no push de live activity", "err", err, "token_prefix", tokenPrefix(token))
+			}
+		}(d.Token)
+	}
+}
+
+// aggregateCounts conta as sessões de tmux (external com pane) ao vivo e quantas
+// rodando — a partir do registry (o que o hub conhece), consistente com o app.
+func (n *Notifier) aggregateCounts() (live, active int) {
+	for _, s := range n.reg.List() {
+		if s.External && s.Pane != "" {
+			live++
+			if s.State == session.StateRunning {
+				active++
+			}
+		}
+	}
+	return
+}
+
+// buildLiveActivityPayload monta o payload APNs de atualização (ou fim) da Live
+// Activity com o content-state {live, active}.
+func buildLiveActivityPayload(live, active int, end bool) []byte {
+	now := time.Now()
+	aps := map[string]any{
+		"timestamp":       now.Unix(),
+		"content-state":   map[string]int{"live": live, "active": active},
+		"relevance-score": 100,
+	}
+	if end {
+		aps["event"] = "end"
+		aps["dismissal-date"] = now.Unix()
+	} else {
+		aps["event"] = "update"
+		aps["stale-date"] = now.Add(2 * time.Hour).Unix()
+	}
+	b, _ := json.Marshal(map[string]any{"aps": aps})
+	return b
 }
 
 // fanout envia o push a todos os devices, um por goroutine com timeout próprio.
