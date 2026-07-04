@@ -25,20 +25,17 @@ final class SessionDetailViewModel: ObservableObject {
 
     /// Carrega o histórico de output e assina o stream ao vivo.
     func start() async {
-        // Sessão externa (detectada por hook, não lançada pelo hub): pede ao hub
-        // para importar o transcript do Mac ANTES de ler o output, para o chat
-        // mostrar a conversa (recap) em vez de "sem mensagens ainda". Idempotente
-        // no hub; best-effort (falha degrada para vazio).
-        if session.isExternal {
+        // Lê o output guardado. Se estiver VAZIO e dá pra reconstruir do transcript
+        // do Mac — sessão externa (nunca foi transmitida pelo hub) OU concluída
+        // (pode ter perdido o output num restart do hub, e você pode querer rever/
+        // continuar a conversa) — importa o transcript e relê. Só quando vazio,
+        // pra não duplicar o que já foi transmitido ao vivo.
+        var history = (try? await api.output(sessionID: session.id)) ?? []
+        if history.isEmpty && (session.isExternal || session.state == .done || session.state == .error) {
             await api.importHistory(sessionID: session.id)
+            history = (try? await api.output(sessionID: session.id)) ?? []
         }
-        // Histórico via REST (pode vir vazio se o adapter ainda não implementou o endpoint).
-        // Aplica o MESMO teto do append ao vivo já no load: uma sessão adotada
-        // pode trazer até maxChunks de histórico importado, e cortar aqui evita
-        // que o 1º chunk ao vivo descarte o histórico de uma vez (review #2).
-        if let history = try? await api.output(sessionID: session.id) {
-            chunks = Array(history.suffix(Self.maxChunks))
-        }
+        chunks = Array(history.suffix(Self.maxChunks))
         startLiveUpdates()
     }
 
