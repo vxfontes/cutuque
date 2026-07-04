@@ -59,16 +59,19 @@ targets:
     platform: watchOS
     deploymentTarget: "10.0"
     sources: [CutuqueWatch]
+    resources: [CutuqueWatch/Assets.xcassets]
     info:
       path: CutuqueWatch/Info.plist
       properties:
         CFBundleDisplayName: Cutuque
+        CFBundleIconName: AppIcon
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.vxfontes.cutuque
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vxfontes.cutuque.watchkitapp
         SWIFT_VERSION: "5.9"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 
   # Widget extension: hospeda a Live Activity (ActivityKit vive numa extension).
   CutuqueWidgets:
