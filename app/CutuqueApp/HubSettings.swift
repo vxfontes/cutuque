@@ -39,6 +39,7 @@ struct HubSettingsView: View {
     @AppStorage(AppThemeKeys.colorScheme) private var colorSchemeRaw = AppColorScheme.system.rawValue
     @AppStorage(AppThemeKeys.accent) private var accentRaw = AppAccent.blue.rawValue
     @AppStorage(LiveActivityKeys.enabled) private var liveActivityEnabled = true
+    @AppStorage(AppActiveKeys.active) private var appActive = true
 
     @State private var renudge = 15
     @State private var renudgeAvailable = false
@@ -49,6 +50,16 @@ struct HubSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Toggle("Cutuque ativo", isOn: $appActive)
+                        .onChange(of: appActive) { _, active in
+                            Task { await api.setActive(active) }
+                            if !active, #available(iOS 16.1, *) { LiveActivityManager.shared.endActive() }
+                        }
+                } footer: {
+                    Text("Desligado, o app para de te notificar em tudo — push e Live Activity — e não fica ativo em segundo plano. Ligue quando quiser voltar a ser avisada.")
+                }
+
                 Section("Hub") {
                     TextField("URL (ex: http://192.0.2.20:8787)", text: $url)
                         .keyboardType(.URL)

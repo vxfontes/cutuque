@@ -74,3 +74,13 @@ enum AppThemeKeys {
     static let colorScheme = "cutuque.appColorScheme"
     static let accent = "cutuque.appAccent"
 }
+
+/// Interruptor mestre "Cutuque ativo" (default: ligado). Desligado = o hub não
+/// notifica em nada e o app encerra a Live Activity.
+enum AppActiveKeys {
+    static let active = "cutuque.active"
+    static func isActive() -> Bool {
+        UserDefaults.standard.object(forKey: active) == nil
+            ? true : UserDefaults.standard.bool(forKey: active)
+    }
+}

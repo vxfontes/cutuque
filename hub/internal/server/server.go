@@ -109,6 +109,8 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 	// Estado de foreground do app (suprime push enquanto aberto).
 	if rc.foreground != nil {
 		mux.Handle("POST /app/foreground", requireAuth(cfg.Token, ForegroundHandler(rc.foreground)))
+		// Interruptor mestre: ligar/desligar TODAS as notificações do app.
+		mux.Handle("POST /app/active", requireAuth(cfg.Token, AppActiveHandler(rc.foreground)))
 	}
 
 	// Dev-only: seed de dados fake. Em prod o handler responde 404.

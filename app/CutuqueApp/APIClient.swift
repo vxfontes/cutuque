@@ -472,6 +472,18 @@ struct APIClient {
         _ = try? await URLSession.shared.data(for: request)
     }
 
+    /// Liga/desliga TODAS as notificações do hub para o app (interruptor mestre
+    /// "Cutuque ativo"). active=false = o hub para de cutucar (push + Live Activity).
+    func setActive(_ active: Bool) async {
+        let url = baseURL.appendingPathComponent("app").appendingPathComponent("active")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONEncoder().encode(["active": active])
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
     /// Aprova o pedido de permissão pendente da sessão.
     func approve(sessionID: String) async throws {
         try await postAction(sessionID: sessionID, action: "approve")

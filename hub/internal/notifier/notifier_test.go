@@ -273,6 +273,22 @@ func TestDonePushCoalescedOnResume(t *testing.T) {
 	}
 }
 
+// TestMutedSuppressesAllPush: "app desligado" (SetMuted) → nenhum push.
+func TestMutedSuppressesAllPush(t *testing.T) {
+	eng, _, _, fake, n := fixture(t)
+	n.SetMuted(true)
+	startSession(eng, "s1")
+	eng.Apply(event.Event{SessionID: "s1", Type: event.Finished, At: time.Now()})
+	if p, got := tryRecv(fake, 250*time.Millisecond); got {
+		t.Fatalf("app desligado não deve cutucar: %s", p.payload)
+	}
+	// Religou: volta a cutucar.
+	n.SetMuted(false)
+	eng.Apply(event.Event{SessionID: "s2", Type: event.SessionStarted, Machine: "m", Agent: "claude-code", Title: "t", At: time.Now()})
+	eng.Apply(event.Event{SessionID: "s2", Type: event.Finished, At: time.Now()})
+	_ = recv(t, fake)
+}
+
 func TestNotifiesOnError(t *testing.T) {
 	eng, _, _, fake, _ := fixture(t)
 	startSession(eng, "s1")

@@ -18,6 +18,32 @@ type RenudgeController interface {
 // *notifier.Notifier o satisfaz.
 type ForegroundController interface {
 	SetForeground(active bool, at int64)
+	// SetMuted liga/desliga o "modo desligado": mudo = true faz o hub PARAR de
+	// disparar qualquer push (needs_you, done, Live Activity) para esta instalação.
+	SetMuted(muted bool)
+}
+
+// appActiveBody é o corpo de POST /app/active: active=false = app "desligado"
+// (não notifica em nada).
+type appActiveBody struct {
+	Active bool `json:"active"`
+}
+
+// AppActiveHandler liga/desliga TODAS as notificações do hub para o app (o
+// "encerrar" que a usuária pediu — sem push, sem Live Activity).
+//
+//	POST {"active":true|false} → 200 {"ok":true}
+func AppActiveHandler(fc ForegroundController) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
+		var b appActiveBody
+		if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+			writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+			return
+		}
+		fc.SetMuted(!b.Active)
+		writeJSONResp(w, http.StatusOK, map[string]bool{"ok": true})
+	}
 }
 
 // foregroundBody é o corpo de POST /app/foreground. `at` (ms monotônicos do

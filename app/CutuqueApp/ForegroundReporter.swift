@@ -27,6 +27,9 @@ final class ForegroundReporter: ObservableObject {
             // Re-registra o device (recupera de um restart do hub, que apaga os
             // devices em memória) e começa o heartbeat de foreground.
             PushManager.shared.refreshRegistration()
+            // Reafirma o interruptor mestre (o `muted` do hub é em memória; um
+            // restart do hub o perderia — reasserta o estado atual).
+            Task { await api.setActive(AppActiveKeys.isActive()) }
             startHeartbeat()
         case .background, .inactive:
             stopHeartbeat()

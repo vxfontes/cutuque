@@ -60,6 +60,7 @@ type Notifier struct {
 	fgMu     sync.Mutex
 	fgUntil  int64
 	fgLastAt int64
+	muted    bool // "app desligado": para TODO push (needs_you/done/live activity)
 
 	mu     sync.Mutex
 	closed bool                          // Close() em curso: não spawna novos nudges
@@ -126,12 +127,23 @@ func (n *Notifier) SetForeground(active bool, at int64) {
 	}
 }
 
-// foregroundSuppressed diz se o push deve ser suprimido agora (app em foreground
-// e dentro do TTL).
+// foregroundSuppressed diz se o push deve ser suprimido agora — app em foreground
+// (dentro do TTL) OU "desligado" (muted). Nos dois casos o hub não cutuca.
 func (n *Notifier) foregroundSuppressed() bool {
 	n.fgMu.Lock()
 	defer n.fgMu.Unlock()
+	if n.muted {
+		return true
+	}
 	return n.fgUntil > 0 && time.Now().UnixNano() < n.fgUntil
+}
+
+// SetMuted liga/desliga o modo "app desligado": mudo = nenhum push (needs_you,
+// done, Live Activity) até religar.
+func (n *Notifier) SetMuted(muted bool) {
+	n.fgMu.Lock()
+	n.muted = muted
+	n.fgMu.Unlock()
 }
 
 // New cria um Notifier. Se logger for nil, descarta logs (não é fatal).
