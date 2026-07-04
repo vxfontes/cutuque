@@ -225,6 +225,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
         PushManager.shared.registerCategories()
+        PhoneWatchRelay.shared.activate() // ponte para o app do Apple Watch
         return true
     }
 

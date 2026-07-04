@@ -48,6 +48,27 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - target: CutuqueWidgets
+      - target: CutuqueWatch
+        embed: true
+
+  # App do Apple Watch (watchOS 9+ single-target). Cliente fino que fala com o
+  # iPhone via WatchConnectivity (o hub só existe na Tailscale, fora do alcance
+  # do relógio).
+  CutuqueWatch:
+    type: application
+    platform: watchOS
+    deploymentTarget: "10.0"
+    sources: [CutuqueWatch]
+    info:
+      path: CutuqueWatch/Info.plist
+      properties:
+        CFBundleDisplayName: Cutuque
+        WKApplication: true
+        WKCompanionAppBundleIdentifier: com.vxfontes.cutuque
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vxfontes.cutuque.watchkitapp
+        SWIFT_VERSION: "5.9"
 
   # Widget extension: hospeda a Live Activity (ActivityKit vive numa extension).
   CutuqueWidgets:
