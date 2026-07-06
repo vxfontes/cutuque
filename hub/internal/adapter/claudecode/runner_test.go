@@ -191,7 +191,7 @@ func TestLocalTargetExecsCommand(t *testing.T) {
 		t.Errorf("Name() = %q, quero \"macbook\"", tgt.Name())
 	}
 
-	h, err := tgt.Start(context.Background(), "", "", "", "")
+	h, err := tgt.Start(context.Background(), "", "", "", "", "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}

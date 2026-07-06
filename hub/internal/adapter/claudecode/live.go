@@ -100,12 +100,6 @@ out.sort(key=lambda x:-x['modified'])
 print(json.dumps(out))
 `
 
-// Liver detecta as sessões vivas (rodando agora) do Claude Code numa máquina.
-// LocalTarget e SSHTarget o satisfazem.
-type Liver interface {
-	Live(ctx context.Context) ([]session.Discovered, error)
-}
-
 // Live lista as sessões vivas na máquina LOCAL.
 func (t *LocalTarget) Live(ctx context.Context) ([]session.Discovered, error) {
 	return runDiscoverScript(exec.CommandContext(ctx, "python3", "-"), liveScript)

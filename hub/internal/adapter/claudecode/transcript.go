@@ -73,21 +73,6 @@ for f in matches[:1]:
 print(json.dumps(out[-500:]))
 `
 
-// TranscriptChunk é um pedaço da conversa histórica de uma sessão, já
-// classificado por kind (user/assistant/tool/tool_result) — o mesmo contrato
-// de output que o registry guarda e o app renderiza no chat.
-type TranscriptChunk struct {
-	Kind string `json:"kind"`
-	Text string `json:"text"`
-}
-
-// Transcriber lê o histórico completo de UMA sessão do Claude Code numa máquina
-// (o transcript .jsonl lá), para popular o output ao adotar. LocalTarget e
-// SSHTarget o satisfazem.
-type Transcriber interface {
-	Transcript(ctx context.Context, id string) ([]TranscriptChunk, error)
-}
-
 // runTranscript executa o comando (python3 lendo o script pelo stdin, com o id
 // como argv[1]), captura o stdout e faz parse da lista JSON de chunks.
 func runTranscript(cmd *exec.Cmd) ([]TranscriptChunk, error) {

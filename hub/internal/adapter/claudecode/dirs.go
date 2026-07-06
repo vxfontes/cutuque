@@ -32,12 +32,6 @@ except Exception: pass
 print(json.dumps({'path':base,'parent':os.path.dirname(base),'dirs':out}))
 `
 
-// DirLister lista as subpastas de um caminho numa máquina (seletor de pastas).
-// LocalTarget e SSHTarget o satisfazem.
-type DirLister interface {
-	ListDirs(ctx context.Context, path string) (session.DirListing, error)
-}
-
 // runDirs executa o comando (python3 lendo o dirsScript pelo stdin, caminho como
 // argv[1]), captura o stdout e faz parse do JSON.
 func runDirs(cmd *exec.Cmd) (session.DirListing, error) {

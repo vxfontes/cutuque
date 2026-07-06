@@ -56,12 +56,6 @@ out.sort(key=lambda x:-x['modified'])
 print(json.dumps(out[:40]))
 `
 
-// Discoverer lista sessões do Claude Code já existentes numa máquina (inclusive
-// as não lançadas pelo Cutuque). LocalTarget e SSHTarget o satisfazem.
-type Discoverer interface {
-	Discover(ctx context.Context) ([]session.Discovered, error)
-}
-
 // runDiscover executa o comando com o discoverScript.
 func runDiscover(cmd *exec.Cmd) ([]session.Discovered, error) {
 	return runDiscoverScript(cmd, discoverScript)
