@@ -214,7 +214,7 @@ func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt, cwd, mode
 	runner := tgt.NewRunner(app)
 	go func() {
 		defer l.wg.Done()
-		_ = runner.Run(l.baseCtx, handle, claudecode.Meta{Machine: machine, Prompt: prompt})
+		_ = runner.Run(l.baseCtx, handle, claudecode.Meta{Machine: machine, Prompt: prompt, Cwd: cwd})
 		// Fim do stream: a sessão não tem mais canal vivo.
 		if app.sessionID != "" {
 			l.removeHandle(app.sessionID)

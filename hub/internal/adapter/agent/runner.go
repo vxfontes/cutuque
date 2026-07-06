@@ -27,6 +27,7 @@ type Applier interface {
 type Meta struct {
 	Machine string // máquina-alvo (nome do Target)
 	Prompt  string // prompt inicial, para derivar o Title
+	Cwd     string // pasta onde o agente roda (persistida na sessão p/ o resume)
 }
 
 // ParseFunc traduz uma linha do stream de saída de um agente em eventos
@@ -76,6 +77,11 @@ func (r *Runner) Run(ctx context.Context, h *Handle, meta Meta) error {
 					e.Machine = meta.Machine
 					e.Agent = r.agent
 					e.Title = truncate(meta.Prompt, maxTitle)
+					// Persiste o cwd para o resume rodar na MESMA pasta (o Codex,
+					// one-shot, depende disso — cada turno é um processo novo).
+					if e.Cwd == "" {
+						e.Cwd = meta.Cwd
+					}
 				case e.SessionID == "":
 					// Um Runner observa UMA sessão; eventos sem session_id
 					// pertencem à sessão corrente do stream.
