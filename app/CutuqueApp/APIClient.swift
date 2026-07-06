@@ -49,6 +49,34 @@ struct APIClient {
         let sessions: [Session]
     }
 
+    /// Lista as sessões passadas do histórico (Postgres). `GET /history` (Bearer).
+    /// Hub sem histórico (sem Postgres) → 404; devolve [] gracioso.
+    func history(limit: Int = 100) async throws -> [Session] {
+        var comps = URLComponents(url: baseURL.appendingPathComponent("history"), resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+        var request = URLRequest(url: comps.url!)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard http.statusCode == 200 else { return [] } // 404 = histórico desligado no hub
+        return try JSONDecoder.cutuque.decode(SessionsEnvelope.self, from: data).sessions
+    }
+
+    /// Linha do tempo de uma sessão do histórico. `GET /history/{id}/events`.
+    func historyEvents(sessionID: String) async throws -> [HistoryEvent] {
+        let url = baseURL.appendingPathComponent("history").appendingPathComponent(sessionID).appendingPathComponent("events")
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard http.statusCode == 200 else { return [] }
+        return try JSONDecoder.cutuque.decode(HistoryEventsEnvelope.self, from: data).events
+    }
+
+    private struct HistoryEventsEnvelope: Decodable {
+        let events: [HistoryEvent]
+    }
+
     /// Lista os nomes das máquinas disponíveis. `GET /targets` (Bearer).
     /// Em qualquer falha (hub antigo sem o endpoint, offline, corpo inválido)
     /// devolve `[]` para a UI cair num fallback — nunca derruba a tela.

@@ -208,6 +208,28 @@ struct DiscoveredSession: Decodable, Identifiable, Equatable, Hashable {
     }
 }
 
+// MARK: - Histórico (event-log persistido)
+
+/// Um evento na linha do tempo de uma sessão passada (GET /history/{id}/events).
+struct HistoryEvent: Decodable, Identifiable, Hashable {
+    let seq: Int64
+    let at: Date
+    let type: String      // session_started|output_chunk|needs_input|user_responded|finished|errored
+    let kind: String      // user|assistant|tool|tool_result (só em output_chunk)
+    let data: String
+    var id: Int64 { seq }
+
+    private enum CodingKeys: String, CodingKey { case seq, at, type, kind, data }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        seq = try c.decode(Int64.self, forKey: .seq)
+        at = (try? c.decode(Date.self, forKey: .at)) ?? Date(timeIntervalSince1970: 0)
+        type = try c.decode(String.self, forKey: .type)
+        kind = (try? c.decode(String.self, forKey: .kind)) ?? ""
+        data = (try? c.decode(String.self, forKey: .data)) ?? ""
+    }
+}
+
 // MARK: - Seletor de pastas
 
 /// Uma subpasta no Mac (item do seletor de pastas ao criar uma sessão).

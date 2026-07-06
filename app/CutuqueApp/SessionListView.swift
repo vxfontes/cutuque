@@ -264,6 +264,7 @@ struct SessionListView: View {
     @State private var showingDiscover = false
     @State private var showingSettings = false
     @State private var showingStatus = false
+    @State private var showingHistory = false
     // Sessão em processo de renomear (nil = alerta fechado) + texto do apelido.
     @State private var renameTarget: Session?
     @State private var renameText = ""
@@ -470,6 +471,14 @@ struct SessionListView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
+                        showingHistory = true
+                    } label: {
+                        Image(systemName: "clock.arrow.circlepath")
+                    }
+                    .accessibilityLabel("Histórico de sessões")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
                         showingSettings = true
                     } label: {
                         Image(systemName: "gearshape")
@@ -495,6 +504,9 @@ struct SessionListView: View {
             }
             .sheet(isPresented: $showingSettings) {
                 HubSettingsView()
+            }
+            .sheet(isPresented: $showingHistory) {
+                HistoryView()
             }
             .sheet(item: $selectedLive) { entry in
                 NavigationStack {

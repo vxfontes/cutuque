@@ -106,6 +106,11 @@ func main() {
 		logger.Info("apns desabilitado (credenciais não configuradas); hub sobe sem push")
 	}
 
+	// Rotas de histórico (v2.4) só quando o Postgres está ligado.
+	if hist != nil {
+		serverOpts = append(serverOpts, server.WithHistory(hist))
+	}
+
 	srv := server.New(cfg, reg, lch, serverOpts...)
 
 	// Graceful shutdown (Fase 5): SIGINT/SIGTERM disparam, em ordem, (1)

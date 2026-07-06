@@ -17,6 +17,7 @@ type routerConfig struct {
 	devices    *devices.Store
 	renudge    RenudgeController
 	foreground ForegroundController
+	history    HistoryReader
 }
 
 // RouterOption configura dependências opcionais do Router.
@@ -39,6 +40,13 @@ func WithRenudge(rc2 RenudgeController) RouterOption {
 // registrada.
 func WithForeground(fc ForegroundController) RouterOption {
 	return func(rc *routerConfig) { rc.foreground = fc }
+}
+
+// WithHistory habilita GET /history e /history/{id}/events (sessões passadas +
+// linha do tempo), apoiadas no store de histórico (Postgres). Sem esta opção
+// (CUTUQUE_DATABASE_URL não configurado) as rotas não são registradas.
+func WithHistory(h HistoryReader) RouterOption {
+	return func(rc *routerConfig) { rc.history = h }
 }
 
 // Router registra as rotas do hub. As rotas protegidas passam pelo middleware
@@ -91,6 +99,12 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		mux.Handle("POST /machines/{machine}/tmux/kill", requireAuth(cfg.Token, TmuxKillHandler(lch)))
 		mux.Handle("POST /machines/{machine}/tmux/kill-server", requireAuth(cfg.Token, TmuxKillServerHandler(lch)))
 		mux.Handle("POST /machines/{machine}/tmux/resize", requireAuth(cfg.Token, TmuxResizeHandler(lch)))
+	}
+
+	// Histórico de sessões (v2.4). Só quando o Postgres está ligado.
+	if rc.history != nil {
+		mux.Handle("GET /history", requireAuth(cfg.Token, PastSessionsHandler(rc.history)))
+		mux.Handle("GET /history/{id}/events", requireAuth(cfg.Token, SessionTimelineHandler(rc.history)))
 	}
 
 	// Registro de device tokens para push (Fase 4). Só quando há store.
