@@ -24,9 +24,24 @@ var (
 	// Model: nome do modelo (ex.: gpt-5-codex, o3). Padrão estrito — defesa em
 	// profundidade além do single-quote (SEC-101).
 	modelNamePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,80}$`)
+	// validSandbox: modos de sandbox aceitos (allowlist estrita — o valor vira
+	// flag/config do codex).
+	validSandbox = map[string]bool{"read-only": true, "workspace-write": true, "danger-full-access": true}
 	// defaultRemoteCodexCmd: assume `codex` no PATH do login shell remoto.
 	defaultRemoteCodexCmd = "codex"
 )
+
+// sandboxOr valida o sandbox pedido (allowlist) e cai no default do alvo se
+// vazio/inválido.
+func sandboxOr(def, s string) string {
+	if validSandbox[s] {
+		return s
+	}
+	return def
+}
+
+func (t *LocalTarget) sandboxOr(s string) string { return sandboxOr(t.sandbox, s) }
+func (t *SSHTarget) sandboxOr(s string) string   { return sandboxOr(t.sandbox, s) }
 
 // codexArgs monta os argumentos do `codex` (sem o programa) para lançar/retomar
 // uma sessão em modo one-shot streaming. resumeID != "" → `exec resume <id>`
@@ -77,8 +92,8 @@ func (t *LocalTarget) NewRunner(app agent.Applier) *agent.Runner {
 // Start dispara `codex exec [resume <id>] --json … -- <prompt>` localmente. O
 // prompt vai como argumento (Codex é one-shot); o stdin é /dev/null para o Codex
 // ver EOF na hora e não pendurar esperando input.
-func (t *LocalTarget) Start(ctx context.Context, resumeID, cwd, model, effort, prompt string) (*agent.Handle, error) {
-	args := codexArgs(resumeID, model, effort, t.sandbox, prompt)
+func (t *LocalTarget) Start(ctx context.Context, resumeID, cwd, model, effort, sandbox, prompt string) (*agent.Handle, error) {
+	args := codexArgs(resumeID, model, effort, t.sandboxOr(sandbox), prompt)
 	cmd := exec.CommandContext(ctx, t.prog, args...)
 	if cwd != "" {
 		cmd.Dir = cwd
@@ -118,8 +133,8 @@ func (t *SSHTarget) NewRunner(app agent.Applier) *agent.Runner {
 }
 
 // Start conecta via ssh e roda o codex remoto. cwd != "" vira `cd <cwd> &&`.
-func (t *SSHTarget) Start(ctx context.Context, resumeID, cwd, model, effort, prompt string) (*agent.Handle, error) {
-	remote := remoteCodexCommand(t.remoteCmd, codexArgs(resumeID, model, effort, t.sandbox, prompt), cwd)
+func (t *SSHTarget) Start(ctx context.Context, resumeID, cwd, model, effort, sandbox, prompt string) (*agent.Handle, error) {
+	remote := remoteCodexCommand(t.remoteCmd, codexArgs(resumeID, model, effort, t.sandboxOr(sandbox), prompt), cwd)
 	sshArgs := append(sshBaseOpts(), "--", t.dest, remote)
 	cmd := exec.CommandContext(ctx, t.prog, sshArgs...)
 	cmd.Env = agent.ChildEnv()

@@ -169,7 +169,7 @@ func (l *Launcher) anyTarget(machine string) (claudecode.Target, bool) {
 // rejeita acima do teto de sessões concorrentes (SEC-007, ErrTooManySessions),
 // envia o prompt inicial pelo stdin e espera o session_started (até launchTimeout)
 // para devolver a Session criada. cwd é a pasta onde o `claude` roda; vazio → home.
-func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt, cwd, model, effort string) (session.Session, error) {
+func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt, cwd, model, effort, sandbox string) (session.Session, error) {
 	if _, known := l.targets[machine]; !known {
 		return session.Session{}, ErrUnknownMachine
 	}
@@ -203,7 +203,7 @@ func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt, cwd, mode
 	// Start manda o prompt inicial pelo canal do agente (stdin no Claude, argumento
 	// no Codex). Usa l.baseCtx (não o ctx do request, que é Background e nunca
 	// cancela) para que o Shutdown mate o processo em voo cancelando baseCtx.
-	handle, err := tgt.Start(l.baseCtx, "", cwd, model, effort, prompt)
+	handle, err := tgt.Start(l.baseCtx, "", cwd, model, effort, sandbox, prompt)
 	if err != nil {
 		l.wg.Done()
 		return session.Session{}, err
@@ -667,7 +667,7 @@ func (l *Launcher) resume(s session.Session, prompt string) error {
 	// Retoma na MESMA pasta da sessão (s.Cwd): importa pras sessões adotadas do
 	// Mac (o --resume restaura a conversa, mas as ferramentas operam no cwd). O
 	// prompt vai pelo canal do agente dentro do Start (mantém o modelo da sessão).
-	handle, err := tgt.Start(l.baseCtx, s.ID, s.Cwd, "", "", prompt)
+	handle, err := tgt.Start(l.baseCtx, s.ID, s.Cwd, "", "", "", prompt)
 	if err != nil {
 		l.wg.Done()
 		return err

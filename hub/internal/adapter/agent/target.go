@@ -20,10 +20,13 @@ import (
 // Kind identifica o agente ("claude-code", "codex") — vira o campo Agent da
 // sessão e valida o pedido de launch. NewRunner devolve o Runner com o parser e
 // o rótulo certos para este agente.
+// sandbox só é usado pelo Codex (read-only | workspace-write | danger-full-access);
+// o Claude o ignora (o gate dele é o control_request de permissão). Vazio → o
+// default do agente.
 type Target interface {
 	Name() string
 	Kind() string
-	Start(ctx context.Context, resumeID, cwd, model, effort, prompt string) (*Handle, error)
+	Start(ctx context.Context, resumeID, cwd, model, effort, sandbox, prompt string) (*Handle, error)
 	NewRunner(app Applier) *Runner
 }
 

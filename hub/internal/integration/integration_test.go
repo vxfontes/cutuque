@@ -40,7 +40,7 @@ func (s scriptTarget) Kind() string { return "claude-code" }
 func (s scriptTarget) NewRunner(app claudecode.Applier) *claudecode.Runner {
 	return claudecode.NewRunner(app)
 }
-func (s scriptTarget) Start(_ context.Context, _, _, _, _, prompt string) (*claudecode.Handle, error) {
+func (s scriptTarget) Start(_ context.Context, _, _, _, _, _, prompt string) (*claudecode.Handle, error) {
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
 	go func() {

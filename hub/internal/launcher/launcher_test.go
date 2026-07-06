@@ -43,7 +43,7 @@ func (s *scriptTarget) Transcript(_ context.Context, _ string) ([]claudecode.Tra
 	return s.transcript, s.transcriptErr
 }
 
-func (s *scriptTarget) Start(_ context.Context, _, _, _, _, prompt string) (*claudecode.Handle, error) {
+func (s *scriptTarget) Start(_ context.Context, _, _, _, _, _, prompt string) (*claudecode.Handle, error) {
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
 	go func() {
@@ -118,7 +118,7 @@ func waitFor(t *testing.T, cond func() bool) {
 
 func TestLaunchUnknownMachine(t *testing.T) {
 	l, _ := newTestLauncher(nil)
-	_, err := l.Launch(context.Background(), "inexistente", "claude-code", "faça algo", "", "", "")
+	_, err := l.Launch(context.Background(), "inexistente", "claude-code", "faça algo", "", "", "", "")
 	if err != ErrUnknownMachine {
 		t.Errorf("err = %v, quero ErrUnknownMachine", err)
 	}
@@ -127,7 +127,7 @@ func TestLaunchUnknownMachine(t *testing.T) {
 func TestLaunchUnknownAgent(t *testing.T) {
 	tgt := &scriptTarget{name: "macbook", run: permissionScript, captured: make(chan string, 1)}
 	l, _ := newTestLauncher(tgt)
-	_, err := l.Launch(context.Background(), "macbook", "codex", "faça algo", "", "", "")
+	_, err := l.Launch(context.Background(), "macbook", "codex", "faça algo", "", "", "", "")
 	if err != ErrUnknownAgent {
 		t.Errorf("err = %v, quero ErrUnknownAgent", err)
 	}
@@ -148,7 +148,7 @@ func TestLaunchTimeout(t *testing.T) {
 	launchTimeout = 100 * time.Millisecond
 	defer func() { launchTimeout = old }()
 
-	_, err := l.Launch(context.Background(), "macbook", "claude-code", "faça algo", "", "", "")
+	_, err := l.Launch(context.Background(), "macbook", "claude-code", "faça algo", "", "", "", "")
 	if err != ErrLaunchTimeout {
 		t.Errorf("err = %v, quero ErrLaunchTimeout", err)
 	}
@@ -158,7 +158,7 @@ func TestApproveWritesExactControlResponseAndResumes(t *testing.T) {
 	tgt := &scriptTarget{name: "macbook", run: permissionScript, captured: make(chan string, 1)}
 	l, reg := newTestLauncher(tgt)
 
-	s, err := l.Launch(context.Background(), "macbook", "claude-code", "crie um arquivo", "", "", "")
+	s, err := l.Launch(context.Background(), "macbook", "claude-code", "crie um arquivo", "", "", "", "")
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestDenyWritesDenyControlResponse(t *testing.T) {
 	tgt := &scriptTarget{name: "macbook", run: permissionScript, captured: make(chan string, 1)}
 	l, reg := newTestLauncher(tgt)
 
-	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "crie um arquivo", "", "", ""); err != nil {
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "crie um arquivo", "", "", "", ""); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	waitFor(t, func() bool {
@@ -283,7 +283,7 @@ func TestSendTextDeliversAndResumes(t *testing.T) {
 	}
 	l, reg := newTestLauncher(tgt)
 
-	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "primeira tarefa", "", "", ""); err != nil {
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "primeira tarefa", "", "", "", ""); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	waitFor(t, func() bool {
@@ -311,7 +311,7 @@ func TestLaunchEchoesPromptAsUserOutputChunk(t *testing.T) {
 	tgt := &scriptTarget{name: "macbook", run: permissionScript, captured: make(chan string, 1)}
 	l, reg := newTestLauncher(tgt)
 
-	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "crie um arquivo", "", "", ""); err != nil {
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "crie um arquivo", "", "", "", ""); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 
@@ -342,7 +342,7 @@ func TestSendTextEchoesMessageAsUserOutputChunk(t *testing.T) {
 	}
 	l, reg := newTestLauncher(tgt)
 
-	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "primeira tarefa", "", "", ""); err != nil {
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "primeira tarefa", "", "", "", ""); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	waitFor(t, func() bool {
@@ -383,7 +383,7 @@ func TestResumeEchoesPromptAsUserOutputChunk(t *testing.T) {
 	}
 	l, reg := newTestLauncher(tgt)
 
-	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "primeiro prompt", "", "", ""); err != nil {
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "primeiro prompt", "", "", "", ""); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	waitFor(t, func() bool {

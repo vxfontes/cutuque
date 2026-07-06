@@ -24,13 +24,13 @@ func TestLiveCodexSmoke(t *testing.T) {
 	}
 	dir := t.TempDir()
 	tgt := NewLocalTarget("local")
-	tgt.sandbox = "read-only" // smoke não deve escrever nada
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	// Modelo vazio → default da conta (gpt-5-codex não existe em conta ChatGPT).
-	h, err := tgt.Start(ctx, "", dir, "", "low", "responda com a palavra pronto e nada mais")
+	// sandbox read-only: o smoke não deve escrever nada.
+	h, err := tgt.Start(ctx, "", dir, "", "low", "read-only", "responda com a palavra pronto e nada mais")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}

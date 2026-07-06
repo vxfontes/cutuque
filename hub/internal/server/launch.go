@@ -17,7 +17,7 @@ const maxLaunchBody = 64 * 1024
 // Launcher é a superfície que os handlers de comando consomem. *launcher.Launcher
 // a satisfaz; um fake a implementa nos testes.
 type Launcher interface {
-	Launch(ctx context.Context, machine, agent, prompt, cwd, model, effort string) (session.Session, error)
+	Launch(ctx context.Context, machine, agent, prompt, cwd, model, effort, sandbox string) (session.Session, error)
 	Approve(id string) error
 	Deny(id string) error
 	SendText(id, text string) error
@@ -412,8 +412,11 @@ type launchRequest struct {
 	Agent   string `json:"agent"`
 	Prompt  string `json:"prompt"`
 	Cwd     string `json:"cwd,omitempty"`
-	Model   string `json:"model,omitempty"`  // alias/nome do modelo do claude (vazio = default)
-	Effort  string `json:"effort,omitempty"` // low|medium|high|xhigh|max (vazio = default)
+	Model   string `json:"model,omitempty"`  // alias/nome do modelo (vazio = default)
+	Effort  string `json:"effort,omitempty"` // low|medium|high|… (vazio = default)
+	// Sandbox só o Codex usa: read-only|workspace-write|danger-full-access
+	// (vazio = default do agente). O Claude ignora.
+	Sandbox string `json:"sandbox,omitempty"`
 }
 
 // launchResponse é o corpo de sucesso de POST /sessions.
@@ -454,7 +457,7 @@ func LaunchHandler(lch Launcher) http.HandlerFunc {
 			return
 		}
 
-		s, err := lch.Launch(context.Background(), req.Machine, req.Agent, req.Prompt, req.Cwd, req.Model, req.Effort)
+		s, err := lch.Launch(context.Background(), req.Machine, req.Agent, req.Prompt, req.Cwd, req.Model, req.Effort, req.Sandbox)
 		switch {
 		case errors.Is(err, launcher.ErrUnknownMachine):
 			writeJSONError(w, http.StatusBadRequest, "unknown_machine")

@@ -109,7 +109,7 @@ func (t *LocalTarget) NewRunner(app Applier) *Runner { return NewRunner(app) }
 // recursos. resumeID != "" continua a conversa existente. cwd != "" muda o
 // diretório de trabalho do processo (vazio → home, herdado do hub). prompt != ""
 // é enviado pelo stdin logo após o start (o Handle segue vivo para replies).
-func (t *LocalTarget) Start(ctx context.Context, resumeID, cwd, model, effort, prompt string) (*Handle, error) {
+func (t *LocalTarget) Start(ctx context.Context, resumeID, cwd, model, effort, _sandbox, prompt string) (*Handle, error) {
 	// model/effort (quando escolhidos no app) viram flags extras do claude.
 	args := append(t.buildArgs(resumeID), modelEffortFlags(model, effort)...)
 	cmd := exec.CommandContext(ctx, t.prog, args...)
@@ -177,7 +177,7 @@ func (t *SSHTarget) NewRunner(app Applier) *Runner { return NewRunner(app) }
 // Start conecta via ssh e liga stdin/stdout (pipes limpos, sem PTY) ao Handle.
 // cwd != "" vira um `cd <cwd> &&` antes do comando remoto. prompt != "" é
 // enviado pelo stdin logo após o start.
-func (t *SSHTarget) Start(ctx context.Context, resumeID, cwd, model, effort, prompt string) (*Handle, error) {
+func (t *SSHTarget) Start(ctx context.Context, resumeID, cwd, model, effort, _sandbox, prompt string) (*Handle, error) {
 	sshArgs := t.buildArgs(t.dest, t.remoteCmd, resumeID, cwd)
 	// model/effort entram como MAIS parâmetros posicionais do `exec "$0" "$@"`
 	// remoto (single-quoted, mesmo escape do SEC-101), anexados ao comando remoto

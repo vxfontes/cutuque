@@ -25,7 +25,7 @@ func TestShutdownClosesAllHandlesAndReturns(t *testing.T) {
 	tgt := &scriptTarget{name: "macbook", run: liveUntilClosedScript, captured: make(chan string, 1)}
 	l, reg := newTestLauncher(tgt)
 
-	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "tarefa", "", "", ""); err != nil {
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "tarefa", "", "", "", ""); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	waitFor(t, func() bool {

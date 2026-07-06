@@ -22,7 +22,7 @@ import (
 // io.Pipe não exercitam. Roda sob -race.
 func TestHandleCloseConcurrentIsSafe(t *testing.T) {
 	tgt := newLocalCommand("m", "cat", func(string) []string { return nil })
-	h, err := tgt.Start(context.Background(), "", "", "", "", "")
+	h, err := tgt.Start(context.Background(), "", "", "", "", "", "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestLocalTargetDoesNotLeakHubEnv(t *testing.T) {
 	t.Setenv("CUTUQUE_TEST_SENTINELA", "vazou")
 
 	tgt := newLocalCommand("m", "env", func(string) []string { return nil })
-	h, err := tgt.Start(context.Background(), "", "", "", "", "")
+	h, err := tgt.Start(context.Background(), "", "", "", "", "", "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestLocalTargetSetsCmdDirFromCwd(t *testing.T) {
 	}
 
 	tgt := newLocalCommand("m", "pwd", func(string) []string { return nil })
-	h, startErr := tgt.Start(context.Background(), "", dir, "", "", "")
+	h, startErr := tgt.Start(context.Background(), "", dir, "", "", "", "")
 	if startErr != nil {
 		t.Fatalf("Start: %v", startErr)
 	}
@@ -100,7 +100,7 @@ func TestLocalTargetSetsCmdDirFromCwd(t *testing.T) {
 // cmd.Dir (mantém o diretório default do processo do hub — hoje é "home").
 func TestLocalTargetEmptyCwdUsesDefault(t *testing.T) {
 	tgt := newLocalCommand("m", "pwd", func(string) []string { return nil })
-	h, err := tgt.Start(context.Background(), "", "", "", "", "")
+	h, err := tgt.Start(context.Background(), "", "", "", "", "", "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestSSHTargetRunnerProcessesFixtureViaFakeProgram(t *testing.T) {
 		t.Errorf("Name() = %q, quero \"macmini\"", tgt.Name())
 	}
 
-	h, err := tgt.Start(context.Background(), "", "", "", "", "")
+	h, err := tgt.Start(context.Background(), "", "", "", "", "", "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestSSHTargetDoesNotLeakHubEnv(t *testing.T) {
 	tgt := newSSHCommand("macmini", "dest-irrelevante-para-o-fake", defaultRemoteClaudeCmd, "env",
 		func(dest, remoteCmd, _, _ string) []string { return nil })
 
-	h, err := tgt.Start(context.Background(), "", "", "", "", "")
+	h, err := tgt.Start(context.Background(), "", "", "", "", "", "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
