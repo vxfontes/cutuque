@@ -130,6 +130,12 @@ func (h *Handle) WriteJSON(v any) error {
 	return err
 }
 
+// AcceptsInput diz se o Handle tem um canal de stdin para receber mensagens
+// (SendUserMessage/WriteJSON). Agentes one-shot como o Codex nascem com Stdin
+// nil (o prompt vai no argumento e o processo sai ao fim do turno), então NÃO
+// aceitam input — quem for escrever precisa checar isto antes (senão nil deref).
+func (h *Handle) AcceptsInput() bool { return h.Stdin != nil }
+
 // SendUserMessage escreve uma mensagem de usuário (o prompt inicial ou um input
 // posterior) no stdin, no formato stream-json do Claude seguido de newline.
 // Agentes one-shot não a usam.

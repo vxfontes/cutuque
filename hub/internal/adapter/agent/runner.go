@@ -28,6 +28,11 @@ type Meta struct {
 	Machine string // máquina-alvo (nome do Target)
 	Prompt  string // prompt inicial, para derivar o Title
 	Cwd     string // pasta onde o agente roda (persistida na sessão p/ o resume)
+	// SessionID != "" num RESUME: o id já é conhecido (a sessão existe). Deixa o
+	// Runner marcar Errored no EOF mesmo que o processo morra ANTES de emitir o
+	// primeiro evento (ex.: `codex`/`claude` fora do PATH via ssh) — senão a
+	// sessão retomada ficaria congelada, sem erro nem resposta.
+	SessionID string
 }
 
 // ParseFunc traduz uma linha do stream de saída de um agente em eventos
@@ -58,7 +63,9 @@ func NewRunner(app Applier, parse ParseFunc, agentName string) *Runner {
 // Handle: isso é responsabilidade de quem o abriu.
 func (r *Runner) Run(ctx context.Context, h *Handle, meta Meta) error {
 	reader := bufio.NewReader(h.Stdout)
-	var sessionID string
+	// Num resume o id já é conhecido; usa-o como fallback para o Errored de EOF
+	// quando o processo morre antes de emitir o session_started.
+	sessionID := meta.SessionID
 	sawTerminal := false
 
 	for {

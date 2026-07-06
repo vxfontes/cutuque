@@ -638,15 +638,22 @@ func (l *Launcher) SendText(id, text string) error {
 	h, live := l.handles[id]
 	l.mu.Unlock()
 
-	if live {
-		// Eco ANTES do envio: garante que o texto da usuária apareça no
-		// transcript antes de qualquer resposta do agente (ordem cronológica).
+	if live && h.AcceptsInput() {
+		// Canal bidirecional vivo (Claude): manda pro stdin. Eco ANTES do envio,
+		// para o texto da usuária aparecer no transcript antes da resposta do
+		// agente (ordem cronológica).
 		l.eng.Apply(event.Event{SessionID: id, Type: event.OutputChunk, Kind: event.KindUser, Data: text, At: time.Now()})
 		if err := h.SendUserMessage(text); err != nil {
 			return err
 		}
 		l.eng.Apply(event.Event{SessionID: id, Type: event.UserResponded, At: time.Now()})
 		return nil
+	}
+	if live {
+		// Processo vivo mas SEM canal de stdin (Codex é one-shot: o turno em
+		// andamento não aceita injeção). Rejeita em vez de estourar nil deref —
+		// a usuária tenta de novo quando o turno terminar (aí cai no resume).
+		return ErrNoHandle
 	}
 	// Sessão encerrada: retoma com --resume, roteando tudo para o MESMO id.
 	return l.resume(s, text)
@@ -703,7 +710,7 @@ func (l *Launcher) resume(s session.Session, prompt string) error {
 	runner := tgt.NewRunner(app)
 	go func() {
 		defer l.wg.Done()
-		_ = runner.Run(l.baseCtx, handle, claudecode.Meta{Machine: s.Machine, Prompt: prompt})
+		_ = runner.Run(l.baseCtx, handle, claudecode.Meta{Machine: s.Machine, Prompt: prompt, SessionID: s.ID})
 		l.removeHandle(s.ID)
 		_ = handle.Close()
 	}()

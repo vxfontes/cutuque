@@ -1,22 +1,70 @@
 # Achados de Segurança — Cutuque
 
+## SEC-108 — `Launcher.resume` não tem timeout/sinal de falha quando o processo do agente não produz nenhuma saída (amplificado pelo Codex)
+**Severidade:** R2 | **OWASP:** A04:2021 – Insecure Design (ausência de sinal de falha num controle de estado, não injeção clássica)
+**Localização:** `hub/internal/launcher/launcher.go:670-711` (`resume`, sem timeout/espera de confirmação, diferente de `Launch`), `hub/internal/adapter/agent/runner.go:104-107` (`Run`, só sintetiza `Errored` no EOF se `sessionID != ""`, i.e., se algum `session_started`/`thread.started` chegou a ser visto)
+**Detectado:** 2026-07-06 | **Status:** open
+
+**Descrição:**
+`Launcher.Launch` (primeira mensagem de uma sessão) espera até `launchTimeout` (20s) por um `session_started`; se o processo morrer antes disso, `ErrLaunchTimeout` é devolvido ao cliente. `Launcher.resume` (toda continuação de uma sessão já encerrada — `SendText`/`Reply` quando não há handle vivo) **não tem esse mecanismo**: ele inicia o processo, ecoa o prompt do usuário no output (`l.eng.Apply(OutputChunk kind=user, ...)`, ANTES de qualquer confirmação de que o processo vai realmente responder) e retorna 200 imediatamente, sem esperar nem por um `thread.started`/`session_started` nem por um evento terminal.
+
+`agent.Runner.Run` só sintetiza um evento `Errored` no EOF quando `sessionID != ""` — ou seja, apenas quando o adapter já viu pelo menos um evento com id (tipicamente o primeiro, `session_started`/`thread.started`). Se o processo do agente morrer/sair ANTES de emitir qualquer linha JSON no stdout (`cmd.Start()` teve sucesso, mas o binário em si falhou/saiu sem imprimir nada — ex.: erro de auth/quota impresso só no stderr, ou, no caminho SSH, o binário `codex`/`claude` remoto não está no PATH do shell não-interativo e o `bash -lc` retorna "command not found" só no stderr), **nenhum evento é emitido, a sessão fica congelada no estado anterior (tipicamente `done`), e a usuária nunca recebe erro nem resposta** — só o eco do próprio texto que ela mandou, já aplicado antes do processo sequer confirmar que ia rodar.
+
+Isso é uma fraqueza pré-existente do `resume` (compartilhado por Claude e Codex desde antes desta leva), mas o Codex a expõe com frequência MUITO maior: como o Codex é one-shot (cada mensagens após a primeira SEMPRE passa por `resume`, nunca por stdin de um processo já vivo — ao contrário do Claude, que só usa `resume` quando a sessão já encerrou), qualquer máquina SSH nova onde o binário `codex` ainda não esteja corretamente instalado/no PATH faz TODA mensagem de continuação cair nesse buraco, silenciosamente, sem log nem timeout.
+
+**Fix recomendado:**
+1. Dar a `resume` o mesmo tratamento de `Launch`: um timeout curto esperando confirmação de vida do processo (ex.: o primeiro evento do stream, ou ao menos um sinal de "processo ainda respondendo" — não precisa ser um `session_started` novo, já que o id é o mesmo (`forcedID`)); se estourar, aplicar um `Errored` explícito na sessão (em vez de deixá-la congelada) e devolver erro ao chamador.
+2. Alternativa mais barata: em `agent.Runner.Run`, sintetizar `Errored` no EOF mesmo com `sessionID == ""` QUANDO a chamada é de um resume (`forcedID` conhecido) — hoje esse conhecimento só existe no `launchApplier`, não no `Runner`; dá pra propagar via `Meta` (ex.: `Meta.ForceErrorOnEmptyEOF bool` ou simplesmente sempre aplicar `Errored{SessionID: <sessionID ou o id já conhecido pelo caller>}` quando o Runner não viu NADA no stream, deixando o Applier decidir se isso é uma transição válida).
+3. Regressão: teste de fixture com um `Target.Start` fake cujo processo sai imediatamente sem emitir nada no stdout, verificando que a sessão retomada acaba em `error` (não fica congelada em `done`) dentro de um teto de tempo razoável.
+
+`[relacionado a SEC-107]`
+
+## SEC-107 — `Launcher.SendText`/`Reply` podem chamar `SendUserMessage` num Handle one-shot (Codex) sem stdin, causando panic
+**Severidade:** R2 | **OWASP:** A04:2021 – Insecure Design (a plataforma de execução compartilhada não expõe a capacidade "aceita input pelo stdin" ao código que decide se deve escrever nele)
+**Localização:** `hub/internal/launcher/launcher.go:632-653` (`SendText`, branch `if live`, linha 645: `h.SendUserMessage(text)`), `hub/internal/adapter/agent/handle.go:121-131` (`WriteJSON`, linha 129: `h.Stdin.Write(b)`), `hub/internal/adapter/codex/target.go:144-157` (`startCodex`, linha 148: `cmd.Stdin = nil` — todo Handle do Codex nasce com `Stdin == nil`), `app/CutuqueApp/SessionDetailView.swift:352-358` (`isLive`/`canSend` não distinguem agente, permitindo o toque de enviar/quick-reply durante `state == running` de qualquer agente)
+**Detectado:** 2026-07-06 | **Status:** open
+
+**Descrição:**
+O Codex roda em modo one-shot (`codex exec`): cada `Handle` é criado com `Stdin == nil` (`startCodex`, `codex/target.go:144-157` — comentário explícito: "Codex é one-shot: o prompt já está no argumento; stdin fechado evita que ele pendure esperando input"). Isso é correto para o Start inicial, mas a plataforma compartilhada (`agent.Handle`) não expõe essa característica ("este Handle aceita `SendUserMessage`?") a quem decide se deve escrevê-lo — e `Launcher.SendText` (usada tanto para digitação livre quanto, via `Reply`, para respostas de ação de push) decide unicamente pela presença de um handle "vivo" em `l.handles[id]`, sem checar o agente:
+
+```go
+if live {
+    l.eng.Apply(event.Event{... Kind: event.KindUser, Data: text ...}) // eco APLICADO primeiro
+    if err := h.SendUserMessage(text); err != nil { ... }             // panic aqui p/ Codex
+    ...
+}
+```
+
+`h.SendUserMessage` → `h.WriteJSON` → `h.Stdin.Write(b)`, e como `h.Stdin` é uma interface `io.WriteCloser` nula (não um ponteiro concreto nulo), chamar `.Write` nela é um nil pointer dereference — panic em tempo de execução.
+
+**Isto não é uma corrida rara**: uma sessão Codex fica em `state == running` do `thread.started` até o `turn.completed` — ou seja, durante TODO o tempo de inferência do modelo (tipicamente vários segundos). `handles[id]` é populado exatamente nesse mesmo intervalo (`launchApplier.Apply`, `SessionStarted` → `setHandle`). E o app (`SessionDetailView.swift`) **habilita ativamente** o envio de texto e as respostas rápidas (quick replies) sempre que `isLive` (`state == .running || state == .needsYou`) é verdadeiro, sem qualquer exceção para o Codex (`canSend`/`isLive`, linhas 352-358) — inclusive o placeholder do campo de texto diz "Responda ao agente…" justamente quando `isLive`. Ou seja: **o próprio app convida a usuária a fazer exatamente a ação que derruba a request no hub**, sempre que ela manda uma segunda mensagem/toca um quick-reply enquanto um turno do Codex ainda está em andamento. `Reply` (usada pela ação rápida de push) tem o mesmo problema: como o Codex nunca tem `Pane` (não integra com tmux), `Reply` sempre cai em `SendText` para sessões Codex.
+
+Efeitos concretos quando isso acontece:
+1. O eco (`OutputChunk kind=user`) já foi aplicado ANTES da escrita falhar — a mensagem da usuária aparece na conversa como "enviada" mesmo tendo sido descartada sem nunca chegar ao Codex. Isso é enganoso: não há nenhum sinal de que a segunda mensagem se perdeu.
+2. O `net/http` padrão do Go recupera o panic por conexão (não derruba o processo do hub inteiro), mas a conexão HTTP é abortada sem nenhuma resposta JSON estruturada — o app recebe um erro de rede genérico em vez do 409 `no_live_session` que já existe para exatamente este cenário (ver abaixo).
+3. `launcher.ErrNoHandle` (`launcher.go:37`) já está definido, já está mapeado para `409 no_live_session` em `InputHandler` (`server/launch.go:529`), e já tem um teste garantindo esse mapeamento (`launch_test.go:276`) — mas **nada em `SendText` jamais o retorna**. A peça que resolveria isto de forma limpa já existe parcialmente, só não está conectada a uma checagem de capacidade do Handle.
+
+Nenhum teste de `launcher_test.go` exercita esse caminho: o fake `scriptTarget` usado em todos os testes de `SendText`/`resume` sempre cria um `Handle` com `Stdin` de verdade (um `io.Pipe`), simulando só o comportamento bidirecional do Claude — não existe nenhum fake que produza um Handle `Stdin == nil` para exercitar `SendText` num handle "vivo" sem canal de escrita.
+
+**Fix recomendado:**
+1. Dar ao `Handle`/`Target` uma forma explícita de expressar "aceita input pelo stdin" (ex.: `func (h *Handle) AcceptsInput() bool { return h.Stdin != nil }`, ou um método no próprio `Target`, já que é uma propriedade do agente, não uma decisão por instância). `SendText`, antes de chamar `h.SendUserMessage`, checa essa capacidade; se `false`, devolve `launcher.ErrNoHandle` (o mapeamento HTTP para 409 já existe) em vez de tentar escrever.
+2. Não aplicar o eco (`OutputChunk kind=user`) antes de confirmar que a mensagem tem como ser entregue — ou, no mínimo, para agentes sem canal vivo aceitando input nesse instante, aplicar o eco só DEPOIS que `SendText` decidir que vai de fato entregá-la (seja pelo stdin vivo, seja via `resume`).
+3. No app, gate `canSend`/quick replies para não convidar a ação nesse estado específico (ex.: desabilitar enquanto `agent == "codex" && state == .running`, ou — melhor — o hub devolver algum sinal de "aceita input agora" que o app usa para desenhar o estado do botão, em vez de assumir que todo estado `running`/`needsYou` aceita texto).
+4. Regressão: um teste de `launcher_test.go` com um fake Target cujo `Handle.Stdin` é nil (espelhando `codex.startCodex`), verificando que `SendText` num handle "vivo" desse tipo devolve `ErrNoHandle` em vez de propagar/panicar.
+
 ## SEC-106 — `Engine.ensureRunning` reabre variante silenciosa da corrida de criação de sessão (residual do SEC-103)
 **Severidade:** R2 | **OWASP:** A04:2021 – Insecure Design (falha de confiabilidade de um controle de segurança/aprovação, não injeção clássica)
 **Localização:** `hub/internal/engine/engine.go:86-102` (`ensureRunning`, branch de criação: `Get` + `Add` bruto, não `AddIfAbsent`)
-**Detectado:** 2026-07-03 | **Status:** open
+**Detectado:** 2026-07-03 | **Status:** RESOLVIDO (2026-07-06, confirmado por leitura de código nesta leva — ver nota)
 
-**Descrição:**
-O fix do SEC-103/da 4ª ocorrência do padrão `reivindicação-não-atômica-de-recurso-compartilhado` migrou `Engine.EnsureRegistered` para `Registry.AddIfAllowed` (atômico), mas `Engine.ensureRunning` — o caminho IRMÃO que também cria sessão do zero, usado tanto pelo `Runner` quanto pelo dispatch de hook `SessionStart`/`UserPromptSubmit` via `Apply` — não foi migrado junto. Seu branch de criação continua fazendo `e.reg.Get(ev.SessionID)` seguido de `e.reg.Add(session.Session{...})` bruto como duas aquisições de lock separadas.
+**Nota de verificação (2026-07-06, leva do adapter Codex):** `Engine.ensureRunning` (`engine.go:86-119`) já usa `e.reg.AddIfAbsent(...)` no branch de criação (não mais `Get`+`Add` bruto). Fora de escopo desta leva (não foi tocado no diff revisado), mas confirmado corrigido por leitura direta do arquivo atual — fechando este achado.
 
-Cenário: hook e Runner recebem o `SessionStarted` de uma sessão NUNCA vista por nenhum dos dois, quase simultaneamente — a mesma premissa do SEC-103 original. Se o `Get` de um dos dois lados retornar `exists=false` e, ANTES de seu `Add` bruto rodar, o outro lado tiver inserido E JÁ AVANÇADO o estado (ex.: processou seu próprio `EnsureRegistered`+`Apply(SessionStarted)` e, em seguida, um `Notification` de permissão real chegou primeiro, levando a sessão a `needs_you` com `PendingPrompt` preenchido), o `Add` bruto do outro lado SUBSTITUI o registro inteiro por um `session.Session{}` novo em `StateRunning` — apagando silenciosamente o `needs_you`/`PendingPrompt`/`Pane` que já existiam.
+**Descrição (histórico, mantida para contexto):**
+O fix do SEC-103/da 4ª ocorrência do padrão `reivindicação-não-atômica-de-recurso-compartilhado` migrou `Engine.EnsureRegistered` para `Registry.AddIfAllowed` (atômico), mas `Engine.ensureRunning` — o caminho IRMÃO que também cria sessão do zero, usado tanto pelo `Runner` quanto pelo dispatch de hook `SessionStart`/`UserPromptSubmit` via `Apply` — não tinha sido migrado junto. Seu branch de criação fazia `e.reg.Get(ev.SessionID)` seguido de `e.reg.Add(session.Session{...})` bruto como duas aquisições de lock separadas.
 
-Diferença em relação ao SEC-103 original: lá, o sintoma era visível (sessão fica travada em `needs_you` sem os botões de aprovação — a usuária pelo menos VÊ que algo está preso). Aqui o resultado é PIOR em silêncio: a sessão volta a aparecer como `running`, sem nenhum badge `needs_you`, enquanto o processo `claude` real continua bloqueado esperando resposta no stdin — nenhum sinal visível de que algo está errado. A janela é mais estreita que a do SEC-103 original (exige 3 eventos entrelaçados, não 2), mas o dano pior compensa a menor probabilidade.
+**Fix aplicado:** `ensureRunning` agora usa `e.reg.AddIfAbsent(novaSessao)`; se `added==false`, cai no mesmo bloco de reconciliação (`Reclaim`/`UpdateState`/`SetPane`) já existente para o caso "já existia" — exatamente o fix recomendado.
 
-**Fix recomendado:**
-1. Trocar o branch de criação de `ensureRunning` para `e.reg.AddIfAbsent(novaSessao)`; se `added==false`, cair no mesmo bloco de reconciliação (`Reclaim`/`UpdateState`/`SetPane`) já existente logo abaixo, hoje só executado quando `exists==true` a partir do `Get` original.
-2. Regressão: teste de integração que dispara `Apply(SessionStarted)` concorrente de duas fontes para o MESMO id novo, com uma delas avançando para `needs_you` entre as duas chamadas de `Get`, e verifica que o estado final preserva `needs_you`/`PendingPrompt` em vez de reverter para `running`.
-
-`[→ review/patterns.md#reivindicação-não-atômica-de-recurso-compartilhado]` `[relacionado a SEC-103]`
+`[→ review/patterns.md#reivindicação-não-atômica-de-recurso-compartilhado]`
 
 ## SEC-105 — corrida de persistência em disco de device tokens (`devices/store.go`)
 **Severidade:** R3 | **OWASP:** A04:2021 – Insecure Design (perda de integridade de dados de configuração, não injeção clássica)
@@ -64,7 +112,7 @@ No app: `livePaneIDs`/`needsYouPaneIDs` (`SessionListView.swift`) são `Set<Stri
 **Resolução (2026-07-03):**
 `Registry.Reclaim(id, title, machine, agent)` (`registry.go`) foi introduzido e é chamado a partir de `Engine.ensureRunning` (`engine.go`) sempre que `!ev.External && cur.External` — ou seja, quando um evento AUTORITATIVO do `Runner` (`ev.External == false`) chega para uma sessão que hoje está marcada `External == true` (criada primeiro por um hook). `Reclaim` corrige `External` para `false` e atualiza `Title`/`Machine`/`Agent` a partir do evento do Runner, fechando exatamente a janela descrita originalmente: não importa mais qual fonte chega primeiro, o Runner sempre consegue "reclamar" a sessão como hub-owned quando seu próprio evento chega. Confirmado via leitura de código (`engine.go`, `registry.go`) — o mecanismo bate com a opção 1 do fix originalmente recomendado.
 
-**Ressalva (2026-07-03):** o MESMO branch de `ensureRunning` que chama `Reclaim` (usado quando a sessão JÁ existe) está correto; mas o branch IRMÃO — criação de sessão DO ZERO, quando nenhum dos dois lados jamais viu o id antes — continua fazendo `Get`+`Add` bruto, não `AddIfAbsent`, reabrindo uma variante mais estreita (e mais silenciosa) da mesma classe de corrida. Rastreada separadamente como **SEC-106** (não reabre este ticket porque o cenário aqui descrito — sessão já registrada por um lado, reclamada pelo outro — está genuinamente fechado; o residual é uma janela de timing distinta, na criação concorrente do zero).
+**Ressalva (2026-07-03):** o MESMO branch de `ensureRunning` que chama `Reclaim` (usado quando a sessão JÁ existe) está correto; mas o branch IRMÃO — criação de sessão DO ZERO, quando nenhum dos dois lados jamais viu o id antes — continuava fazendo `Get`+`Add` bruto, não `AddIfAbsent`, reabrindo uma variante mais estreita (e mais silenciosa) da mesma classe de corrida. Rastreada separadamente como **SEC-106** (não reabre este ticket porque o cenário aqui descrito — sessão já registrada por um lado, reclamada pelo outro — está genuinamente fechado; o residual era uma janela de timing distinta, na criação concorrente do zero). SEC-106 confirmado RESOLVIDO em 2026-07-06.
 
 **Descrição original (mantida para contexto histórico):**
 O forwarder de hook (`~/.cutuque/hook.sh`) é configurado a nível de usuário no Claude Code e dispara para TODA sessão `claude` rodando no Mac — inclusive as sessões `claude -p` que o próprio hub lança localmente via `Launcher`/`Runner` (stream-json), e agentes de terceiros que também chamem `claude` na mesma máquina. Isso cria DUAS fontes independentes de eventos para o MESMO `session_id`, sem nenhuma ordenação garantida entre elas. Se o hook vencesse a corrida, a sessão ficava marcada `External = true` de forma permanente, e o app (gated a `!isExternal` para mostrar os botões aprovar/negar) não oferecia nenhum canal de resposta para uma sessão `-p` headless — o agente ficava bloqueado no `control_request` indefinidamente.
@@ -101,6 +149,9 @@ Testes de regressão: `TestRemoteClaudeCommandNeutralizesInjection` (5 payloads:
 
 **Verificação de não-regressão (2026-07-03, leva de Notification ociosa / devices / Resolve):**
 Nenhuma mudança nesta leva toca `remoteClaudeCommand`/`singleQuote`/`Adopt`. O novo endpoint `POST /sessions/{id}/resolve` (`ResolveHandler`) só aceita o `id` já existente no Registry (path param, não usado para montar comando algum) e chama `Launcher.Resolve` → `reg.UpdateState(id, StateDone)` — sem tocar em `exec`/`ssh`. **SEC-101 não regrediu.**
+
+**Verificação de não-regressão (2026-07-06, leva do adapter Codex):**
+`codex/target.go` (`remoteCodexCommand`/`codexArgs`) reusa o MESMO idioma estrutural (`bash -lc 'exec "$0" "$@"' <argv...>`, cada arg individualmente single-quoted via `agent.SingleQuote`, um único nível de shell) — confirmado por leitura de código, é literalmente o mesmo padrão do `claudecode`, agora extraído para `agent.SingleQuote`/reusado por ambos. `resumeID` que chega em `codexArgs` é sempre `""`, um id já validado por `sessionIDPattern` (`Adopt`), ou um `thread_id` gerado pelo próprio processo `codex` (nunca input direto de cliente sem validação prévia). `sandbox`/`effort` só entram em `-c chave="valor"` depois de passar por allowlists estritas (`validSandbox`/`validEffort`); `model` passa por um regex estrito (`modelNamePattern`) antes de virar `-m <model>`, e mesmo se o regex falhasse, o valor ainda seria isolado corretamente pelo quoting estrutural por-argumento. **SEC-101 não regrediu; nenhuma injeção nova encontrada no adapter do Codex.**
 
 **Descrição:**
 `POST /machines/{machine}/adopt` aceita `id` livre do cliente (app) e grava como `Session.ID` no registry sem validar formato. Quando essa sessão (idle, sem handle vivo) recebe `POST /sessions/{id}/input`, `Launcher.SendText` cai em `resume()`, que chama `tgt.Start(ctx, s.ID, s.Cwd)` com `s.ID` = o `id` fornecido pelo cliente. Para `SSHTarget`, isso vira `--resume <id>` dentro de `remoteClaudeCommand`, que monta:
@@ -146,4 +197,3 @@ func remoteClaudeCommand(claudeCmd, resumeID, cwd string) string {
 
 2. Defesa em profundidade em `AdoptHandler`/`Launcher.Adopt`: validar `id` contra o formato real de session id do Claude Code (ex.: `^[0-9a-fA-F-]{8,64}$`) e rejeitar com 400 se não bater — evita que qualquer variação futura de construção de comando reabra a mesma classe de bug.
 3. Atualizar o comentário de `singleQuote` (target.go:369-371), que hoje diz não ser um escapador genérico para input externo — hoje é exatamente isso que ele faz, então o comentário deve refletir a garantia real após o fix (isolamento correto por token via `"$@"`, não por concatenação+quote único).
-</content>

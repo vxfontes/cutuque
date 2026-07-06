@@ -581,3 +581,45 @@ func TestDiscoverUnknownMachine(t *testing.T) {
 		t.Errorf("err = %v, quero ErrUnknownMachine", err)
 	}
 }
+
+// TestSendTextRejectsHandleWithoutStdin cobre o fix do achado #1 da ludmilla:
+// um Handle vivo SEM stdin (Codex one-shot, turno em andamento) não pode receber
+// SendUserMessage — SendText deve devolver ErrNoHandle, nunca estourar nil deref.
+func TestSendTextRejectsHandleWithoutStdin(t *testing.T) {
+	reg := registry.New()
+	eng := engine.New(reg)
+	l := New(eng, reg, map[string]map[string]claudecode.Target{})
+	reg.AddIfAbsent(session.Session{ID: "cx1", Machine: "macbook", Agent: "codex", State: session.StateRunning})
+	// Handle "vivo" mas com Stdin nil (como o Codex): AcceptsInput() == false.
+	r, _ := io.Pipe()
+	l.setHandle("cx1", &claudecode.Handle{Stdout: r})
+
+	if err := l.SendText("cx1", "oi"); err != ErrNoHandle {
+		t.Errorf("err = %v, quero ErrNoHandle (handle sem stdin)", err)
+	}
+}
+
+// TestResumeMarksErroredWhenProcessDiesSilently cobre o fix do achado #2: se o
+// processo retomado morre ANTES de emitir qualquer evento (EOF sem
+// session_started), a sessão não pode ficar congelada — o Runner marca Errored
+// usando o id conhecido do resume (Meta.SessionID).
+func TestResumeMarksErroredWhenProcessDiesSilently(t *testing.T) {
+	const id = "11111111-2222-3333-4444-555555555555"
+	tgt := &scriptTarget{
+		name:     "macbook",
+		captured: make(chan string, 1),
+		// Lê o prompt (destrava o SendUserMessage do Start) e sai: EOF sem emitir
+		// nada — simula o `codex`/`claude` que morre sem produzir stream.
+		run: func(_ io.Writer, stdin *bufio.Reader, _ chan<- string) { _, _ = stdin.ReadString('\n') },
+	}
+	l, reg := newTestLauncher(tgt)
+	reg.AddIfAbsent(session.Session{ID: id, Machine: "macbook", Agent: "claude-code", State: session.StateDone})
+
+	if err := l.SendText(id, "continua"); err != nil {
+		t.Fatalf("SendText (resume): %v", err)
+	}
+	waitFor(t, func() bool {
+		s, _ := reg.Get(id)
+		return s.State == session.StateError
+	})
+}
