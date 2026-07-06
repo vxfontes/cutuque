@@ -34,16 +34,23 @@ for line in run('ps','-axo','pid=,ppid=,command=').splitlines():
     if not m: continue
     pid,ppid,c=int(m.group(1)),int(m.group(2)),m.group(3)
     cmd[pid]=c; kids.setdefault(ppid,[]).append(pid)
-def has_claude(root):
+def agent_of(root):
+    # Qual agente roda na árvore de processos do pane ('claude'|'codex'|
+    # 'opencode') ou '' se nenhum. Cobertura universal do fallback tmux: qualquer
+    # um dos três aparece e pode ser espelhado/digitado (capture/send-keys são
+    # agnósticos). O estado do terminal só é inferido pro Claude (ver pane_state).
     seen=set(); stack=[root]
     while stack:
         p=stack.pop()
         if p in seen: continue
         seen.add(p)
         c=cmd.get(p,'').lower()
-        if 'claude' in c and 'daemon' not in c and 'bg-pty-host' not in c: return True
+        if 'daemon' not in c and 'bg-pty-host' not in c:
+            if 'claude' in c: return 'claude'
+            if 'codex' in c: return 'codex'
+            if 'opencode' in c: return 'opencode'
         stack+=kids.get(p,[])
-    return False
+    return ''
 def norm(x):
     # /tmp e /private/tmp são o mesmo dir no macOS (symlink); normaliza pra uma
     # forma só, senão o mesmo socket apareceria duas vezes e não casaria com o
@@ -83,8 +90,13 @@ for sock in sorted(socks):
         if len(f)<5: continue
         try: pid=int(f[1])
         except: continue
-        if not has_claude(pid): continue
-        out.append({'id':sock+'\t'+f[0],'socket':sock,'pane':f[0],'cmd':'claude','cwd':f[2],'session':f[3],'window':f[4],'state':pane_state(sock,f[0])})
+        ag=agent_of(pid)
+        if not ag: continue
+        # Estado real só é confiável pro Claude (os marcadores da TUI são dele);
+        # pro Codex/OpenCode deixamos '' (neutro) — o espelho mostra a tela de
+        # verdade e não arriscamos rotular um estado errado.
+        st=pane_state(sock,f[0]) if ag=='claude' else ''
+        out.append({'id':sock+'\t'+f[0],'socket':sock,'pane':f[0],'cmd':ag,'cwd':f[2],'session':f[3],'window':f[4],'state':st})
 print(json.dumps(out))
 `
 
@@ -98,7 +110,7 @@ var (
 // TmuxPane é um pane do tmux rodando (provavelmente) um claude.
 type TmuxPane struct {
 	ID      string `json:"id"`      // alvo composto "<socket>\t<pane>"
-	Cmd     string `json:"cmd"`     // sempre "claude" (filtrado)
+	Cmd     string `json:"cmd"`     // agente detectado: "claude"|"codex"|"opencode"
 	Cwd     string `json:"cwd"`     // diretório do pane
 	Session string `json:"session"` // nome da sessão tmux
 	Window  string `json:"window"`  // nome da janela tmux
@@ -374,7 +386,7 @@ func TmuxPaneAsDiscovered(p TmuxPane) session.Discovered {
 			title = base
 		}
 	}
-	return session.Discovered{ID: p.ID, Cwd: p.Cwd, Title: title, State: p.State}
+	return session.Discovered{ID: p.ID, Cwd: p.Cwd, Title: title, State: p.State, Agent: p.Cmd}
 }
 
 func isAllDigits(s string) bool {
