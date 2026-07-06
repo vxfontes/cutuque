@@ -27,12 +27,13 @@ func startedOnlyScript(sessionID string) func(stdout io.Writer, stdin *bufio.Rea
 // fixtureTargets monta n alvos ("m0".."m(n-1)"), cada um com sua própria
 // sessão ("s0".."s(n-1)") — necessário porque cada Launch precisa de um
 // session_id distinto para não colidir no Registry.
-func fixtureTargets(n int) map[string]claudecode.Target {
-	targets := make(map[string]claudecode.Target, n)
+func fixtureTargets(n int) map[string]map[string]claudecode.Target {
+	targets := make(map[string]map[string]claudecode.Target, n)
 	for i := 0; i < n; i++ {
 		name := fmt.Sprintf("m%d", i)
 		sessionID := fmt.Sprintf("s%d", i)
-		targets[name] = &scriptTarget{name: name, run: startedOnlyScript(sessionID), captured: make(chan string, 1)}
+		t := &scriptTarget{name: name, run: startedOnlyScript(sessionID), captured: make(chan string, 1)}
+		targets[name] = map[string]claudecode.Target{t.Kind(): t}
 	}
 	return targets
 }

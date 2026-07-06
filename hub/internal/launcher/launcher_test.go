@@ -31,20 +31,34 @@ type scriptTarget struct {
 
 func (s *scriptTarget) Name() string { return s.name }
 
+func (s *scriptTarget) Kind() string { return "claude-code" }
+
+func (s *scriptTarget) NewRunner(app claudecode.Applier) *claudecode.Runner {
+	return claudecode.NewRunner(app)
+}
+
 // Transcript satisfaz claudecode.Transcriber: devolve o histórico canned (usado
 // pelo teste de import ao adotar).
 func (s *scriptTarget) Transcript(_ context.Context, _ string) ([]claudecode.TranscriptChunk, error) {
 	return s.transcript, s.transcriptErr
 }
 
-func (s *scriptTarget) Start(_ context.Context, _, _, _, _ string) (*claudecode.Handle, error) {
+func (s *scriptTarget) Start(_ context.Context, _, _, _, _, prompt string) (*claudecode.Handle, error) {
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
 	go func() {
 		defer stdoutW.Close()
 		s.run(stdoutW, bufio.NewReader(stdinR), s.captured)
 	}()
-	return &claudecode.Handle{Stdout: stdoutR, Stdin: stdinW}, nil
+	h := &claudecode.Handle{Stdout: stdoutR, Stdin: stdinW}
+	// O Launcher não manda mais o prompt após o Start — o Start de cada agente
+	// o envia. Espelha isso no fake para o script consumir o prompt inicial.
+	if prompt != "" {
+		if err := h.SendUserMessage(prompt); err != nil {
+			return nil, err
+		}
+	}
+	return h, nil
 }
 
 const (
@@ -80,9 +94,9 @@ func trimNL(s string) string {
 func newTestLauncher(tgt claudecode.Target) (*Launcher, *registry.Registry) {
 	reg := registry.New()
 	eng := engine.New(reg)
-	targets := map[string]claudecode.Target{}
+	targets := map[string]map[string]claudecode.Target{}
 	if tgt != nil {
-		targets[tgt.Name()] = tgt
+		targets[tgt.Name()] = map[string]claudecode.Target{tgt.Kind(): tgt}
 	}
 	return New(eng, reg, targets), reg
 }

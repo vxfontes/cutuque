@@ -74,11 +74,14 @@ type pending struct {
 	input     json.RawMessage
 }
 
-// Launcher lança e controla sessões do Claude Code nas máquinas registradas.
+// Launcher lança e controla sessões de agentes nas máquinas registradas.
 type Launcher struct {
-	eng     *engine.Engine
-	reg     *registry.Registry
-	targets map[string]claudecode.Target
+	eng *engine.Engine
+	reg *registry.Registry
+	// targets é indexado por máquina → agente ("claude-code"|"codex") → alvo.
+	// Uma máquina roda mais de um agente; o launch escolhe pelo agente pedido e o
+	// resume pelo agente da sessão.
+	targets map[string]map[string]claudecode.Target
 
 	// wg rastreia as goroutines de observação (uma por Launch, rodando
 	// runner.Run) ainda vivas. Shutdown espera todas terminarem depois de
@@ -106,7 +109,7 @@ type Launcher struct {
 // (nome da máquina → Target). O Registry é consultado para validar o estado
 // antes de aprovar/negar. O teto de sessões concorrentes começa em
 // defaultMaxSessions; cmd/hub ajusta via SetMaxSessions com CUTUQUE_MAX_SESSIONS.
-func New(eng *engine.Engine, reg *registry.Registry, targets map[string]claudecode.Target) *Launcher {
+func New(eng *engine.Engine, reg *registry.Registry, targets map[string]map[string]claudecode.Target) *Launcher {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Launcher{
 		eng:         eng,
@@ -133,17 +136,45 @@ func (l *Launcher) SetMaxSessions(n int) {
 	l.mu.Unlock()
 }
 
+// target resolve o alvo de um agente específico numa máquina. targets é fixado
+// em New e nunca mutado, então é seguro ler sem lock.
+func (l *Launcher) target(machine, agent string) (claudecode.Target, bool) {
+	byAgent, ok := l.targets[machine]
+	if !ok {
+		return nil, false
+	}
+	t, ok := byAgent[agent]
+	return t, ok
+}
+
+// anyTarget resolve QUALQUER alvo da máquina, para operações agnósticas de
+// agente (listar pastas, tmux, descoberta). Prefere o claude-code, preservando
+// o comportamento das rotas que hoje só existem para ele.
+func (l *Launcher) anyTarget(machine string) (claudecode.Target, bool) {
+	byAgent, ok := l.targets[machine]
+	if !ok || len(byAgent) == 0 {
+		return nil, false
+	}
+	if t, ok := byAgent[agentClaudeCode]; ok {
+		return t, true
+	}
+	for _, t := range byAgent {
+		return t, true
+	}
+	return nil, false
+}
+
 // Launch inicia uma tarefa na máquina dada com o prompt dado, observando-a em
 // uma goroutine. Valida machine/agent (dev: só máquinas registradas + claude-code),
 // rejeita acima do teto de sessões concorrentes (SEC-007, ErrTooManySessions),
 // envia o prompt inicial pelo stdin e espera o session_started (até launchTimeout)
 // para devolver a Session criada. cwd é a pasta onde o `claude` roda; vazio → home.
 func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt, cwd, model, effort string) (session.Session, error) {
-	tgt, ok := l.targets[machine]
-	if !ok {
+	if _, known := l.targets[machine]; !known {
 		return session.Session{}, ErrUnknownMachine
 	}
-	if agent != agentClaudeCode {
+	tgt, ok := l.target(machine, agent)
+	if !ok {
 		return session.Session{}, ErrUnknownAgent
 	}
 
@@ -169,21 +200,18 @@ func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt, cwd, mode
 	// abaixo; defer wg.Done na goroutine no caminho feliz). Usa l.baseCtx (não o
 	// ctx do request, que é Background e nunca cancela) para que o Shutdown mate
 	// o processo em voo cancelando baseCtx.
-	handle, err := tgt.Start(l.baseCtx, "", cwd, model, effort)
+	// Start manda o prompt inicial pelo canal do agente (stdin no Claude, argumento
+	// no Codex). Usa l.baseCtx (não o ctx do request, que é Background e nunca
+	// cancela) para que o Shutdown mate o processo em voo cancelando baseCtx.
+	handle, err := tgt.Start(l.baseCtx, "", cwd, model, effort, prompt)
 	if err != nil {
-		l.wg.Done()
-		return session.Session{}, err
-	}
-	// Prompt inicial pelo stdin (canal verificado): a fake/real lê a user message.
-	if err := handle.SendUserMessage(prompt); err != nil {
-		_ = handle.Close()
 		l.wg.Done()
 		return session.Session{}, err
 	}
 
 	started := make(chan session.Session, 1)
 	app := &launchApplier{l: l, handle: handle, started: started, prompt: prompt}
-	runner := claudecode.NewRunner(app)
+	runner := tgt.NewRunner(app)
 	go func() {
 		defer l.wg.Done()
 		_ = runner.Run(l.baseCtx, handle, claudecode.Meta{Machine: machine, Prompt: prompt})
@@ -207,7 +235,7 @@ func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt, cwd, mode
 // ~/.claude/projects lá), inclusive as não lançadas pelo Cutuque. Retorna
 // ErrUnknownMachine se a máquina não existe ou não suporta descoberta.
 func (l *Launcher) Discover(machine string) ([]session.Discovered, error) {
-	tgt, ok := l.targets[machine]
+	tgt, ok := l.anyTarget(machine)
 	if !ok {
 		return nil, ErrUnknownMachine
 	}
@@ -231,7 +259,7 @@ func (l *Launcher) Discover(machine string) ([]session.Discovered, error) {
 // controlar/observar sessões vivas de terminal). Devolve no shape Discovered
 // (id = pane_id) para o app reusar o mesmo modelo.
 func (l *Launcher) TmuxList(machine string) ([]session.Discovered, error) {
-	tgt, ok := l.targets[machine]
+	tgt, ok := l.anyTarget(machine)
 	if !ok {
 		return nil, ErrUnknownMachine
 	}
@@ -254,7 +282,7 @@ func (l *Launcher) TmuxList(machine string) ([]session.Discovered, error) {
 
 // TmuxCapture devolve a tela atual do pane (espelho ao vivo).
 func (l *Launcher) TmuxCapture(machine, target string) (string, error) {
-	tgt, ok := l.targets[machine]
+	tgt, ok := l.anyTarget(machine)
 	if !ok {
 		return "", ErrUnknownMachine
 	}
@@ -273,7 +301,7 @@ func (l *Launcher) TmuxCapture(machine, target string) (string, error) {
 
 // TmuxResize fixa/restaura o tamanho da janela do pane (para caber no celular).
 func (l *Launcher) TmuxResize(machine, target string, cols, rows int) error {
-	tgt, ok := l.targets[machine]
+	tgt, ok := l.anyTarget(machine)
 	if !ok {
 		return ErrUnknownMachine
 	}
@@ -292,7 +320,7 @@ func (l *Launcher) TmuxResize(machine, target string, cols, rows int) error {
 // TmuxSend digita texto no pane e submete (Enter) — a mensagem do celular caindo
 // no terminal que já roda.
 func (l *Launcher) TmuxSend(machine, target, text string) error {
-	tgt, ok := l.targets[machine]
+	tgt, ok := l.anyTarget(machine)
 	if !ok {
 		return ErrUnknownMachine
 	}
@@ -310,7 +338,7 @@ func (l *Launcher) TmuxSend(machine, target, text string) error {
 
 // TmuxKey envia uma tecla nomeada (Ctrl+C, setas, Esc…) ao pane.
 func (l *Launcher) TmuxKey(machine, target, key string) error {
-	tgt, ok := l.targets[machine]
+	tgt, ok := l.anyTarget(machine)
 	if !ok {
 		return ErrUnknownMachine
 	}
@@ -328,7 +356,7 @@ func (l *Launcher) TmuxKey(machine, target, key string) error {
 
 // TmuxKill encerra o pane alvo (kill-pane): fecha o Claude daquele terminal.
 func (l *Launcher) TmuxKill(machine, target string) error {
-	tgt, ok := l.targets[machine]
+	tgt, ok := l.anyTarget(machine)
 	if !ok {
 		return ErrUnknownMachine
 	}
@@ -346,7 +374,7 @@ func (l *Launcher) TmuxKill(machine, target string) error {
 
 // TmuxKillServer encerra o servidor tmux inteiro do socket (todos os panes).
 func (l *Launcher) TmuxKillServer(machine, socket string) error {
-	tgt, ok := l.targets[machine]
+	tgt, ok := l.anyTarget(machine)
 	if !ok {
 		return ErrUnknownMachine
 	}
@@ -365,7 +393,7 @@ func (l *Launcher) TmuxKillServer(machine, socket string) error {
 // Live lista as sessões do Claude Code que estão RODANDO agora na máquina
 // (processo vivo + transcript recente). Mesmos erros/timeout do Discover.
 func (l *Launcher) Live(machine string) ([]session.Discovered, error) {
-	tgt, ok := l.targets[machine]
+	tgt, ok := l.anyTarget(machine)
 	if !ok {
 		return nil, ErrUnknownMachine
 	}
@@ -386,7 +414,7 @@ func (l *Launcher) Live(machine string) ([]session.Discovered, error) {
 // possa abri-la e continuar a conversa (SendText → --resume). Se já for
 // conhecida, devolve a existente. ErrUnknownMachine se a máquina não existe.
 func (l *Launcher) Adopt(machine, id, cwd, title string) (session.Session, error) {
-	tgt, ok := l.targets[machine]
+	tgt, ok := l.anyTarget(machine)
 	if !ok {
 		return session.Session{}, ErrUnknownMachine
 	}
@@ -436,7 +464,7 @@ func (l *Launcher) ImportHistory(id string) error {
 	if !ok {
 		return ErrUnknownSession
 	}
-	tgt, ok := l.targets[s.Machine]
+	tgt, ok := l.target(s.Machine, s.Agent)
 	if !ok {
 		return ErrUnknownMachine
 	}
@@ -480,7 +508,7 @@ func (l *Launcher) importTranscript(tgt claudecode.Target, id string) {
 // criar uma sessão). path vazio → home da máquina. ErrUnknownMachine se a
 // máquina não existe ou não suporta listar pastas.
 func (l *Launcher) ListDirs(machine, path string) (session.DirListing, error) {
-	tgt, ok := l.targets[machine]
+	tgt, ok := l.anyTarget(machine)
 	if !ok {
 		return session.DirListing{}, ErrUnknownMachine
 	}
@@ -623,7 +651,7 @@ func (l *Launcher) Reply(id, text string) error {
 // máquina, roteando TODO o stream para o mesmo session id (forcedID). Espelha o
 // Launch, mas não espera um novo session_started nem checa teto (é continuação).
 func (l *Launcher) resume(s session.Session, prompt string) error {
-	tgt, ok := l.targets[s.Machine]
+	tgt, ok := l.target(s.Machine, s.Agent)
 	if !ok {
 		return ErrUnknownMachine
 	}
@@ -637,25 +665,22 @@ func (l *Launcher) resume(s session.Session, prompt string) error {
 	l.mu.Unlock()
 
 	// Retoma na MESMA pasta da sessão (s.Cwd): importa pras sessões adotadas do
-	// Mac (o --resume restaura a conversa, mas as ferramentas operam no cwd).
-	handle, err := tgt.Start(l.baseCtx, s.ID, s.Cwd, "", "") // --resume s.ID (mantém o modelo da sessão)
+	// Mac (o --resume restaura a conversa, mas as ferramentas operam no cwd). O
+	// prompt vai pelo canal do agente dentro do Start (mantém o modelo da sessão).
+	handle, err := tgt.Start(l.baseCtx, s.ID, s.Cwd, "", "", prompt)
 	if err != nil {
 		l.wg.Done()
 		return err
 	}
-	// Eco ANTES do envio, mesma ordem cronológica do caminho ao vivo.
+	// Eco do texto da usuária: aplicado ANTES de a goroutine do runner processar
+	// qualquer resposta (mesma ordem cronológica do caminho ao vivo).
 	l.eng.Apply(event.Event{SessionID: s.ID, Type: event.OutputChunk, Kind: event.KindUser, Data: prompt, At: time.Now()})
-	if err := handle.SendUserMessage(prompt); err != nil {
-		_ = handle.Close()
-		l.wg.Done()
-		return err
-	}
 	// Registra o handle já para o id conhecido: aprovar/negar do turno retomado
 	// funciona mesmo antes do session_started chegar.
 	l.setHandle(s.ID, handle)
 
 	app := &launchApplier{l: l, handle: handle, forcedID: s.ID}
-	runner := claudecode.NewRunner(app)
+	runner := tgt.NewRunner(app)
 	go func() {
 		defer l.wg.Done()
 		_ = runner.Run(l.baseCtx, handle, claudecode.Meta{Machine: s.Machine, Prompt: prompt})

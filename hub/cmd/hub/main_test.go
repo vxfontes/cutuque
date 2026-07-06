@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/vxfontes/cutuque/hub/internal/adapter/claudecode"
+	"github.com/vxfontes/cutuque/hub/internal/adapter/codex"
 )
 
 // silentLogger descarta os logs (o teste só quer o valor de retorno, não
@@ -106,12 +107,15 @@ func TestBuildTargetsFallsBackToLocalMacbookWhenEmpty(t *testing.T) {
 	if len(targets) != 1 {
 		t.Fatalf("targets = %v, quero só o macbook local", targets)
 	}
-	tgt, ok := targets["macbook"]
+	byAgent, ok := targets["macbook"]
 	if !ok {
 		t.Fatalf("targets = %v, quero a chave \"macbook\"", targets)
 	}
-	if _, isLocal := tgt.(*claudecode.LocalTarget); !isLocal {
-		t.Errorf("targets[\"macbook\"] = %T, quero *claudecode.LocalTarget", tgt)
+	if _, isLocal := byAgent["claude-code"].(*claudecode.LocalTarget); !isLocal {
+		t.Errorf("targets[\"macbook\"][claude-code] = %T, quero *claudecode.LocalTarget", byAgent["claude-code"])
+	}
+	if _, isCodex := byAgent["codex"].(*codex.LocalTarget); !isCodex {
+		t.Errorf("targets[\"macbook\"][codex] = %T, quero *codex.LocalTarget", byAgent["codex"])
 	}
 }
 
@@ -124,15 +128,20 @@ func TestBuildTargetsUsesSSHTargetsWhenConfigured(t *testing.T) {
 		t.Fatalf("targets = %v, quero 2 entradas", targets)
 	}
 	for _, name := range []string{"macbook", "macmini"} {
-		tgt, ok := targets[name]
+		byAgent, ok := targets[name]
 		if !ok {
 			t.Fatalf("targets = %v, quero a chave %q", targets, name)
 		}
-		if _, isSSH := tgt.(*claudecode.SSHTarget); !isSSH {
-			t.Errorf("targets[%q] = %T, quero *claudecode.SSHTarget", name, tgt)
+		tgt, ok := byAgent["claude-code"].(*claudecode.SSHTarget)
+		if !ok {
+			t.Errorf("targets[%q][claude-code] = %T, quero *claudecode.SSHTarget", name, byAgent["claude-code"])
+			continue
 		}
 		if tgt.Name() != name {
 			t.Errorf("targets[%q].Name() = %q", name, tgt.Name())
+		}
+		if _, isCodex := byAgent["codex"].(*codex.SSHTarget); !isCodex {
+			t.Errorf("targets[%q][codex] = %T, quero *codex.SSHTarget", name, byAgent["codex"])
 		}
 	}
 }

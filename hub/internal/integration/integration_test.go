@@ -36,7 +36,11 @@ const (
 type scriptTarget struct{ name string }
 
 func (s scriptTarget) Name() string { return s.name }
-func (s scriptTarget) Start(_ context.Context, _, _, _, _ string) (*claudecode.Handle, error) {
+func (s scriptTarget) Kind() string { return "claude-code" }
+func (s scriptTarget) NewRunner(app claudecode.Applier) *claudecode.Runner {
+	return claudecode.NewRunner(app)
+}
+func (s scriptTarget) Start(_ context.Context, _, _, _, _, prompt string) (*claudecode.Handle, error) {
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
 	go func() {
@@ -48,13 +52,21 @@ func (s scriptTarget) Start(_ context.Context, _, _, _, _ string) (*claudecode.H
 		_, _ = in.ReadString('\n') // aguarda o control_response
 		_, _ = io.WriteString(stdoutW, `{"type":"result","subtype":"success","is_error":false,"result":"feito"}`+"\n")
 	}()
-	return &claudecode.Handle{Stdout: stdoutR, Stdin: stdinW}, nil
+	h := &claudecode.Handle{Stdout: stdoutR, Stdin: stdinW}
+	if prompt != "" {
+		if err := h.SendUserMessage(prompt); err != nil {
+			return nil, err
+		}
+	}
+	return h, nil
 }
 
 func TestLaunchApproveFlowEndToEnd(t *testing.T) {
 	reg := registry.New()
 	eng := engine.New(reg)
-	lch := launcher.New(eng, reg, map[string]claudecode.Target{"macbook": scriptTarget{name: "macbook"}})
+	lch := launcher.New(eng, reg, map[string]map[string]claudecode.Target{
+		"macbook": {"claude-code": scriptTarget{name: "macbook"}},
+	})
 	cfg := config.Config{Env: "dev", Token: "secret"}
 
 	srv := httptest.NewServer(server.Router(cfg, reg, lch))

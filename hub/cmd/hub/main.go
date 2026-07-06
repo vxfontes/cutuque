@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vxfontes/cutuque/hub/internal/adapter/claudecode"
+	"github.com/vxfontes/cutuque/hub/internal/adapter/codex"
 	"github.com/vxfontes/cutuque/hub/internal/apns"
 	"github.com/vxfontes/cutuque/hub/internal/config"
 	"github.com/vxfontes/cutuque/hub/internal/devices"
@@ -137,24 +138,38 @@ func main() {
 // comportamento de antes da Fase 5). Não-vazia: cada entrada vira um
 // SSHTarget — nenhum LocalTarget implícito é adicionado, então quem quiser o
 // macbook local precisa listá-lo explicitamente (ele deixa de ser "grátis").
-func buildTargets(rawSSHTargets string, logger *slog.Logger) map[string]claudecode.Target {
+func buildTargets(rawSSHTargets string, logger *slog.Logger) map[string]map[string]claudecode.Target {
 	dests := parseSSHTargets(rawSSHTargets, logger)
+	// Cada máquina roda os dois agentes (claude-code + codex). O mapa é
+	// máquina → agente (t.Kind()) → alvo; o Launcher escolhe pelo agente pedido.
 	if len(dests) == 0 {
-		return map[string]claudecode.Target{
-			"macbook": claudecode.NewLocalTarget("macbook"),
+		return map[string]map[string]claudecode.Target{
+			"macbook": agentMap(
+				claudecode.NewLocalTarget("macbook"),
+				codex.NewLocalTarget("macbook"),
+			),
 		}
 	}
-	targets := make(map[string]claudecode.Target, len(dests))
+	targets := make(map[string]map[string]claudecode.Target, len(dests))
 	for name, d := range dests {
-		t := claudecode.NewSSHTarget(name, d.dest)
+		ct := claudecode.NewSSHTarget(name, d.dest)
 		// Caminho absoluto do claude remoto por alvo (opcional): necessário
 		// quando o binário certo não é o primeiro no PATH do login shell remoto
 		// (ex.: no Mac, /opt/homebrew tem uma versão antiga; a boa está em
 		// ~/.local/bin). Vazio → default "claude".
-		t.SetRemoteClaudeCmd(d.remoteCmd)
-		targets[name] = t
+		ct.SetRemoteClaudeCmd(d.remoteCmd)
+		targets[name] = agentMap(ct, codex.NewSSHTarget(name, d.dest))
 	}
 	return targets
+}
+
+// agentMap indexa alvos pelo agente que cada um representa (t.Kind()).
+func agentMap(ts ...claudecode.Target) map[string]claudecode.Target {
+	m := make(map[string]claudecode.Target, len(ts))
+	for _, t := range ts {
+		m[t.Kind()] = t
+	}
+	return m
 }
 
 // sshDest é um alvo SSH parseado: destino ssh + comando/caminho do claude remoto.
