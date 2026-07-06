@@ -26,6 +26,9 @@ targets:
         CFBundleDisplayName: Cutuque
         # Live Activities (Dynamic Island / tela de bloqueio) para sessões rodando.
         NSSupportsLiveActivities: true
+        # Declara criptografia isenta (ex.: TLS/HTTPS e APIs do sistema) para
+        # evitar a pergunta manual de conformidade de exportação no App Store Connect.
+        ITSAppUsesNonExemptEncryption: false
         # Scheme para o deep-link da Live Activity (cutuque://session/<id>).
         CFBundleURLTypes:
           - CFBundleURLSchemes: [cutuque]
@@ -65,6 +68,7 @@ targets:
       properties:
         CFBundleDisplayName: Cutuque
         CFBundleIconName: AppIcon
+        ITSAppUsesNonExemptEncryption: false
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.vxfontes.cutuque
     settings:
@@ -82,6 +86,7 @@ targets:
       path: CutuqueWidgets/Info.plist
       properties:
         CFBundleDisplayName: Cutuque
+        ITSAppUsesNonExemptEncryption: false
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
