@@ -13,6 +13,11 @@ final class SessionDetailViewModel: ObservableObject {
     @Published var actionInProgress = false
     /// Aviso transitório para a UI (ex.: estado mudou no 409).
     @Published var notice: String?
+    /// Sessão encerrada (done/error) que não deixou transcript no Mac pra
+    /// recuperar — não dá pra rever nem retomar (`--resume` falharia). A UI
+    /// mostra um estado claro e, ao enviar, começa uma tarefa nova em vez de
+    /// tentar (e falhar) o resume.
+    @Published var recapUnavailable = false
 
     private let api = APIClient()
     private var liveTask: Task<Void, Never>?
@@ -31,11 +36,15 @@ final class SessionDetailViewModel: ObservableObject {
         // continuar a conversa) — importa o transcript e relê. Só quando vazio,
         // pra não duplicar o que já foi transmitido ao vivo.
         var history = (try? await api.output(sessionID: session.id)) ?? []
-        if history.isEmpty && (session.isExternal || session.state == .done || session.state == .error) {
+        let concluded = session.state == .done || session.state == .error
+        if history.isEmpty && (session.isExternal || concluded) {
             await api.importHistory(sessionID: session.id)
             history = (try? await api.output(sessionID: session.id)) ?? []
         }
         chunks = Array(history.suffix(Self.maxChunks))
+        // Encerrada e AINDA vazia após tentar importar → não há transcript no
+        // Mac pra recuperar (ex.: uma sessão que deu erro antes de salvar nada).
+        recapUnavailable = history.isEmpty && concluded
         startLiveUpdates()
     }
 
@@ -396,10 +405,20 @@ struct SessionDetailView: View {
             Button {
                 let text = draft
                 Task {
-                    // Sempre a MESMA sessão: viva → responde ao agente em
-                    // andamento; encerrada → o hub retoma a conversa (claude
-                    // --resume) e a resposta chega nesta mesma tela via WS.
-                    if await model.sendInput(text) { draft = "" }
+                    if model.recapUnavailable {
+                        // Sessão morta (encerrou sem transcript): não dá pra
+                        // retomar. "Continuar" = começar uma tarefa nova na
+                        // mesma máquina e navegar até ela.
+                        if let novo = await model.launchNew(text) {
+                            draft = ""
+                            router.openSession(novo.id)
+                        }
+                    } else if await model.sendInput(text) {
+                        // Viva → responde ao agente em andamento; encerrada com
+                        // transcript → o hub retoma (claude --resume) e a
+                        // resposta chega nesta mesma tela via WS.
+                        draft = ""
+                    }
                 }
             } label: {
                 Group {
@@ -519,12 +538,19 @@ struct SessionDetailView: View {
     /// Estado vazio convidativo antes do primeiro chunk chegar.
     private var emptyTranscript: some View {
         VStack(spacing: 10) {
-            Image(systemName: "bubble.left.and.bubble.right")
+            Image(systemName: model.recapUnavailable ? "clock.badge.xmark" : "bubble.left.and.bubble.right")
                 .font(.system(size: 34))
                 .foregroundStyle(.tertiary)
-            Text("sem mensagens ainda")
+            Text(model.recapUnavailable ? "sem histórico salvo" : "sem mensagens ainda")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+            if model.recapUnavailable {
+                Text("Essa sessão encerrou sem deixar registro pra recuperar. Envie uma mensagem para começar uma tarefa nova nesta máquina.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 72)
