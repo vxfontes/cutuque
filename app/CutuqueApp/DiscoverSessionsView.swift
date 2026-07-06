@@ -168,16 +168,22 @@ struct DiscoverSessionsView: View {
         .padding(.vertical, 2)
     }
 
-    /// Etiqueta compacta do agente (Codex em roxo, Claude em laranja) para
-    /// distinguir de relance na lista de descoberta.
+    /// Etiqueta compacta do agente (Codex roxo, OpenCode verde, Claude laranja)
+    /// para distinguir de relance na lista de descoberta.
     @ViewBuilder private func agentBadge(_ agent: String) -> some View {
-        let isCodex = agent == "codex"
-        Text(isCodex ? "Codex" : "Claude")
+        let (label, color): (String, Color) = {
+            switch agent {
+            case "codex": return ("Codex", .purple)
+            case "opencode": return ("OpenCode", .green)
+            default: return ("Claude", .orange)
+            }
+        }()
+        Text(label)
             .font(.caption2.weight(.semibold))
             .padding(.horizontal, 6)
             .padding(.vertical, 1)
-            .background((isCodex ? Color.purple : Color.orange).opacity(0.18), in: Capsule())
-            .foregroundStyle(isCodex ? Color.purple : Color.orange)
+            .background(color.opacity(0.18), in: Capsule())
+            .foregroundStyle(color)
     }
 
     private var loadingRow: some View {

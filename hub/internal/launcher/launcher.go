@@ -41,11 +41,12 @@ var (
 	ErrDiscoverFailed   = errors.New("launcher: falha ao descobrir sessões na máquina")
 )
 
-// sessionIDPattern valida o id de uma sessão adotada. Session ids do Claude são
-// UUIDs (hex + hífens); restringir a esse formato é defesa em profundidade
-// contra qualquer conteúdo perigoso chegar em `--resume <id>` (SEC-101), mesmo
-// com o escape estrutural do remoteClaudeCommand já neutralizando injeção.
-var sessionIDPattern = regexp.MustCompile(`^[0-9a-fA-F-]{8,64}$`)
+// sessionIDPattern valida o id de uma sessão adotada. Cobre os formatos dos três
+// agentes: UUID do Claude/Codex (hex + hífens) e o `ses_<base62>` do OpenCode
+// (alfanumérico + underscore). Allowlist estrita (sem metacaractere de shell,
+// espaço ou aspas) — defesa em profundidade contra qualquer coisa perigosa
+// chegar em `--resume`/`-s <id>` (SEC-101), além do escape estrutural do comando.
+var sessionIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{8,80}$`)
 
 // discoverTimeout limita quanto Discover espera o ssh/python remoto responder,
 // para um alvo pendurado (rede/NFS travada) não segurar o request HTTP nem o

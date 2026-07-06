@@ -13,6 +13,7 @@ import (
 
 	"github.com/vxfontes/cutuque/hub/internal/adapter/claudecode"
 	"github.com/vxfontes/cutuque/hub/internal/adapter/codex"
+	"github.com/vxfontes/cutuque/hub/internal/adapter/opencode"
 	"github.com/vxfontes/cutuque/hub/internal/apns"
 	"github.com/vxfontes/cutuque/hub/internal/config"
 	"github.com/vxfontes/cutuque/hub/internal/devices"
@@ -147,6 +148,7 @@ func buildTargets(rawSSHTargets string, logger *slog.Logger) map[string]map[stri
 			"macbook": agentMap(
 				claudecode.NewLocalTarget("macbook"),
 				codex.NewLocalTarget("macbook"),
+				opencode.NewLocalTarget("macbook"),
 			),
 		}
 	}
@@ -158,7 +160,7 @@ func buildTargets(rawSSHTargets string, logger *slog.Logger) map[string]map[stri
 		// (ex.: no Mac, /opt/homebrew tem uma versão antiga; a boa está em
 		// ~/.local/bin). Vazio → default "claude".
 		ct.SetRemoteClaudeCmd(d.remoteCmd)
-		targets[name] = agentMap(ct, codex.NewSSHTarget(name, d.dest))
+		targets[name] = agentMap(ct, codex.NewSSHTarget(name, d.dest), opencode.NewSSHTarget(name, d.dest))
 	}
 	return targets
 }

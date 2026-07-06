@@ -41,21 +41,32 @@ struct NewSessionView: View {
     @State private var alertMessage: String?
 
     private var isCodex: Bool { agent == "codex" }
+    private var isOpenCode: Bool { agent == "opencode" }
 
     private let agentOptions: [(id: String, label: String)] = [
-        ("claude-code", "Claude Code"), ("codex", "Codex"),
+        ("claude-code", "Claude"), ("codex", "Codex"), ("opencode", "OpenCode"),
     ]
 
-    // Opções de modelo/effort por agente ("" = default).
+    // Opções de modelo/effort por agente ("" = default do agente).
     private var modelOptions: [(id: String, label: String)] {
-        isCodex
-            ? [("", "Padrão"), ("gpt-5", "GPT-5"), ("gpt-5-mini", "GPT-5 mini")]
-            : [("", "Padrão"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku"), ("fable", "Fable")]
+        switch agent {
+        case "codex":
+            return [("", "Padrão"), ("gpt-5", "GPT-5"), ("gpt-5-mini", "GPT-5 mini")]
+        case "opencode":
+            return [("", "Padrão"), ("openai/gpt-5.4-mini", "GPT-5.4 mini"), ("zai/glm-4.5-flash", "GLM-4.5 Flash"), ("opencode/deepseek-v4-flash-free", "DeepSeek (free)")]
+        default:
+            return [("", "Padrão"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku"), ("fable", "Fable")]
+        }
     }
     private var effortOptions: [(id: String, label: String)] {
-        isCodex
-            ? [("", "Padrão"), ("minimal", "Mínimo"), ("low", "Baixo"), ("medium", "Médio"), ("high", "Alto")]
-            : [("", "Padrão"), ("low", "Baixo"), ("medium", "Médio"), ("high", "Alto"), ("xhigh", "Muito alto"), ("max", "Máximo")]
+        switch agent {
+        case "codex":
+            return [("", "Padrão"), ("minimal", "Mínimo"), ("low", "Baixo"), ("medium", "Médio"), ("high", "Alto")]
+        case "opencode":
+            return [("", "Padrão"), ("minimal", "Mínimo"), ("low", "Baixo"), ("medium", "Médio"), ("high", "Alto"), ("max", "Máximo")]
+        default:
+            return [("", "Padrão"), ("low", "Baixo"), ("medium", "Médio"), ("high", "Alto"), ("xhigh", "Muito alto"), ("max", "Máximo")]
+        }
     }
     private let sandboxOptions: [(id: String, label: String)] = [
         ("workspace-write", "Workspace (padrão)"), ("read-only", "Somente leitura"), ("danger-full-access", "Acesso total"),
@@ -177,9 +188,18 @@ struct NewSessionView: View {
         } header: {
             Text("Agente")
         } footer: {
-            Text(isCodex
-                ? "Codex roda em modo não-interativo (codex exec). A permissão é por sandbox, não por comando."
-                : "Claude Code — pede sua aprovação a cada ação sensível.")
+            Text(agentFooter)
+        }
+    }
+
+    private var agentFooter: String {
+        switch agent {
+        case "codex":
+            return "Codex roda em modo não-interativo (codex exec). A permissão é por sandbox, não por comando."
+        case "opencode":
+            return "OpenCode roda one-shot (opencode run) auto-aprovando permissões. Escolha um modelo (não tem default)."
+        default:
+            return "Claude Code — pede sua aprovação a cada ação sensível."
         }
     }
 
