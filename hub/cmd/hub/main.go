@@ -18,6 +18,7 @@ import (
 	"github.com/vxfontes/cutuque/hub/internal/config"
 	"github.com/vxfontes/cutuque/hub/internal/devices"
 	"github.com/vxfontes/cutuque/hub/internal/engine"
+	"github.com/vxfontes/cutuque/hub/internal/history"
 	"github.com/vxfontes/cutuque/hub/internal/launcher"
 	"github.com/vxfontes/cutuque/hub/internal/notifier"
 	"github.com/vxfontes/cutuque/hub/internal/registry"
@@ -48,11 +49,31 @@ func main() {
 		logger.Info("sessões persistidas em disco", "path", p, "carregadas", len(reg.List()))
 	}
 
+	// CUTUQUE_DATABASE_URL liga o histórico no Postgres (schema `cutuque`):
+	// write-through assíncrono de cada transição/evento, para consultar sessões
+	// passadas e sua linha do tempo (v2.2/v2.3). O registry segue persistindo o
+	// estado VIVO em JSON (fast-path/restart) — o Postgres é a camada durável de
+	// histórico. Sem a env var (ou se o connect falhar), degrada gracioso: só JSON.
+	var eng *engine.Engine
+	var hist *history.PostgresStore
+	if url := os.Getenv("CUTUQUE_DATABASE_URL"); url != "" {
+		st, err := history.Open(context.Background(), url)
+		if err != nil {
+			logger.Warn("histórico Postgres indisponível; seguindo só com JSON", "err", err)
+			eng = engine.New(reg)
+		} else {
+			hist = st
+			eng = engine.NewWithHistory(reg, st)
+			logger.Info("histórico habilitado no Postgres (schema cutuque)")
+		}
+	} else {
+		eng = engine.New(reg)
+	}
+
 	// Launcher com os alvos conhecidos. Sem CUTUQUE_SSH_TARGETS, cai no
 	// LocalTarget "macbook" (dev, hub e claude na mesma máquina). Com a env
 	// var, cada entrada vira um SSHTarget (hub no servidor, claude na máquina
 	// remota via ssh) — Fase 5.
-	eng := engine.New(reg)
 	targets := buildTargets(os.Getenv("CUTUQUE_SSH_TARGETS"), logger)
 	lch := launcher.New(eng, reg, targets)
 	lch.SetMaxSessions(cfg.MaxSessions) // SEC-007: teto de sessões concorrentes
@@ -126,6 +147,12 @@ func main() {
 		ntf.Close()
 	}
 	lch.Shutdown()
+	// Drena a fila de histórico (write-through assíncrono) e fecha a pool antes
+	// de sair, para não perder os últimos eventos nem vazar conexões.
+	eng.Close()
+	if hist != nil {
+		hist.Close()
+	}
 
 	if err := <-serveErr; err != nil {
 		logger.Error("servidor parou com erro durante o shutdown", "err", err)

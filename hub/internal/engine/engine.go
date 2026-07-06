@@ -4,6 +4,8 @@
 package engine
 
 import (
+	"context"
+	"log/slog"
 	"time"
 
 	"github.com/vxfontes/cutuque/hub/internal/event"
@@ -11,14 +13,95 @@ import (
 	"github.com/vxfontes/cutuque/hub/internal/session"
 )
 
-// Engine aplica eventos ao Registry.
-type Engine struct {
-	reg *registry.Registry
+// HistoryWriter é o write-through opcional do histórico (Postgres). O Engine —
+// único escritor do estado — alimenta cada transição/evento aqui, de forma
+// ASSÍNCRONA (fila + goroutine), para o Apply nunca bloquear em I/O de banco.
+// Definido aqui (não importa o pacote history) para não inverter a dependência.
+type HistoryWriter interface {
+	UpsertSession(ctx context.Context, s session.Session) error
+	AppendEvent(ctx context.Context, ev event.Event) error
 }
 
-// New cria um State Engine sobre o Registry dado.
+// histBuffer é o teto da fila de escrita do histórico. Cheia (Postgres lento/
+// fora do ar) → o evento é descartado (best-effort), NUNCA trava o Apply.
+const histBuffer = 2048
+
+// histWriteTimeout limita cada escrita no banco para uma conexão pendurada não
+// segurar a goroutine de histórico para sempre.
+const histWriteTimeout = 5 * time.Second
+
+// Engine aplica eventos ao Registry.
+type Engine struct {
+	reg      *registry.Registry
+	hist     HistoryWriter
+	histCh   chan histOp
+	histDone chan struct{}
+}
+
+// histOp é uma escrita enfileirada: sempre um AppendEvent; upsert=true também
+// grava/atualiza a linha da sessão (transições e criação).
+type histOp struct {
+	ev     event.Event
+	upsert bool
+}
+
+// New cria um State Engine sobre o Registry dado (sem histórico).
 func New(reg *registry.Registry) *Engine {
 	return &Engine{reg: reg}
+}
+
+// NewWithHistory cria um Engine que faz write-through assíncrono do histórico.
+// Chame Close no shutdown para drenar a fila.
+func NewWithHistory(reg *registry.Registry, hist HistoryWriter) *Engine {
+	e := &Engine{
+		reg:      reg,
+		hist:     hist,
+		histCh:   make(chan histOp, histBuffer),
+		histDone: make(chan struct{}),
+	}
+	go e.histLoop()
+	return e
+}
+
+// record enfileira uma escrita de histórico (não-bloqueante: fila cheia dropa).
+func (e *Engine) record(ev event.Event, upsert bool) {
+	if e.hist == nil {
+		return
+	}
+	select {
+	case e.histCh <- histOp{ev: ev, upsert: upsert}:
+	default:
+		slog.Warn("history: fila cheia, evento descartado", "session", ev.SessionID, "type", ev.Type)
+	}
+}
+
+// histLoop drena a fila e escreve no banco (best-effort; erro só loga).
+func (e *Engine) histLoop() {
+	defer close(e.histDone)
+	for op := range e.histCh {
+		ctx, cancel := context.WithTimeout(context.Background(), histWriteTimeout)
+		if err := e.hist.AppendEvent(ctx, op.ev); err != nil {
+			slog.Warn("history: falha ao gravar evento", "session", op.ev.SessionID, "err", err)
+		}
+		if op.upsert {
+			// Relê a sessão no momento da escrita: reflete o estado já aplicado.
+			if s, ok := e.reg.Get(op.ev.SessionID); ok {
+				if err := e.hist.UpsertSession(ctx, s); err != nil {
+					slog.Warn("history: falha ao gravar sessão", "session", op.ev.SessionID, "err", err)
+				}
+			}
+		}
+		cancel()
+	}
+}
+
+// Close drena a fila de histórico e espera a goroutine terminar (shutdown).
+func (e *Engine) Close() {
+	if e.hist == nil {
+		return
+	}
+	close(e.histCh)
+	<-e.histDone
 }
 
 // Apply processa um evento normalizado, ajustando o estado da sessão.
@@ -40,12 +123,14 @@ func (e *Engine) Apply(ev event.Event) {
 	switch ev.Type {
 	case event.SessionStarted:
 		e.ensureRunning(ev)
+		e.record(ev, true) // cria/atualiza a linha da sessão no histórico
 		return
 	case event.OutputChunk:
 		// Mantém o estado (a sessão segue running); só guarda o output para o
 		// stream ao vivo. Ignora output de sessão desconhecida.
 		if _, ok := e.reg.Get(ev.SessionID); ok {
 			e.reg.AppendOutput(ev.SessionID, ev.Kind, ev.Data)
+			e.record(ev, false) // log do output (só append; estado não muda)
 		}
 		return
 	}
@@ -69,6 +154,7 @@ func (e *Engine) Apply(ev event.Event) {
 		return // redundante: no-op (não mexe em UpdatedAt nem faz broadcast)
 	}
 	_ = e.reg.UpdateState(ev.SessionID, target)
+	e.record(ev, true) // transição de estado → histórico
 
 	// PendingPrompt (o texto que o app exibe): entra em needs_you com o resumo
 	// do pedido; some ao sair de needs_you (aprovou/terminou/errou). O Engine
