@@ -149,6 +149,7 @@ struct DiscoverSessionsView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                 HStack(spacing: 4) {
+                    agentBadge(item.agent)
                     Image(systemName: "folder")
                     Text(item.folderName)
                     Text("·")
@@ -165,6 +166,18 @@ struct DiscoverSessionsView: View {
             Spacer(minLength: 8)
         }
         .padding(.vertical, 2)
+    }
+
+    /// Etiqueta compacta do agente (Codex em roxo, Claude em laranja) para
+    /// distinguir de relance na lista de descoberta.
+    @ViewBuilder private func agentBadge(_ agent: String) -> some View {
+        let isCodex = agent == "codex"
+        Text(isCodex ? "Codex" : "Claude")
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background((isCodex ? Color.purple : Color.orange).opacity(0.18), in: Capsule())
+            .foregroundStyle(isCodex ? Color.purple : Color.orange)
     }
 
     private var loadingRow: some View {

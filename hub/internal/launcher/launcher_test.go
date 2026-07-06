@@ -419,7 +419,7 @@ func TestAdoptRejectsInvalidID(t *testing.T) {
 	l, reg := newTestLauncher(tgt)
 
 	for _, bad := range []string{"x; rm -rf ~", "abc$(touch /tmp/x)", "", "id com espaço", "a/b/c"} {
-		_, err := l.Adopt("macbook", bad, "/Users/example/proj", "titulo")
+		_, err := l.Adopt("macbook", bad, "/Users/example/proj", "titulo", "")
 		if err != ErrInvalidSessionID {
 			t.Errorf("Adopt(id=%q) err = %v, quero ErrInvalidSessionID", bad, err)
 		}
@@ -436,7 +436,7 @@ func TestAdoptRegistersValidSession(t *testing.T) {
 	l, reg := newTestLauncher(tgt)
 
 	id := "7b6ff87d-99ca-4bd4-a0e9-e01a4ba689af"
-	s, err := l.Adopt("macbook", id, "/Users/example/proj", "arruma o build")
+	s, err := l.Adopt("macbook", id, "/Users/example/proj", "arruma o build", "")
 	if err != nil {
 		t.Fatalf("Adopt: %v", err)
 	}
@@ -465,7 +465,7 @@ func TestAdoptImportsTranscript(t *testing.T) {
 	l, reg := newTestLauncher(tgt)
 
 	id := "7b6ff87d-99ca-4bd4-a0e9-e01a4ba689af"
-	if _, err := l.Adopt("macbook", id, "/Users/example/proj", "titulo"); err != nil {
+	if _, err := l.Adopt("macbook", id, "/Users/example/proj", "titulo", ""); err != nil {
 		t.Fatalf("Adopt: %v", err)
 	}
 
@@ -493,10 +493,10 @@ func TestAdoptTwiceDoesNotDuplicateHistory(t *testing.T) {
 	l, reg := newTestLauncher(tgt)
 	id := "7b6ff87d-99ca-4bd4-a0e9-e01a4ba689af"
 
-	if _, err := l.Adopt("macbook", id, "/x", "t"); err != nil {
+	if _, err := l.Adopt("macbook", id, "/x", "t", ""); err != nil {
 		t.Fatalf("Adopt 1: %v", err)
 	}
-	if _, err := l.Adopt("macbook", id, "/x", "t"); err != nil {
+	if _, err := l.Adopt("macbook", id, "/x", "t", ""); err != nil {
 		t.Fatalf("Adopt 2: %v", err)
 	}
 	if out := reg.Output(id); len(out) != 2 {
@@ -552,7 +552,7 @@ func TestAdoptTranscriptFailureStillAdopts(t *testing.T) {
 	l, reg := newTestLauncher(tgt)
 
 	id := "7b6ff87d-99ca-4bd4-a0e9-e01a4ba689af"
-	if _, err := l.Adopt("macbook", id, "/x", "t"); err != nil {
+	if _, err := l.Adopt("macbook", id, "/x", "t", ""); err != nil {
 		t.Fatalf("Adopt não devia falhar por causa do transcript: %v", err)
 	}
 	if _, ok := reg.Get(id); !ok {
@@ -566,7 +566,7 @@ func TestAdoptTranscriptFailureStillAdopts(t *testing.T) {
 // TestAdoptUnknownMachine: máquina inexistente → ErrUnknownMachine.
 func TestAdoptUnknownMachine(t *testing.T) {
 	l, _ := newTestLauncher(nil)
-	_, err := l.Adopt("ghost", "7b6ff87d-99ca-4bd4-a0e9-e01a4ba689af", "/x", "t")
+	_, err := l.Adopt("ghost", "7b6ff87d-99ca-4bd4-a0e9-e01a4ba689af", "/x", "t", "")
 	if err != ErrUnknownMachine {
 		t.Errorf("err = %v, quero ErrUnknownMachine", err)
 	}

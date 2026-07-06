@@ -169,6 +169,7 @@ struct DiscoveredSession: Decodable, Identifiable, Equatable, Hashable {
     let count: Int        // nº de mensagens do usuário (preview)
     let modified: Int64   // mtime do transcript (epoch em segundos)
     let state: String     // "running"|"waiting"|"idle" (só panes vivos do tmux; lido do terminal)
+    let agent: String     // "claude-code"|"codex" (qual agente gerou a sessão)
 
     /// Instante da última atividade, derivado do mtime.
     var modifiedAt: Date { Date(timeIntervalSince1970: TimeInterval(modified)) }
@@ -185,7 +186,7 @@ struct DiscoveredSession: Decodable, Identifiable, Equatable, Hashable {
     }
 
     // Campos novos podem faltar em respostas de um hub antigo → default seguro.
-    private enum CodingKeys: String, CodingKey { case id, cwd, title, last, count, modified, state }
+    private enum CodingKeys: String, CodingKey { case id, cwd, title, last, count, modified, state, agent }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -195,13 +196,15 @@ struct DiscoveredSession: Decodable, Identifiable, Equatable, Hashable {
         count = (try? c.decode(Int.self, forKey: .count)) ?? 0
         modified = (try? c.decode(Int64.self, forKey: .modified)) ?? 0
         state = (try? c.decode(String.self, forKey: .state)) ?? ""
+        // Hub antigo não manda agent → assume claude-code (legado).
+        agent = (try? c.decode(String.self, forKey: .agent)) ?? "claude-code"
     }
 
     /// Init direto (para sintetizar uma entrada viva a partir de uma sessão do
     /// registry que tem um pane tmux).
-    init(id: String, cwd: String, title: String, last: String = "", count: Int = 0, modified: Int64 = 0, state: String = "") {
+    init(id: String, cwd: String, title: String, last: String = "", count: Int = 0, modified: Int64 = 0, state: String = "", agent: String = "claude-code") {
         self.id = id; self.cwd = cwd; self.title = title
-        self.last = last; self.count = count; self.modified = modified; self.state = state
+        self.last = last; self.count = count; self.modified = modified; self.state = state; self.agent = agent
     }
 }
 

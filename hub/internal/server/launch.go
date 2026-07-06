@@ -29,7 +29,7 @@ type Launcher interface {
 	Discover(machine string) ([]session.Discovered, error)
 	Live(machine string) ([]session.Discovered, error)
 	ListDirs(machine, path string) (session.DirListing, error)
-	Adopt(machine, id, cwd, title string) (session.Session, error)
+	Adopt(machine, id, cwd, title, agent string) (session.Session, error)
 	TmuxList(machine string) ([]session.Discovered, error)
 	TmuxCapture(machine, target string) (string, error)
 	TmuxSend(machine, target, text string) error
@@ -320,6 +320,7 @@ type adoptRequest struct {
 	ID    string `json:"id"`
 	Cwd   string `json:"cwd"`
 	Title string `json:"title"`
+	Agent string `json:"agent,omitempty"` // claude-code|codex (vazio = claude-code)
 }
 
 // AdoptHandler registra uma sessão descoberta para poder abri-la e continuar.
@@ -333,7 +334,7 @@ func AdoptHandler(lch Launcher) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "bad_request")
 			return
 		}
-		s, err := lch.Adopt(machine, req.ID, req.Cwd, req.Title)
+		s, err := lch.Adopt(machine, req.ID, req.Cwd, req.Title, req.Agent)
 		switch {
 		case errors.Is(err, launcher.ErrUnknownMachine):
 			writeJSONError(w, http.StatusNotFound, "unknown_machine")

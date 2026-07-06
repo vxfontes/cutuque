@@ -60,6 +60,10 @@ type Discovered struct {
 	Last     string `json:"last"`     // última mensagem do usuário (preview)
 	Count    int    `json:"count"`    // nº de mensagens do usuário (preview)
 	Modified int64  `json:"modified"` // unix epoch (mtime do transcript)
+	// Agent qual agente gerou a sessão ("claude-code"|"codex") — o Launcher o
+	// preenche ao mesclar a descoberta dos vários agentes da máquina, para a
+	// adoção usar o alvo (e o transcript) certo. Vazio = claude-code (legado).
+	Agent string `json:"agent,omitempty"`
 	// State só é preenchido para panes vivos do tmux (TmuxList): "running"|
 	// "waiting"|"idle", lido do próprio terminal. Vazio para descobertas de disco.
 	State string `json:"state,omitempty"`

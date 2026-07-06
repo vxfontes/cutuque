@@ -423,6 +423,7 @@ struct APIClient {
         let id: String
         let cwd: String
         let title: String
+        let agent: String
     }
 
     /// Adota uma sessão descoberta: registra-a no hub (idle) para poder abri-la
@@ -437,7 +438,7 @@ struct APIClient {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(
-            AdoptBody(id: discovered.id, cwd: discovered.cwd, title: discovered.title)
+            AdoptBody(id: discovered.id, cwd: discovered.cwd, title: discovered.title, agent: discovered.agent)
         )
 
         let (data, response) = try await URLSession.shared.data(for: request)

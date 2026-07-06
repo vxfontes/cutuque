@@ -48,6 +48,7 @@ type fakeLauncher struct {
 	gotDiscoverMachine                      string
 	gotAdoptMachine, gotAdoptID             string
 	gotAdoptCwd, gotAdoptTitle              string
+	gotAdoptAgent                           string
 	gotTmuxTarget, gotTmuxText              string
 }
 
@@ -106,8 +107,9 @@ func (f *fakeLauncher) TmuxKillServer(machine, socket string) error {
 	return f.tmuxErr
 }
 
-func (f *fakeLauncher) Adopt(machine, id, cwd, title string) (session.Session, error) {
+func (f *fakeLauncher) Adopt(machine, id, cwd, title, agent string) (session.Session, error) {
 	f.gotAdoptMachine, f.gotAdoptID, f.gotAdoptCwd, f.gotAdoptTitle = machine, id, cwd, title
+	f.gotAdoptAgent = agent
 	return f.adoptSession, f.adoptErr
 }
 

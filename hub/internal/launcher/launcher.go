@@ -235,24 +235,41 @@ func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt, cwd, mode
 // ~/.claude/projects lá), inclusive as não lançadas pelo Cutuque. Retorna
 // ErrUnknownMachine se a máquina não existe ou não suporta descoberta.
 func (l *Launcher) Discover(machine string) ([]session.Discovered, error) {
-	tgt, ok := l.anyTarget(machine)
+	byAgent, ok := l.targets[machine]
 	if !ok {
 		return nil, ErrUnknownMachine
 	}
-	d, ok := tgt.(claudecode.Discoverer)
-	if !ok {
-		return nil, ErrUnknownMachine
+	// Mescla a descoberta de TODOS os agentes da máquina (Claude lê ~/.claude,
+	// Codex lê ~/.codex), etiquetando cada sessão com o agente que a gerou —
+	// para a adoção usar o alvo/transcript certo. Ordena por mais recente.
+	var all []session.Discovered
+	var lastErr error
+	anyOK := false
+	for kind, tgt := range byAgent {
+		d, ok := tgt.(claudecode.Discoverer)
+		if !ok {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+		list, err := d.Discover(ctx)
+		cancel()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		anyOK = true
+		for i := range list {
+			list[i].Agent = kind
+		}
+		all = append(all, list...)
 	}
-	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
-	defer cancel()
-	list, err := d.Discover(ctx)
-	if err != nil {
-		// Máquina existe, mas a descoberta em si falhou (ssh caiu, python3
-		// ausente, JSON corrompido, timeout) — distinto de "máquina
-		// desconhecida", para o handler não mascarar tudo como 404.
-		return nil, fmt.Errorf("%w: %v", ErrDiscoverFailed, err)
+	// Todos os discoverers falharam (ssh caiu, python3 ausente…) → erro distinto
+	// de "máquina desconhecida", para o handler não mascarar como 404.
+	if !anyOK && lastErr != nil {
+		return nil, fmt.Errorf("%w: %v", ErrDiscoverFailed, lastErr)
 	}
-	return list, nil
+	sort.Slice(all, func(i, j int) bool { return all[i].Modified > all[j].Modified })
+	return all, nil
 }
 
 // TmuxList lista os panes do tmux rodando claude na máquina (a ponte para
@@ -413,8 +430,11 @@ func (l *Launcher) Live(machine string) ([]session.Discovered, error) {
 // Adopt registra no Registry uma sessão descoberta (idle), para que a usuária
 // possa abri-la e continuar a conversa (SendText → --resume). Se já for
 // conhecida, devolve a existente. ErrUnknownMachine se a máquina não existe.
-func (l *Launcher) Adopt(machine, id, cwd, title string) (session.Session, error) {
-	tgt, ok := l.anyTarget(machine)
+func (l *Launcher) Adopt(machine, id, cwd, title, agent string) (session.Session, error) {
+	if agent == "" {
+		agent = agentClaudeCode // legado: adoção sem agente = Claude
+	}
+	tgt, ok := l.target(machine, agent)
 	if !ok {
 		return session.Session{}, ErrUnknownMachine
 	}
@@ -429,7 +449,7 @@ func (l *Launcher) Adopt(machine, id, cwd, title string) (session.Session, error
 	s := session.Session{
 		ID:        id,
 		Machine:   machine,
-		Agent:     agentClaudeCode,
+		Agent:     agent,
 		Title:     title,
 		State:     session.StateIdle,
 		Cwd:       cwd,
