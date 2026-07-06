@@ -47,7 +47,9 @@ func ocArgs(resumeID, cwd, model, variant, prompt string) []string {
 		a = append(a, "--variant", variant)
 	}
 	if prompt != "" {
-		a = append(a, prompt) // mensagem posicional (último arg)
+		// `--` separa: um prompt começando com "-" (ex.: "-1") não pode ser lido
+		// como flag pelo yargs do opencode (mesmo cuidado do Codex).
+		a = append(a, "--", prompt)
 	}
 	return a
 }

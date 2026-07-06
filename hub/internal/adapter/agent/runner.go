@@ -28,6 +28,7 @@ type Meta struct {
 	Machine string // máquina-alvo (nome do Target)
 	Prompt  string // prompt inicial, para derivar o Title
 	Cwd     string // pasta onde o agente roda (persistida na sessão p/ o resume)
+	Model   string // modelo escolhido no launch (persistido na sessão p/ o resume)
 	// SessionID != "" num RESUME: o id já é conhecido (a sessão existe). Deixa o
 	// Runner marcar Errored no EOF mesmo que o processo morra ANTES de emitir o
 	// primeiro evento (ex.: `codex`/`claude` fora do PATH via ssh) — senão a
@@ -88,6 +89,11 @@ func (r *Runner) Run(ctx context.Context, h *Handle, meta Meta) error {
 					// one-shot, depende disso — cada turno é um processo novo).
 					if e.Cwd == "" {
 						e.Cwd = meta.Cwd
+					}
+					// Persiste o modelo escolhido: o resume o reusa (o OpenCode
+					// exige -m sempre; sem isto cairia no default — SEC-109).
+					if e.Model == "" {
+						e.Model = meta.Model
 					}
 				case e.SessionID == "":
 					// Um Runner observa UMA sessão; eventos sem session_id

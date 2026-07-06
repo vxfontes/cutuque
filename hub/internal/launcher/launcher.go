@@ -215,7 +215,7 @@ func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt, cwd, mode
 	runner := tgt.NewRunner(app)
 	go func() {
 		defer l.wg.Done()
-		_ = runner.Run(l.baseCtx, handle, claudecode.Meta{Machine: machine, Prompt: prompt, Cwd: cwd})
+		_ = runner.Run(l.baseCtx, handle, claudecode.Meta{Machine: machine, Prompt: prompt, Cwd: cwd, Model: model})
 		// Fim do stream: a sessão não tem mais canal vivo.
 		if app.sessionID != "" {
 			l.removeHandle(app.sessionID)
@@ -695,7 +695,9 @@ func (l *Launcher) resume(s session.Session, prompt string) error {
 	// Retoma na MESMA pasta da sessão (s.Cwd): importa pras sessões adotadas do
 	// Mac (o --resume restaura a conversa, mas as ferramentas operam no cwd). O
 	// prompt vai pelo canal do agente dentro do Start (mantém o modelo da sessão).
-	handle, err := tgt.Start(l.baseCtx, s.ID, s.Cwd, "", "", "", prompt)
+	// Reusa o modelo escolhido no launch (persistido em s.Model): o OpenCode
+	// exige -m em toda invocação, senão o resume cairia no default (SEC-109).
+	handle, err := tgt.Start(l.baseCtx, s.ID, s.Cwd, s.Model, "", "", prompt)
 	if err != nil {
 		l.wg.Done()
 		return err

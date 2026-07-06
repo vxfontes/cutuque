@@ -38,6 +38,10 @@ type Session struct {
 	// Cwd é a pasta onde o claude roda. Preenchido no launch com pasta e nas
 	// sessões descobertas/adotadas do Mac (para o --resume rodar no dir certo).
 	Cwd string `json:"cwd,omitempty"`
+	// Model é o modelo escolhido no launch, persistido para o resume reusar. Sem
+	// ele, agentes que exigem -m em toda invocação (OpenCode) cairiam no default
+	// ao continuar a conversa, ignorando a escolha da usuária (SEC-109).
+	Model string `json:"model,omitempty"`
 	// External = sessão que NÃO foi lançada pelo hub (veio de hook do Claude ou
 	// de adoção/tmux). O hub não controla o gate de permissão dela (a resposta é
 	// no terminal), então o notifier não re-cutuca nem cutuca "concluído" a cada

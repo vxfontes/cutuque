@@ -59,6 +59,7 @@ type Event struct {
 	Agent     string    `json:"agent,omitempty"`
 	Title     string    `json:"title,omitempty"`
 	Cwd       string    `json:"cwd,omitempty"`
+	Model     string    `json:"model,omitempty"` // modelo escolhido no launch (persistido p/ o resume)
 	Pane      string    `json:"pane,omitempty"`
 	// External marca eventos vindos de HOOK (sessão não lançada pelo hub). O
 	// Runner emite eventos com External=false (autoritativo) — usado por

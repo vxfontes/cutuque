@@ -97,6 +97,7 @@ func (e *Engine) ensureRunning(ev event.Event) {
 		Title:     ev.Title,
 		State:     session.StateRunning,
 		Cwd:       ev.Cwd,
+		Model:     ev.Model,
 		Pane:      ev.Pane,
 		External:  ev.External,
 		CreatedAt: now,

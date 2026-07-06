@@ -27,6 +27,9 @@ type scriptTarget struct {
 	// nil → sem histórico. transcriptErr simula falha de leitura.
 	transcript    []claudecode.TranscriptChunk
 	transcriptErr error
+	// lastModel captura o `model` recebido no último Start (p/ testar que o
+	// resume reusa o modelo da sessão — SEC-109).
+	lastModel string
 }
 
 func (s *scriptTarget) Name() string { return s.name }
@@ -43,7 +46,8 @@ func (s *scriptTarget) Transcript(_ context.Context, _ string) ([]claudecode.Tra
 	return s.transcript, s.transcriptErr
 }
 
-func (s *scriptTarget) Start(_ context.Context, _, _, _, _, _, prompt string) (*claudecode.Handle, error) {
+func (s *scriptTarget) Start(_ context.Context, _, _, model, _, _, prompt string) (*claudecode.Handle, error) {
+	s.lastModel = model
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
 	go func() {
@@ -622,4 +626,27 @@ func TestResumeMarksErroredWhenProcessDiesSilently(t *testing.T) {
 		s, _ := reg.Get(id)
 		return s.State == session.StateError
 	})
+}
+
+// TestResumeReusesSessionModel cobre o fix do SEC-109: o modelo escolhido no
+// launch é persistido em session.Model e reusado no resume (o OpenCode exige -m
+// em toda invocação; sem isto a continuação cairia no default).
+func TestResumeReusesSessionModel(t *testing.T) {
+	const id = "22222222-3333-4444-5555-666666666666"
+	tgt := &scriptTarget{
+		name:     "macbook",
+		captured: make(chan string, 1),
+		// lê o prompt (destrava o Start) e sai — o teste só checa o model recebido.
+		run: func(_ io.Writer, stdin *bufio.Reader, _ chan<- string) { _, _ = stdin.ReadString('\n') },
+	}
+	l, reg := newTestLauncher(tgt)
+	reg.AddIfAbsent(session.Session{ID: id, Machine: "macbook", Agent: "claude-code", State: session.StateDone, Model: "openai/gpt-5.4-mini"})
+
+	if err := l.SendText(id, "continua"); err != nil {
+		t.Fatalf("SendText (resume): %v", err)
+	}
+	// resume chama Start de forma síncrona antes de retornar.
+	if tgt.lastModel != "openai/gpt-5.4-mini" {
+		t.Errorf("model no resume = %q, quero o modelo da sessão (openai/gpt-5.4-mini)", tgt.lastModel)
+	}
 }

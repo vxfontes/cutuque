@@ -1,5 +1,42 @@
 # Achados de Segurança — Cutuque
 
+## SEC-110 — Prompt do OpenCode vai como argumento posicional sem `--`, vulnerável a confusão de flag (CWE-88) na CLI do agente
+**Severidade:** R3 | **OWASP:** A03:2021 – Injection (variante "argument injection", não shell — o isolamento de argv do SEC-101 não é afetado)
+**Localização:** `hub/internal/adapter/opencode/target.go:32-53` (`ocArgs`, linha 50: `a = append(a, prompt)` — mensagem posicional, SEM separador `--`); contraste com `hub/internal/adapter/codex/target.go:65` (`codexArgs`: `a = append(a, "--", prompt)`, comentário explícito "prompt vai após `--` para nunca ser confundido com uma flag")
+**Detectado:** 2026-07-06 | **Status:** open
+
+**Descrição:**
+`ocArgs` monta `opencode run --format json --dangerously-skip-permissions [--dir cwd] [-s id] -m <model> [--variant v] <prompt>`, com o `prompt` (texto livre do usuário) como o ÚLTIMO argumento posicional, sem o separador `--` que marca "fim das opções" para o parser da CLI (yargs, confirmado por issue pública do próprio `opencode` — o parâmetro de mensagem do `run` é `array: true` e o próprio projeto reconhece que argumentos com caracteres especiais/hífen inicial exigem `--`). Isso NÃO é injeção de shell (SEC-101 não regride: o `exec.Command`/`ssh … bash -lc 'exec "$0" "$@"'` isola cada argumento via `agent.SingleQuote`, sem reparse), mas é uma classe diferente de problema: **injeção de argumento na própria CLI do agente**. Um prompt do usuário começando com `-` (ex.: `"-1"`, `"--help"`, `"-y, mas..."`, texto colado com marcador de lista `-`) é interpretado pelo `opencode` como uma FLAG desconhecida, não como o texto da mensagem — o processo sai com erro de parse de CLI em vez de processar o prompt.
+
+O adapter do Codex já resolveu exatamente esse problema (`codexArgs`, comentário: "prompt vai após `--` para nunca ser confundido com uma flag"); o adapter do OpenCode não seguiu o mesmo padrão.
+
+Impacto prático: no Launch (1ª mensagem), o processo morre sem emitir nenhum evento JSON; como `sessionID` começa vazio, `agent.Runner.Run` não sintetiza `Errored` no EOF (mesma lacuna do SEC-108) — a usuária só descobre o problema quando `launchTimeout` (20s) estoura, sem explicação do motivo real. No resume, `meta.SessionID` já é conhecido (`s.ID`), então o `Errored` de EOF É sintetizado (o fix parcial do SEC-108 cobre esse caminho) — mas ainda assim a mensagem nunca chega ao agente, silenciosamente, e o erro reportado à usuária não indica que a causa foi o hífen inicial.
+
+**Fix recomendado:**
+1. Inserir `"--"` antes do prompt em `ocArgs`, espelhando `codexArgs`: `a = append(a, "--", prompt)` (confirmar antes que o `opencode run` de fato honra `--` como terminador de opções para o parâmetro de mensagem — a documentação/issue pública indica que sim, mas vale um teste manual pontual).
+2. Se `opencode run` não aceitar `--` no lugar certo (a ordem de flags variádicas com yargs às vezes exige `--` logo após o subcomando, não no fim), considerar validar/escapar prompts que comecem com `-` (ex.: prefixar com um espaço neutro só quando necessário) como mitigação alternativa.
+3. Regressão: teste em `target_test.go` cobrindo `ocArgs("", "", "", "", "-1 não gostei")` e afins, confirmando que o prompt nunca fica adjacente a uma flag sem o terminador.
+
+## SEC-109 — `Launcher.resume` força o modelo padrão do OpenCode em toda continuação, ignorando o modelo escolhido pela usuária no Launch
+**Severidade:** R2 | **OWASP:** A04:2021 – Insecure Design (mudança silenciosa de qual modelo/provider processa os dados da usuária, sem consentimento explícito na continuação)
+**Localização:** `hub/internal/launcher/launcher.go:698` (`resume`, chama `tgt.Start(l.baseCtx, s.ID, s.Cwd, "", "", "", prompt)` — `model`/`effort`/`sandbox` sempre `""`; comentário na linha 697 afirma incorretamente "mantém o modelo da sessão"), `hub/internal/adapter/opencode/target.go:42-45` (`ocArgs`: `model == ""` não passa em `modelNamePattern` → cai em `defaultModel = "openai/gpt-5.4-mini"`), `hub/internal/session/session.go` (struct `Session` não tem campo `Model` — nada persiste a escolha feita no Launch), `app/CutuqueApp/NewSessionView.swift` (`agentFooter` para OpenCode: "Escolha um modelo (não tem default)" — a UI promete que a escolha importa)
+**Detectado:** 2026-07-06 | **Status:** open
+
+**Descrição:**
+O `model` escolhido pela usuária no Launch (ex.: `zai/glm-4.5-flash` ou o `opencode/deepseek-v4-flash-free`, oferecido explicitamente como opção "grátis" no `NewSessionView`) só é usado no PRIMEIRO `tgt.Start` da conversa. `Launcher.resume` — chamado em TODA mensagem seguinte de uma sessão do OpenCode, já que o agente é one-shot e cada turno após o primeiro é uma retomada — sempre passa `model=""`.
+
+Isso funciona por acidente para o Codex (cujo `-m` é OPCIONAL: `codexArgs` omite a flag quando `model==""`, e o processo `codex exec resume` recupera o modelo da sessão sozinho) e é irrelevante para o Claude (não tem conceito de flag de modelo por turno). Mas para o OpenCode, `-m` é OBRIGATÓRIO em toda invocação do `run` (o próprio comentário de `ocArgs` documenta isso: "sem ele o run pendura") — então `model==""` não significa "usa o modelo da sessão", significa "usa `defaultModel`, sempre". O resultado: **toda 2ª mensagem em diante de uma conversa do OpenCode roda silenciosamente no modelo padrão (`openai/gpt-5.4-mini`), não importa o que a usuária escolheu ao criar a sessão.**
+
+Consequências concretas:
+- Se a usuária escolheu o modelo grátis (`opencode/deepseek-v4-flash-free`) para não consumir cota paga, a partir da 2ª mensagem o hub passa a rodar (e possivelmente cobrar) no provider OpenAI sem aviso — substituição silenciosa de provedor/custo.
+- Se a máquina-alvo (sobretudo uma `SSHTarget` de terceiros) não tem a OpenAI autenticada (só o provider que a usuária escolheu de propósito), toda retomada falha — sessão parece "quebrada" a partir da 2ª mensagem, sem explicação.
+- Viola a própria mensagem da UI (`agentFooter`: "Escolha um modelo (não tem default)"), que dá à usuária a impressão de que a escolha vale para a conversa inteira.
+
+**Fix recomendado:**
+1. Persistir o modelo escolhido no Launch em `session.Session` (novo campo `Model string`) e propagá-lo em `Launcher.resume` (`tgt.Start(l.baseCtx, s.ID, s.Cwd, s.Model, "", "", prompt)`) em vez de hardcoded `""`. Mesmo tratamento vale para `effort` se for desejável manter o esforço de raciocínio entre turnos.
+2. Corrigir o comentário de `resume` (linha 697) para não afirmar algo que só é verdade para Codex/Claude.
+3. Regressão: teste de `launcher_test.go` com um fake `opencode.Target` registrando os argumentos recebidos em `Start`, lançando com um `model` não-default e então mandando uma 2ª mensagem (`resume`), verificando que o `model` do 2º `Start` é IGUAL ao do 1º.
+
 ## SEC-108 — `Launcher.resume` não tem timeout/sinal de falha quando o processo do agente não produz nenhuma saída (amplificado pelo Codex)
 **Severidade:** R2 | **OWASP:** A04:2021 – Insecure Design (ausência de sinal de falha num controle de estado, não injeção clássica)
 **Localização:** `hub/internal/launcher/launcher.go:670-711` (`resume`, sem timeout/espera de confirmação, diferente de `Launch`), `hub/internal/adapter/agent/runner.go:104-107` (`Run`, só sintetiza `Errored` no EOF se `sessionID != ""`, i.e., se algum `session_started`/`thread.started` chegou a ser visto)
@@ -149,6 +186,12 @@ Testes de regressão: `TestRemoteClaudeCommandNeutralizesInjection` (5 payloads:
 
 **Verificação de não-regressão (2026-07-03, leva de Notification ociosa / devices / Resolve):**
 Nenhuma mudança nesta leva toca `remoteClaudeCommand`/`singleQuote`/`Adopt`. O novo endpoint `POST /sessions/{id}/resolve` (`ResolveHandler`) só aceita o `id` já existente no Registry (path param, não usado para montar comando algum) e chama `Launcher.Resolve` → `reg.UpdateState(id, StateDone)` — sem tocar em `exec`/`ssh`. **SEC-101 não regrediu.**
+
+**Verificação de não-regressão (2026-07-06, leva do adapter OpenCode + sessionIDPattern alargado + fallback tmux):**
+1. `sessionIDPattern` mudou de `^[0-9a-fA-F-]{8,64}$` para `^[a-zA-Z0-9_-]{8,80}$` (`launcher.go:49`, para aceitar `ses_<base62>` do OpenCode). Confirmado por leitura: a allowlist nova CONTINUA sem metacaractere de shell (sem `;`, `|`, `&`, `$`, backtick, espaço, aspas), sem `.` (sem path traversal — importa porque o id também chega ao glob Python de `transcript.go`: `glob.glob('~/.claude/projects/*/'+sid+'.jsonl')`) e sem glob-wildcard (`*`, `?`, `[`, `]`) — o alargamento (case, underscore, +16 no teto de tamanho) não introduz nenhum caractere perigoso. `opencode/target.go` (`remoteOCCommand`/`ocArgs`) reusa o MESMO idioma de dois níveis (`bash -lc 'exec "$0" "$@"'`, `agent.SingleQuote` por argumento) do Codex/Claude. `model`/`variant` passam por allowlist/regex estritos antes de virar flag. **SEC-101 não regrediu.**
+2. Achado NOVO nesta leva, classe diferente (não é SEC-101/shell): o `prompt` do OpenCode vai como argumento posicional SEM o separador `--` que o Codex usa — risco de confusão de flag na CLI do próprio `opencode` (argument injection, não shell injection) → **SEC-110**.
+3. Achado NOVO nesta leva, design (não é injeção): `Launcher.resume` força o modelo padrão do OpenCode em toda continuação de conversa, ignorando o modelo escolhido no Launch → **SEC-109**.
+4. `tmux.go`/`agent_of()`: a detecção por substring (`'codex' in c`, `'opencode' in c`) amplia um padrão de falso-positivo já aceito para `'claude'` — não é uma regressão de SEC-101 (não monta comando algum a partir do texto detectado; `agent_of` só rotula qual agente aparece na árvore de processos do pane, usado como label e não como input de shell), mas vale registrar como superfície de falso-positivo ampliada (ver log.md 2026-07-06, non-bloqueante).
 
 **Verificação de não-regressão (2026-07-06, leva do adapter Codex):**
 `codex/target.go` (`remoteCodexCommand`/`codexArgs`) reusa o MESMO idioma estrutural (`bash -lc 'exec "$0" "$@"' <argv...>`, cada arg individualmente single-quoted via `agent.SingleQuote`, um único nível de shell) — confirmado por leitura de código, é literalmente o mesmo padrão do `claudecode`, agora extraído para `agent.SingleQuote`/reusado por ambos. `resumeID` que chega em `codexArgs` é sempre `""`, um id já validado por `sessionIDPattern` (`Adopt`), ou um `thread_id` gerado pelo próprio processo `codex` (nunca input direto de cliente sem validação prévia). `sandbox`/`effort` só entram em `-c chave="valor"` depois de passar por allowlists estritas (`validSandbox`/`validEffort`); `model` passa por um regex estrito (`modelNamePattern`) antes de virar `-m <model>`, e mesmo se o regex falhasse, o valor ainda seria isolado corretamente pelo quoting estrutural por-argumento. **SEC-101 não regrediu; nenhuma injeção nova encontrada no adapter do Codex.**
