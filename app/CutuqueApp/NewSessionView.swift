@@ -23,28 +23,42 @@ struct NewSessionView: View {
     @Environment(\.dismiss) private var dismiss
     private let api = APIClient()
 
-    // Agente fixo nesta fase.
-    private let agent = "claude-code"
-
     // Máquinas disponíveis, vindas do hub via /targets (com fallback).
     @State private var machines: [String]
     @State private var machine: String
+    /// Agente escolhido: claude-code ou codex.
+    @State private var agent = "claude-code"
     @State private var prompt = ""
-    /// Pasta onde o claude roda (opcional). Vazio = home da máquina.
+    /// Pasta onde o agente roda (opcional). Vazio = home da máquina.
     @State private var cwd = ""
     @State private var showingFolderPicker = false
-    // Modelo + effort do claude (vazio = default do CLI).
+    // Modelo + effort (vazio = default do agente).
     @State private var model = ""
     @State private var effort = ""
+    /// Sandbox do Codex (ignorado pelo Claude). Default: workspace-write.
+    @State private var sandbox = "workspace-write"
     @State private var isLaunching = false
     @State private var alertMessage: String?
 
-    // Opções de modelo (aliases do claude) e effort. "" = default.
-    private let modelOptions: [(id: String, label: String)] = [
-        ("", "Padrão"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku"), ("fable", "Fable"),
+    private var isCodex: Bool { agent == "codex" }
+
+    private let agentOptions: [(id: String, label: String)] = [
+        ("claude-code", "Claude Code"), ("codex", "Codex"),
     ]
-    private let effortOptions: [(id: String, label: String)] = [
-        ("", "Padrão"), ("low", "Baixo"), ("medium", "Médio"), ("high", "Alto"), ("xhigh", "Muito alto"), ("max", "Máximo"),
+
+    // Opções de modelo/effort por agente ("" = default).
+    private var modelOptions: [(id: String, label: String)] {
+        isCodex
+            ? [("", "Padrão"), ("gpt-5", "GPT-5"), ("gpt-5-mini", "GPT-5 mini")]
+            : [("", "Padrão"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku"), ("fable", "Fable")]
+    }
+    private var effortOptions: [(id: String, label: String)] {
+        isCodex
+            ? [("", "Padrão"), ("minimal", "Mínimo"), ("low", "Baixo"), ("medium", "Médio"), ("high", "Alto")]
+            : [("", "Padrão"), ("low", "Baixo"), ("medium", "Médio"), ("high", "Alto"), ("xhigh", "Muito alto"), ("max", "Máximo")]
+    }
+    private let sandboxOptions: [(id: String, label: String)] = [
+        ("workspace-write", "Workspace (padrão)"), ("read-only", "Somente leitura"), ("danger-full-access", "Acesso total"),
     ]
 
     private var canLaunch: Bool {
@@ -149,13 +163,23 @@ struct NewSessionView: View {
     }
 
     private var agentSection: some View {
-        Section("Agente") {
-            HStack {
-                Text(agent)
-                Spacer()
-                Image(systemName: "checkmark").foregroundStyle(.tint)
+        Section {
+            Picker("Agente", selection: $agent) {
+                ForEach(agentOptions, id: \.id) { Text($0.label).tag($0.id) }
             }
-            .foregroundStyle(.secondary)
+            .pickerStyle(.segmented)
+            // Modelo/effort têm opções diferentes por agente: reseta para o
+            // default ao trocar, evitando um valor inválido pro outro agente.
+            .onChange(of: agent) { _, _ in
+                model = ""
+                effort = ""
+            }
+        } header: {
+            Text("Agente")
+        } footer: {
+            Text(isCodex
+                ? "Codex roda em modo não-interativo (codex exec). A permissão é por sandbox, não por comando."
+                : "Claude Code — pede sua aprovação a cada ação sensível.")
         }
     }
 
@@ -193,7 +217,7 @@ struct NewSessionView: View {
         }
     }
 
-    /// Modelo do Claude + effort (opcionais). Vazio = default do CLI.
+    /// Modelo + effort (+ sandbox no Codex). Vazio = default do agente.
     private var modelSection: some View {
         Section {
             Picker("Modelo", selection: $model) {
@@ -202,10 +226,17 @@ struct NewSessionView: View {
             Picker("Effort", selection: $effort) {
                 ForEach(effortOptions, id: \.id) { Text($0.label).tag($0.id) }
             }
+            if isCodex {
+                Picker("Sandbox", selection: $sandbox) {
+                    ForEach(sandboxOptions, id: \.id) { Text($0.label).tag($0.id) }
+                }
+            }
         } header: {
             Text("Modelo (opcional)")
         } footer: {
-            Text("Modelo e esforço de raciocínio do Claude. Padrão = o que o CLI já usa.")
+            Text(isCodex
+                ? "Modelo, esforço e sandbox do Codex. Na dúvida use Padrão — nem todo modelo funciona em conta ChatGPT. O sandbox define o que o Codex pode escrever."
+                : "Modelo e esforço de raciocínio do Claude. Padrão = o que o CLI já usa.")
         }
     }
 
@@ -233,7 +264,7 @@ struct NewSessionView: View {
         isLaunching = true
         defer { isLaunching = false }
         do {
-            let session = try await api.createSession(machine: machine, agent: agent, prompt: prompt, cwd: cwd, model: model, effort: effort)
+            let session = try await api.createSession(machine: machine, agent: agent, prompt: prompt, cwd: cwd, model: model, effort: effort, sandbox: isCodex ? sandbox : nil)
             onCreated(session)
         } catch let CutuqueError.server(status, message) {
             // 504 tem UX própria: a sessão pode aparecer na lista mesmo assim.
