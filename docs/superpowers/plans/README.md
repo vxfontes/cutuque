@@ -14,7 +14,7 @@ skill writing-plans) antes de executar cada uma.
 | [Fase 3 — Adapter Claude (lançar + aprovar)](2026-07-02-fase-3-adapter-claude-lancar-aprovar.md) | v0 | ✅ **Concluída** (2026-07-02; aprovação nativa via protocolo de controle — ver doc 10; E2E real verificado) |
 | [Fase 4 — Notifier APNs + haptic](2026-07-02-fase-4-notifier-apns-haptic.md) | v0 | ✅ **Concluída** (2026-07-02; JWT validado contra o sandbox real — BadDeviceToken com token fake = credenciais OK; falta só instalar no iPhone físico) |
 | [Fase 5 — Endurecimento + Deploy no Hub](2026-07-02-fase-5-endurecimento-deploy.md) | v0 | ✅ **Concluída** — hub no ZimaOS (Docker, restart always), SSHTarget validado (macmini E2E ok; macbook pendente auth Keychain) |
-| [v1 — watchOS + tmux + Codex/OpenCode](2026-07-02-v1-watchos-tmux-multiagente.md) | v1 | Esboço |
+| [v1 — watchOS + tmux + Codex/OpenCode](2026-07-02-v1-watchos-tmux-multiagente.md) | v1 | ✅ Implementado |
 | [v2 — Windows/WSL2 + histórico](2026-07-02-v2-windows-historico.md) | v2 | Esboço |
 
 ## Convenções
