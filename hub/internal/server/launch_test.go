@@ -21,6 +21,7 @@ type fakeLauncher struct {
 	approveErr    error
 	denyErr       error
 	sendErr       error
+	answerErr     error
 
 	machines   []string
 	removeErr  error
@@ -50,6 +51,8 @@ type fakeLauncher struct {
 	gotAdoptCwd, gotAdoptTitle              string
 	gotAdoptAgent                           string
 	gotTmuxTarget, gotTmuxText              string
+	gotAnswerID                             string
+	gotAnswers                              []session.QuestionAnswer
 }
 
 func (f *fakeLauncher) Machines() []string { return f.machines }
@@ -120,6 +123,10 @@ func (f *fakeLauncher) Launch(_ context.Context, machine, agent, prompt, cwd, mo
 }
 func (f *fakeLauncher) Approve(id string) error { f.gotApproveID = id; return f.approveErr }
 func (f *fakeLauncher) Deny(id string) error    { f.gotDenyID = id; return f.denyErr }
+func (f *fakeLauncher) Answer(id string, answers []session.QuestionAnswer) error {
+	f.gotAnswerID, f.gotAnswers = id, answers
+	return f.answerErr
+}
 func (f *fakeLauncher) SendText(id, text string) error {
 	f.gotInputID, f.gotInputText = id, text
 	return f.sendErr
@@ -249,6 +256,84 @@ func TestApproveStatuses(t *testing.T) {
 			if c.wantCode != "" {
 				assertErrorCode(t, rec.Body.Bytes(), c.wantCode)
 			}
+		})
+	}
+}
+
+// TestAnswerRoutesToLauncher cobre o contrato REST de POST /sessions/{id}/answer:
+// decodifica {"answers":[{"question":"...","selected":[...]}]} e repassa ao
+// Launcher.Answer.
+func TestAnswerRoutesToLauncher(t *testing.T) {
+	f := &fakeLauncher{}
+	rec := do(t, f, http.MethodPost, "/sessions/abc/answer", `{"answers":[{"question":"Qual cor você prefere?","selected":["Vermelho"]}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, quero 200 (corpo: %s)", rec.Code, rec.Body.String())
+	}
+	if f.gotAnswerID != "abc" {
+		t.Errorf("Answer recebeu id=%q, quero \"abc\"", f.gotAnswerID)
+	}
+	if len(f.gotAnswers) != 1 || f.gotAnswers[0].Question != "Qual cor você prefere?" || len(f.gotAnswers[0].Selected) != 1 || f.gotAnswers[0].Selected[0] != "Vermelho" {
+		t.Errorf("Answer recebeu answers=%+v inesperado", f.gotAnswers)
+	}
+}
+
+// TestAnswerMultiSelectPassesAllLabels cobre a seleção múltipla: todos os
+// rótulos escolhidos chegam ao Launcher (quem junta com ", " é o launcher, não
+// o handler).
+func TestAnswerMultiSelectPassesAllLabels(t *testing.T) {
+	f := &fakeLauncher{}
+	rec := do(t, f, http.MethodPost, "/sessions/abc/answer", `{"answers":[{"question":"Quais linguagens?","selected":["Go","Swift"]}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, quero 200 (corpo: %s)", rec.Code, rec.Body.String())
+	}
+	if len(f.gotAnswers) != 1 || len(f.gotAnswers[0].Selected) != 2 {
+		t.Fatalf("Answer recebeu answers=%+v, quero 2 selecionados", f.gotAnswers)
+	}
+	if f.gotAnswers[0].Selected[0] != "Go" || f.gotAnswers[0].Selected[1] != "Swift" {
+		t.Errorf("Selected = %+v, quero [Go Swift]", f.gotAnswers[0].Selected)
+	}
+}
+
+// TestAnswerBadRequest cobre validação: id vazio (via rota, nunca ocorre no
+// mux real mas defensivo), corpo inválido, answers vazio, question vazia e
+// selected vazio → 400, sem chamar o Launcher.
+func TestAnswerBadRequest(t *testing.T) {
+	f := &fakeLauncher{}
+	bodies := []string{
+		`{não é json`,
+		`{}`,
+		`{"answers":[]}`,
+		`{"answers":[{"question":"","selected":["a"]}]}`,
+		`{"answers":[{"question":"q","selected":[]}]}`,
+	}
+	for _, body := range bodies {
+		rec := do(t, f, http.MethodPost, "/sessions/abc/answer", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("body %q => status %d, quero 400", body, rec.Code)
+		}
+	}
+}
+
+// TestAnswerErrorStatuses cobre o mesmo mapeamento de erro do Approve/Deny:
+// ErrUnknownSession → 404, ErrStaleState → 409.
+func TestAnswerErrorStatuses(t *testing.T) {
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{"unknown", launcher.ErrUnknownSession, http.StatusNotFound, "unknown_session"},
+		{"stale", launcher.ErrStaleState, http.StatusConflict, "stale_state"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := &fakeLauncher{answerErr: c.err}
+			rec := do(t, f, http.MethodPost, "/sessions/abc/answer", `{"answers":[{"question":"q","selected":["a"]}]}`)
+			if rec.Code != c.wantStatus {
+				t.Fatalf("status = %d, quero %d", rec.Code, c.wantStatus)
+			}
+			assertErrorCode(t, rec.Body.Bytes(), c.wantCode)
 		})
 	}
 }

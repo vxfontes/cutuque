@@ -20,6 +20,7 @@ type Launcher interface {
 	Launch(ctx context.Context, machine, agent, prompt, cwd, model, effort, sandbox string) (session.Session, error)
 	Approve(id string) error
 	Deny(id string) error
+	Answer(id string, answers []session.QuestionAnswer) error
 	SendText(id, text string) error
 	Reply(id, text string) error
 	Machines() []string
@@ -508,6 +509,62 @@ func ApproveHandler(lch Launcher) http.HandlerFunc { return decideHandler(lch.Ap
 
 // DenyHandler nega o pedido pendente da sessão {id}.
 func DenyHandler(lch Launcher) http.HandlerFunc { return decideHandler(lch.Deny) }
+
+// answerRequest é o corpo de POST /sessions/{id}/answer: as respostas às
+// perguntas de seleção pendentes (AskUserQuestion). Selected tem 1 rótulo em
+// seleção única, N em múltipla — o hub junta múltiplos com ", " ao responder ao
+// CLI (contrato do protocolo, ver launcher.buildAnswerResponse).
+type answerRequest struct {
+	Answers []answerItem `json:"answers"`
+}
+
+// answerItem é a resposta a UMA pergunta pendente: Question precisa bater
+// EXATAMENTE com o texto de uma das perguntas em PendingQuestions (é a chave do
+// map `answers` do control_response).
+type answerItem struct {
+	Question string   `json:"question"`
+	Selected []string `json:"selected"`
+}
+
+// AnswerHandler responde a uma pergunta de seleção pendente (a ferramenta
+// nativa AskUserQuestion, que o hub expõe como PendingQuestions em vez do
+// sim/não comum).
+//
+//	POST /sessions/{id}/answer {"answers":[{"question":"...","selected":["..."]}]}
+//	→ 200 {"ok":true} | 400 bad_request | 404 unknown_session | 409 stale_state
+func AnswerHandler(lch Launcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		r.Body = http.MaxBytesReader(w, r.Body, maxLaunchBody)
+		var req answerRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || id == "" || len(req.Answers) == 0 {
+			writeJSONError(w, http.StatusBadRequest, "bad_request")
+			return
+		}
+		answers := make([]session.QuestionAnswer, 0, len(req.Answers))
+		for _, a := range req.Answers {
+			if a.Question == "" || len(a.Selected) == 0 {
+				writeJSONError(w, http.StatusBadRequest, "bad_request")
+				return
+			}
+			answers = append(answers, session.QuestionAnswer{Question: a.Question, Selected: a.Selected})
+		}
+
+		err := lch.Answer(id, answers)
+		switch {
+		case errors.Is(err, launcher.ErrUnknownSession):
+			writeJSONError(w, http.StatusNotFound, "unknown_session")
+		case errors.Is(err, launcher.ErrInvalidAnswer):
+			writeJSONError(w, http.StatusBadRequest, "bad_request")
+		case errors.Is(err, launcher.ErrStaleState):
+			writeJSONError(w, http.StatusConflict, "stale_state")
+		case err != nil:
+			writeJSONError(w, http.StatusConflict, "stale_state")
+		default:
+			writeOK(w)
+		}
+	}
+}
 
 // InputHandler envia texto arbitrário à sessão viva {id}.
 //

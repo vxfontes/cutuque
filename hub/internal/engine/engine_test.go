@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -212,6 +213,93 @@ func TestRunnerReclaimsHookPreCreatedSession(t *testing.T) {
 	}
 	if s.Title != "prompt-real" {
 		t.Errorf("Title = %q, quero o do Runner \"prompt-real\"", s.Title)
+	}
+}
+
+// TestApplyAskUserQuestionSetsPendingQuestions cobre o fluxo da pergunta de
+// seleção nativa (AskUserQuestion): o Engine parseia ev.Input (o array
+// `questions` do control_request) e preenche PendingQuestions, junto do
+// PendingPrompt de fallback — o app troca o sim/não pelo seletor quando
+// PendingQuestions não está vazio.
+func TestApplyAskUserQuestionSetsPendingQuestions(t *testing.T) {
+	reg := registry.New()
+	eng := New(reg)
+	seed(reg, "s", session.StateRunning)
+
+	input := `{"questions":[{"question":"Qual cor você prefere?","header":"Cor","multiSelect":false,"options":[{"label":"Vermelho","description":"Cor quente"},{"label":"Azul","description":"Cor fria"}]}]}`
+	eng.Apply(event.Event{
+		SessionID: "s",
+		Type:      event.PermissionRequested,
+		Data:      "Pergunta: Qual cor você prefere?",
+		ControlID: "req-1",
+		ToolName:  "AskUserQuestion",
+		ToolUseID: "toolu_1",
+		Input:     json.RawMessage(input),
+	})
+
+	got, _ := reg.Get("s")
+	if got.State != session.StateNeedsYou {
+		t.Fatalf("State = %q, quero needs_you", got.State)
+	}
+	if len(got.PendingQuestions) != 1 {
+		t.Fatalf("PendingQuestions = %+v, quero 1 pergunta", got.PendingQuestions)
+	}
+	q := got.PendingQuestions[0]
+	if q.Question != "Qual cor você prefere?" || q.Header != "Cor" || q.MultiSelect {
+		t.Errorf("Question = %+v inesperado", q)
+	}
+	if len(q.Options) != 2 || q.Options[0].Label != "Vermelho" || q.Options[0].Description != "Cor quente" {
+		t.Errorf("Options = %+v inesperado", q.Options)
+	}
+}
+
+// TestApplyPlainPermissionClearsPendingQuestions cobre o caso comum (Bash etc):
+// um pedido de permissão normal NÃO é AskUserQuestion, então PendingQuestions
+// deve ficar vazio — mesmo que a sessão tivesse uma pergunta pendente antes.
+func TestApplyPlainPermissionClearsPendingQuestions(t *testing.T) {
+	reg := registry.New()
+	eng := New(reg)
+	seed(reg, "s", session.StateRunning)
+
+	// 1ª pergunta de seleção pendente.
+	eng.Apply(event.Event{
+		SessionID: "s", Type: event.PermissionRequested, ToolName: "AskUserQuestion",
+		Input: json.RawMessage(`{"questions":[{"question":"q?","options":[{"label":"a"}]}]}`),
+	})
+	if got, _ := reg.Get("s"); len(got.PendingQuestions) == 0 {
+		t.Fatalf("pré-condição: PendingQuestions deveria estar preenchido")
+	}
+
+	// Usuária responde, e o próximo pedido é um Bash comum (não AskUserQuestion).
+	eng.Apply(event.Event{SessionID: "s", Type: event.UserResponded})
+	eng.Apply(event.Event{SessionID: "s", Type: event.PermissionRequested, Data: "Bash: touch x.txt", ToolName: "Bash"})
+
+	got, _ := reg.Get("s")
+	if len(got.PendingQuestions) != 0 {
+		t.Errorf("PendingQuestions = %+v, quero vazio (pedido comum de permissão)", got.PendingQuestions)
+	}
+	if got.PendingPrompt != "Bash: touch x.txt" {
+		t.Errorf("PendingPrompt = %q inesperado", got.PendingPrompt)
+	}
+}
+
+// TestApplyUserRespondedClearsPendingQuestions cobre a saída de needs_you: ao
+// responder, PendingQuestions some junto do PendingPrompt (ClearPendingPrompt
+// limpa os dois).
+func TestApplyUserRespondedClearsPendingQuestions(t *testing.T) {
+	reg := registry.New()
+	eng := New(reg)
+	seed(reg, "s", session.StateRunning)
+	eng.Apply(event.Event{
+		SessionID: "s", Type: event.PermissionRequested, ToolName: "AskUserQuestion",
+		Input: json.RawMessage(`{"questions":[{"question":"q?","options":[{"label":"a"}]}]}`),
+	})
+
+	eng.Apply(event.Event{SessionID: "s", Type: event.UserResponded})
+
+	got, _ := reg.Get("s")
+	if len(got.PendingQuestions) != 0 {
+		t.Errorf("PendingQuestions = %+v, quero vazio após user_responded", got.PendingQuestions)
 	}
 }
 

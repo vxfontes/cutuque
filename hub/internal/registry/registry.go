@@ -363,16 +363,57 @@ func (r *Registry) SetPendingPrompt(id, text string) {
 	r.persist()
 }
 
-// ClearPendingPrompt limpa o pedido pendente e notifica os subscribers. No-op
-// se o id não existir ou se já estiver vazio (idempotente, sem broadcast à toa).
+// ClearPendingPrompt limpa o pedido pendente (PendingPrompt e PendingQuestions,
+// juntos: ao sair de needs_you nenhum dos dois faz mais sentido) e notifica os
+// subscribers. No-op se o id não existir ou se já estiver tudo vazio
+// (idempotente, sem broadcast à toa).
 func (r *Registry) ClearPendingPrompt(id string) {
 	r.mu.Lock()
 	s, ok := r.byID[id]
-	if !ok || s.PendingPrompt == "" {
+	if !ok || (s.PendingPrompt == "" && len(s.PendingQuestions) == 0) {
 		r.mu.Unlock()
 		return
 	}
 	s.PendingPrompt = ""
+	s.PendingQuestions = nil
+	r.byID[id] = s
+	r.mu.Unlock()
+
+	r.broadcast(s)
+	r.persist()
+}
+
+// SetPendingQuestions define a pergunta de seleção pendente (AskUserQuestion) de
+// uma sessão e notifica os subscribers — o app troca o sim/não por um seletor
+// com as opções em texto. No-op se o id não existir. Não mexe em UpdatedAt (a
+// transição de estado é quem marca o tempo, igual SetPendingPrompt).
+func (r *Registry) SetPendingQuestions(id string, qs []session.Question) {
+	r.mu.Lock()
+	s, ok := r.byID[id]
+	if !ok {
+		r.mu.Unlock()
+		return
+	}
+	s.PendingQuestions = qs
+	r.byID[id] = s
+	r.mu.Unlock()
+
+	r.broadcast(s)
+	r.persist()
+}
+
+// ClearPendingQuestions limpa só a pergunta de seleção pendente (mantendo
+// PendingPrompt), usado quando um pedido comum de permissão (não
+// AskUserQuestion) chega numa sessão que tinha uma pergunta pendente antes. No-op
+// se o id não existir ou já estiver vazio.
+func (r *Registry) ClearPendingQuestions(id string) {
+	r.mu.Lock()
+	s, ok := r.byID[id]
+	if !ok || len(s.PendingQuestions) == 0 {
+		r.mu.Unlock()
+		return
+	}
+	s.PendingQuestions = nil
 	r.byID[id] = s
 	r.mu.Unlock()
 

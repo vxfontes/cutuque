@@ -2,6 +2,8 @@ package session
 
 import (
 	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -83,7 +85,48 @@ func TestSessionRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(raw, &back); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if back != s {
+	// reflect.DeepEqual (não "!=") porque PendingQuestions é um slice: um campo
+	// não-comparável torna o struct inteiro incomparável por "==".
+	if !reflect.DeepEqual(back, s) {
 		t.Errorf("round-trip = %+v, quero %+v", back, s)
+	}
+}
+
+// TestSessionPendingQuestionsRoundTrip cobre o contrato de PendingQuestions
+// (a pergunta de seleção do AskUserQuestion) na serialização JSON exposta ao
+// app: cada Question carrega header/multiSelect/options, e some do JSON quando
+// vazia (omitempty) — sessões em needs_you por um pedido comum de permissão não
+// ganham um "pending_questions" à toa.
+func TestSessionPendingQuestionsRoundTrip(t *testing.T) {
+	s := Session{
+		ID:    "abc",
+		State: StateNeedsYou,
+		PendingQuestions: []Question{{
+			Question:    "Qual cor você prefere?",
+			Header:      "Cor",
+			MultiSelect: false,
+			Options: []QuestionOption{
+				{Label: "Vermelho", Description: "Cor quente"},
+				{Label: "Azul", Description: "Cor fria"},
+			},
+		}},
+	}
+	raw, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var back Session
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(back.PendingQuestions, s.PendingQuestions) {
+		t.Errorf("PendingQuestions round-trip = %+v, quero %+v", back.PendingQuestions, s.PendingQuestions)
+	}
+
+	// Sem PendingQuestions: omitempty tira o campo do JSON.
+	plain := Session{ID: "x", State: StateNeedsYou}
+	rawPlain, _ := json.Marshal(plain)
+	if strings.Contains(string(rawPlain), `"pending_questions"`) {
+		t.Errorf("JSON = %s, não queria \"pending_questions\" quando vazio", rawPlain)
 	}
 }

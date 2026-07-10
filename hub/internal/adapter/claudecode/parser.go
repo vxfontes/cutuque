@@ -34,11 +34,20 @@ type streamLine struct {
 
 // controlRequest é o pedido de permissão nativo (can_use_tool): o CLI o emite no
 // stdout e aguarda um control_response no stdin (verificado na CLI 2.1.198).
+//
+// ToolUseID e RequiresUserInteraction foram confirmados com o AskUserQuestion
+// (a ferramenta de seleção única/múltipla do Claude Code): o CLI sempre manda
+// tool_use_id (mesmo em ferramentas comuns, ex. Bash) e marca
+// requires_user_interaction=true nas que exigem resposta explícita da usuária.
+// O hub não distingue por RequiresUserInteraction (não é confiável para todas
+// as ferramentas) — usa ToolName=="AskUserQuestion" para identificar a seleção.
 type controlRequest struct {
-	Subtype     string          `json:"subtype"`
-	ToolName    string          `json:"tool_name"`
-	Input       json.RawMessage `json:"input"`
-	Description string          `json:"description"`
+	Subtype                 string          `json:"subtype"`
+	ToolName                string          `json:"tool_name"`
+	Input                   json.RawMessage `json:"input"`
+	Description             string          `json:"description"`
+	ToolUseID               string          `json:"tool_use_id"`
+	RequiresUserInteraction bool            `json:"requires_user_interaction"`
 }
 
 type streamMessage struct {
@@ -90,9 +99,10 @@ func ParseLine(line []byte) ([]event.Event, error) {
 }
 
 // controlRequestEvent traduz um control_request/can_use_tool em um
-// permission_requested. Guarda o request_id (ControlID) e o input original
-// (Input) que o Launcher devolve ao aprovar; Data é um resumo humano para o
-// app. Outros subtypes de control_request são ignorados.
+// permission_requested. Guarda o request_id (ControlID), o tool_name/tool_use_id
+// (ToolName/ToolUseID) e o input original (Input) que o Launcher devolve ao
+// aprovar; Data é um resumo humano para o app. Outros subtypes de
+// control_request são ignorados.
 func controlRequestEvent(l streamLine, at time.Time) []event.Event {
 	if l.Request == nil || l.Request.Subtype != "can_use_tool" {
 		return nil
@@ -103,14 +113,37 @@ func controlRequestEvent(l streamLine, at time.Time) []event.Event {
 		Data:      permissionSummary(l.Request),
 		ControlID: l.RequestID,
 		Input:     l.Request.Input,
+		ToolName:  l.Request.ToolName,
+		ToolUseID: l.Request.ToolUseID,
 		At:        at,
 	}}
+}
+
+// askUserQuestionInput espelha o schema de input.questions do AskUserQuestion
+// (protocolo verificado na CLI 2.1.198/2.1.206): só o necessário para o resumo
+// humano — o parse completo (para o app renderizar o seletor) é feito pelo
+// Engine a partir do Input bruto.
+type askUserQuestionInput struct {
+	Questions []struct {
+		Question string `json:"question"`
+	} `json:"questions"`
 }
 
 // permissionSummary monta o resumo humano do pedido a partir do tool_name e do
 // input.command (quando houver) ou da description. Ex.:
 // "Bash: touch x.txt — Create empty probe file".
+//
+// AskUserQuestion é um caso especial: não é um pedido de permissão de
+// ferramenta, é uma pergunta de seleção — o resumo vira "Pergunta: <1ª
+// question>" (o app troca o sim/não por um seletor via PendingQuestions;
+// Data aqui é só o fallback textual/notificação).
 func permissionSummary(req *controlRequest) string {
+	if req.ToolName == "AskUserQuestion" {
+		if q := firstQuestion(req.Input); q != "" {
+			return "Pergunta: " + truncate(q, maxSummary)
+		}
+		return "Pergunta"
+	}
 	tool := req.ToolName
 	if tool == "" {
 		tool = "ferramenta"
@@ -128,6 +161,19 @@ func permissionSummary(req *controlRequest) string {
 		return tool
 	}
 	return tool + ": " + detail
+}
+
+// firstQuestion extrai o texto da 1ª pergunta de um input do AskUserQuestion,
+// para o resumo humano de permissionSummary. String vazia se não houver.
+func firstQuestion(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var in askUserQuestionInput
+	if err := json.Unmarshal(raw, &in); err != nil || len(in.Questions) == 0 {
+		return ""
+	}
+	return in.Questions[0].Question
 }
 
 // commandField extrai input.command de um input de ferramenta, se presente.

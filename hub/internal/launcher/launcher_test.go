@@ -3,6 +3,7 @@ package launcher
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"io"
 	"testing"
 	"time"
@@ -232,6 +233,270 @@ func TestDenyWritesDenyControlResponse(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("não capturou o control_response de deny")
+	}
+}
+
+// askUserQuestionLine e wantAnswer* espelham o fixture REAL da CLI 2.1.206
+// (capturado empiricamente) e a resposta EXATA que o hub deve escrever —
+// contrato verificado de ponta a ponta com o SDK oficial.
+const (
+	askReqID            = "f8a9ad13-7d58-4da2-af84-a59079a6047b"
+	askToolUseID        = "toolu_016tGouKiqK5akLjpwsnByXx"
+	askQuestionsInput   = `{"questions":[{"question":"Qual cor você prefere?","header":"Cor","options":[{"label":"Vermelho","description":"Cor quente, vibrante e intensa."},{"label":"Verde","description":"Cor da natureza, calma e equilibrada."},{"label":"Azul","description":"Cor fria, serena e tranquila."}],"multiSelect":false}]}`
+	askUserQuestionLine = `{"type":"control_request","request_id":"` + askReqID + `","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":` + askQuestionsInput + `,"tool_use_id":"` + askToolUseID + `","requires_user_interaction":true}}`
+
+	wantAnswerSingle = `{"type":"control_response","response":{"subtype":"success","request_id":"` + askReqID + `","response":{"behavior":"allow","updatedInput":{"questions":[{"question":"Qual cor você prefere?","header":"Cor","options":[{"label":"Vermelho","description":"Cor quente, vibrante e intensa."},{"label":"Verde","description":"Cor da natureza, calma e equilibrada."},{"label":"Azul","description":"Cor fria, serena e tranquila."}],"multiSelect":false}],"answers":{"Qual cor você prefere?":"Vermelho"}},"toolUseID":"` + askToolUseID + `"}}}`
+)
+
+// askUserQuestionScript emite init + o control_request de AskUserQuestion,
+// captura o control_response e então emite o result.
+func askUserQuestionScript(stdout io.Writer, stdin *bufio.Reader, captured chan<- string) {
+	_, _ = stdin.ReadString('\n') // consome o prompt inicial
+	_, _ = io.WriteString(stdout, initLine+"\n")
+	_, _ = io.WriteString(stdout, askUserQuestionLine+"\n")
+	resp, _ := stdin.ReadString('\n')
+	captured <- trimNL(resp)
+	_, _ = io.WriteString(stdout, resultLine+"\n")
+}
+
+// TestAnswerWritesExactControlResponseSingle cobre a seleção ÚNICA: o
+// control_response escrito no stdin deve ecoar `questions` inalterado e
+// `answers` com o rótulo escolhido (string, sem array), mais o toolUseID.
+func TestAnswerWritesExactControlResponseSingle(t *testing.T) {
+	tgt := &scriptTarget{name: "macbook", run: askUserQuestionScript, captured: make(chan string, 1)}
+	l, reg := newTestLauncher(tgt)
+
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "escolha uma cor", "", "", "", ""); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	waitFor(t, func() bool {
+		got, _ := reg.Get(sid)
+		return got.State == session.StateNeedsYou
+	})
+	got, _ := reg.Get(sid)
+	if len(got.PendingQuestions) != 1 || got.PendingQuestions[0].Question != "Qual cor você prefere?" {
+		t.Fatalf("PendingQuestions = %+v, quero a pergunta da fixture", got.PendingQuestions)
+	}
+
+	err := l.Answer(sid, []session.QuestionAnswer{{Question: "Qual cor você prefere?", Selected: []string{"Vermelho"}}})
+	if err != nil {
+		t.Fatalf("Answer: %v", err)
+	}
+
+	select {
+	case resp := <-tgt.captured:
+		if resp != wantAnswerSingle {
+			t.Errorf("control_response =\n  %s\nquero:\n  %s", resp, wantAnswerSingle)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("não capturou o control_response de Answer")
+	}
+
+	waitFor(t, func() bool {
+		g, _ := reg.Get(sid)
+		return g.State == session.StateDone
+	})
+	final, _ := reg.Get(sid)
+	if len(final.PendingQuestions) != 0 {
+		t.Errorf("PendingQuestions = %+v, quero vazio após responder", final.PendingQuestions)
+	}
+}
+
+// TestAnswerJoinsMultiSelectWithComma cobre a seleção MÚLTIPLA: os rótulos
+// escolhidos viram uma STRING única, juntados com ", " (nunca um array) —
+// verificado de ponta a ponta com o SDK oficial.
+func TestAnswerJoinsMultiSelectWithComma(t *testing.T) {
+	tgt := &scriptTarget{name: "macbook", run: askUserQuestionScript, captured: make(chan string, 1)}
+	l, reg := newTestLauncher(tgt)
+
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "escolha cores", "", "", "", ""); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	waitFor(t, func() bool {
+		got, _ := reg.Get(sid)
+		return got.State == session.StateNeedsYou
+	})
+
+	if err := l.Answer(sid, []session.QuestionAnswer{{Question: "Qual cor você prefere?", Selected: []string{"Vermelho", "Azul"}}}); err != nil {
+		t.Fatalf("Answer: %v", err)
+	}
+
+	select {
+	case resp := <-tgt.captured:
+		var body struct {
+			Response struct {
+				Response struct {
+					Behavior     string `json:"behavior"`
+					UpdatedInput struct {
+						Answers map[string]string `json:"answers"`
+					} `json:"updatedInput"`
+					ToolUseID string `json:"toolUseID"`
+				} `json:"response"`
+			} `json:"response"`
+		}
+		if err := json.Unmarshal([]byte(resp), &body); err != nil {
+			t.Fatalf("control_response inválido: %v (%s)", err, resp)
+		}
+		if body.Response.Response.Behavior != "allow" {
+			t.Errorf("behavior = %q, quero allow", body.Response.Response.Behavior)
+		}
+		if got := body.Response.Response.UpdatedInput.Answers["Qual cor você prefere?"]; got != "Vermelho, Azul" {
+			t.Errorf("answers[...] = %q, quero \"Vermelho, Azul\" (juntado com \", \")", got)
+		}
+		if body.Response.Response.ToolUseID != askToolUseID {
+			t.Errorf("toolUseID = %q, quero %q", body.Response.Response.ToolUseID, askToolUseID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("não capturou o control_response de Answer")
+	}
+}
+
+// TestAnswerRejectsWhenPendingIsNotAskUserQuestion: chamar /answer num pedido
+// COMUM de permissão (Bash) é recusado (SEC-111) — senão o hub mandaria "allow"
+// pro tool_use_id do Bash com o input trocado por {questions,answers}. O
+// pendente é devolvido, então Approve/Deny ainda funcionam.
+func TestAnswerRejectsWhenPendingIsNotAskUserQuestion(t *testing.T) {
+	tgt := &scriptTarget{name: "macbook", run: permissionScript, captured: make(chan string, 1)}
+	l, reg := newTestLauncher(tgt)
+
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "cria arquivo", "", "", "", ""); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	waitFor(t, func() bool {
+		got, _ := reg.Get(sid)
+		return got.State == session.StateNeedsYou
+	})
+
+	err := l.Answer(sid, []session.QuestionAnswer{{Question: "qualquer", Selected: []string{"x"}}})
+	if err != ErrStaleState {
+		t.Fatalf("Answer num pending de Bash: err = %v, quero ErrStaleState", err)
+	}
+	// Pendente devolvido: segue em needs_you e Approve ainda deve funcionar.
+	if got, _ := reg.Get(sid); got.State != session.StateNeedsYou {
+		t.Errorf("estado = %q, quero needs_you (pendente devolvido)", got.State)
+	}
+}
+
+// TestAnswerRejectsUnknownQuestionText: responder com um texto de pergunta que
+// não existe no pedido é ErrInvalidAnswer (a chave não casaria com nada e a
+// pergunta real ficaria sem resposta silenciosamente).
+func TestAnswerRejectsUnknownQuestionText(t *testing.T) {
+	tgt := &scriptTarget{name: "macbook", run: askUserQuestionScript, captured: make(chan string, 1)}
+	l, reg := newTestLauncher(tgt)
+
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "escolha", "", "", "", ""); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	waitFor(t, func() bool {
+		got, _ := reg.Get(sid)
+		return got.State == session.StateNeedsYou
+	})
+
+	err := l.Answer(sid, []session.QuestionAnswer{{Question: "pergunta inexistente", Selected: []string{"Vermelho"}}})
+	if err != ErrInvalidAnswer {
+		t.Fatalf("Answer com pergunta desconhecida: err = %v, quero ErrInvalidAnswer", err)
+	}
+}
+
+// TestApproveRejectsAskUserQuestion: Approve (allow binário) numa pergunta é
+// recusado — aprovar sem answers rodaria a ferramenta sem resposta. Usa /answer.
+func TestApproveRejectsAskUserQuestion(t *testing.T) {
+	tgt := &scriptTarget{name: "macbook", run: askUserQuestionScript, captured: make(chan string, 1)}
+	l, reg := newTestLauncher(tgt)
+
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "escolha", "", "", "", ""); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	waitFor(t, func() bool {
+		got, _ := reg.Get(sid)
+		return got.State == session.StateNeedsYou
+	})
+
+	if err := l.Approve(sid); err != ErrStaleState {
+		t.Fatalf("Approve numa pergunta: err = %v, quero ErrStaleState", err)
+	}
+}
+
+// TestDenyAskUserQuestionAllowed: recusar (deny) uma pergunta é VÁLIDO — o app
+// pode cancelar a pergunta. O control_response é behavior=deny com o toolUseID.
+func TestDenyAskUserQuestionAllowed(t *testing.T) {
+	tgt := &scriptTarget{name: "macbook", run: askUserQuestionScript, captured: make(chan string, 1)}
+	l, reg := newTestLauncher(tgt)
+
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "escolha", "", "", "", ""); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	waitFor(t, func() bool {
+		got, _ := reg.Get(sid)
+		return got.State == session.StateNeedsYou
+	})
+
+	if err := l.Deny(sid); err != nil {
+		t.Fatalf("Deny numa pergunta: err = %v, quero nil", err)
+	}
+	select {
+	case resp := <-tgt.captured:
+		var body struct {
+			Response struct {
+				Response struct {
+					Behavior  string `json:"behavior"`
+					ToolUseID string `json:"toolUseID"`
+				} `json:"response"`
+			} `json:"response"`
+		}
+		if err := json.Unmarshal([]byte(resp), &body); err != nil {
+			t.Fatalf("control_response inválido: %v (%s)", err, resp)
+		}
+		if body.Response.Response.Behavior != "deny" {
+			t.Errorf("behavior = %q, quero deny", body.Response.Response.Behavior)
+		}
+		if body.Response.Response.ToolUseID != askToolUseID {
+			t.Errorf("toolUseID = %q, quero %q", body.Response.Response.ToolUseID, askToolUseID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("não capturou o control_response de Deny")
+	}
+}
+
+// TestAnswerUnknownSession: sessão inexistente → ErrUnknownSession (mesmo
+// mapeamento de erro do Approve/Deny).
+func TestAnswerUnknownSession(t *testing.T) {
+	l, _ := newTestLauncher(nil)
+	if err := l.Answer("fantasma", []session.QuestionAnswer{{Question: "q", Selected: []string{"a"}}}); err != ErrUnknownSession {
+		t.Errorf("err = %v, quero ErrUnknownSession", err)
+	}
+}
+
+// TestAnswerStaleWhenNotNeedsYou: sessão que não está em needs_you → ErrStaleState.
+func TestAnswerStaleWhenNotNeedsYou(t *testing.T) {
+	l, reg := newTestLauncher(nil)
+	now := time.Now()
+	reg.Add(session.Session{ID: "s", State: session.StateRunning, CreatedAt: now, UpdatedAt: now})
+	if err := l.Answer("s", []session.QuestionAnswer{{Question: "q", Selected: []string{"a"}}}); err != ErrStaleState {
+		t.Errorf("err = %v, quero ErrStaleState (não está em needs_you)", err)
+	}
+}
+
+// TestAnswerTwiceIsStale: responder duas vezes é a mesma reivindicação atômica
+// do Approve/Deny — a segunda chega tarde (o pendente já foi consumido).
+func TestAnswerTwiceIsStale(t *testing.T) {
+	tgt := &scriptTarget{name: "macbook", run: askUserQuestionScript, captured: make(chan string, 1)}
+	l, reg := newTestLauncher(tgt)
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "escolha uma cor", "", "", "", ""); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	waitFor(t, func() bool {
+		got, _ := reg.Get(sid)
+		return got.State == session.StateNeedsYou
+	})
+
+	if err := l.Answer(sid, []session.QuestionAnswer{{Question: "Qual cor você prefere?", Selected: []string{"Verde"}}}); err != nil {
+		t.Fatalf("Answer: %v", err)
+	}
+	<-tgt.captured
+
+	if err := l.Answer(sid, []session.QuestionAnswer{{Question: "Qual cor você prefere?", Selected: []string{"Azul"}}}); err != ErrStaleState {
+		t.Errorf("2ª Answer err = %v, quero ErrStaleState", err)
 	}
 }
 

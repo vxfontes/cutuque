@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,7 +40,15 @@ var (
 	ErrShuttingDown     = errors.New("launcher: hub está encerrando")
 	ErrInvalidSessionID = errors.New("launcher: id de sessão inválido")
 	ErrDiscoverFailed   = errors.New("launcher: falha ao descobrir sessões na máquina")
+	ErrInvalidAnswer    = errors.New("launcher: resposta inválida (pergunta desconhecida ou vazia)")
 )
+
+// toolAskUserQuestion é o tool_name nativo da pergunta de seleção do Claude Code.
+// O pending guarda o toolName para distinguir uma pergunta (respondida via
+// Answer, com updatedInput{questions,answers}) de um pedido comum de permissão
+// (Approve/Deny binário). Sem essa checagem, um /answer numa permissão de Bash
+// mandaria "allow" com o input da ferramenta substituído (SEC-111).
+const toolAskUserQuestion = "AskUserQuestion"
 
 // sessionIDPattern valida o id de uma sessão adotada. Cobre os formatos dos três
 // agentes: UUID do Claude/Codex (hex + hífens) e o `ses_<base62>` do OpenCode
@@ -68,11 +77,17 @@ const defaultMaxSessions = 20
 var launchTimeout = 20 * time.Second
 
 // pending é o pedido de permissão vivo de uma sessão: o request_id nativo (alvo
-// do control_response) e o input original da ferramenta (devolvido intacto como
-// updatedInput ao aprovar — protocolo verificado na CLI 2.1.198).
+// do control_response), o input original da ferramenta (devolvido intacto como
+// updatedInput ao aprovar — protocolo verificado na CLI 2.1.198) e o
+// toolName/toolUseID nativos (o tool_use_id é ecoado no control_response como
+// "toolUseID", camelCase, fora do updatedInput — confirmado no SDK oficial).
+// toolName distingue uma pergunta de seleção (AskUserQuestion, respondida via
+// Answer) de um pedido comum de permissão (respondido via Approve/Deny).
 type pending struct {
 	requestID string
 	input     json.RawMessage
+	toolName  string
+	toolUseID string
 }
 
 // Launcher lança e controla sessões de agentes nas máquinas registradas.
@@ -594,17 +609,105 @@ func (l *Launcher) Deny(id string) error { return l.respond(id, false) }
 // respond valida o estado (needs_you) e o pendente, escreve o control_response
 // pelo stdin e aplica user_responded (→ running) ao Engine.
 func (l *Launcher) respond(id string, allow bool) error {
+	p, h, err := l.claimPending(id)
+	if err != nil {
+		return err
+	}
+	// Aprovar às cegas uma pergunta de seleção mandaria "allow" com o input
+	// original (sem answers) → a ferramenta roda sem resposta e o Claude reporta
+	// "usuário não respondeu". Approve de pergunta exige /answer (SEC-111).
+	// Deny (recusar a pergunta) segue válido — behavior=deny é aceito por
+	// qualquer ferramenta.
+	if allow && p.toolName == toolAskUserQuestion {
+		l.setPending(id, p)
+		return ErrStaleState
+	}
+	if err := h.WriteJSON(buildControlResponse(p, allow)); err != nil {
+		// Falha de I/O: devolve o pendente para permitir nova tentativa.
+		l.setPending(id, p)
+		return err
+	}
+	l.eng.Apply(event.Event{SessionID: id, Type: event.UserResponded, At: time.Now()})
+	return nil
+}
+
+// Answer responde a uma pergunta de seleção pendente (a ferramenta nativa
+// AskUserQuestion): monta o updatedInput com o array `questions` ORIGINAL
+// ecoado (inalterado) e o mapa `answers` (question completa → rótulo(s)
+// escolhido(s), juntados com ", " em seleção múltipla — protocolo verificado
+// de ponta a ponta com o SDK oficial). Mesma reivindicação atômica do
+// respond — a sessão precisa estar em needs_you com um pendente vivo; se a
+// escrita falhar, devolve o pendente para permitir nova tentativa.
+func (l *Launcher) Answer(id string, answers []session.QuestionAnswer) error {
+	p, h, err := l.claimPending(id)
+	if err != nil {
+		return err
+	}
+	// Só uma pergunta de seleção aceita Answer: responder um pedido comum de
+	// permissão (Bash etc.) mandaria "allow" com o input da ferramenta trocado
+	// por {questions,answers} — allow indevido de execução (SEC-111). Devolve o
+	// pendente para a ação correta (Approve/Deny) ainda ser possível.
+	if p.toolName != toolAskUserQuestion {
+		l.setPending(id, p)
+		return ErrStaleState
+	}
+	// Cada resposta precisa casar com uma pergunta REAL do pedido (senão a chave
+	// em `answers` não corresponde a nada e a pergunta real fica sem resposta,
+	// silenciosamente). Selected também não pode ser vazio.
+	if err := validateAnswers(p.input, answers); err != nil {
+		l.setPending(id, p)
+		return err
+	}
+	if err := h.WriteJSON(buildAnswerResponse(p, answers)); err != nil {
+		l.setPending(id, p)
+		return err
+	}
+	l.eng.Apply(event.Event{SessionID: id, Type: event.UserResponded, At: time.Now()})
+	return nil
+}
+
+// validateAnswers confere que toda resposta referencia uma pergunta existente no
+// input do pedido e traz ao menos um rótulo selecionado. Sem exigir que TODAS as
+// perguntas sejam respondidas (o app cobre isso na UI); o objetivo aqui é barrar
+// chave inexistente / seleção vazia antes de escrever no stdin do CLI.
+func validateAnswers(input json.RawMessage, answers []session.QuestionAnswer) error {
+	if len(answers) == 0 {
+		return ErrInvalidAnswer
+	}
+	var in struct {
+		Questions []struct {
+			Question string `json:"question"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(input, &in); err != nil {
+		return ErrInvalidAnswer
+	}
+	known := make(map[string]bool, len(in.Questions))
+	for _, q := range in.Questions {
+		known[q.Question] = true
+	}
+	for _, a := range answers {
+		if len(a.Selected) == 0 || !known[a.Question] {
+			return ErrInvalidAnswer
+		}
+	}
+	return nil
+}
+
+// claimPending é a reivindicação ATÔMICA do pendente de uma sessão em
+// needs_you: ler E remover o pendente na mesma seção crítica, junto do handle
+// vivo. Sem isso, duas ações concorrentes (Approve/Deny/Answer) passam ambas
+// pela validação e escrevem dois control_response para o MESMO request_id
+// (review F3, achado #2). Usado por respond e Answer.
+func (l *Launcher) claimPending(id string) (pending, *claudecode.Handle, error) {
 	s, ok := l.reg.Get(id)
 	if !ok {
-		return ErrUnknownSession
+		return pending{}, nil, ErrUnknownSession
 	}
 	if s.State != session.StateNeedsYou {
-		return ErrStaleState // ação obsoleta: a sessão não está mais pedindo
+		return pending{}, nil, ErrStaleState // ação obsoleta: a sessão não está mais pedindo
 	}
 
-	// Reivindicação ATÔMICA do pendente: ler E remover na mesma seção crítica.
-	// Sem isso, Approve/Deny concorrentes passam ambos pela validação e escrevem
-	// dois control_response para o MESMO request_id (review F3, achado #2).
 	l.mu.Lock()
 	p, hasPending := l.pending[id]
 	h, hasHandle := l.handles[id]
@@ -613,16 +716,9 @@ func (l *Launcher) respond(id string, allow bool) error {
 	}
 	l.mu.Unlock()
 	if !hasPending || !hasHandle {
-		return ErrStaleState // needs_you sem permissão viva (ex.: era só uma pergunta)
+		return pending{}, nil, ErrStaleState // needs_you sem permissão viva (ex.: era só uma pergunta)
 	}
-
-	if err := h.WriteJSON(buildControlResponse(p, allow)); err != nil {
-		// Falha de I/O: devolve o pendente para permitir nova tentativa.
-		l.setPending(id, p)
-		return err
-	}
-	l.eng.Apply(event.Event{SessionID: id, Type: event.UserResponded, At: time.Now()})
-	return nil
+	return p, h, nil
 }
 
 // SendText continua a conversa da sessão. Se há um processo VIVO (turno em
@@ -799,7 +895,7 @@ func (a *launchApplier) Apply(ev event.Event) {
 	}
 	switch ev.Type {
 	case event.PermissionRequested:
-		a.l.setPending(ev.SessionID, pending{requestID: ev.ControlID, input: ev.Input})
+		a.l.setPending(ev.SessionID, pending{requestID: ev.ControlID, input: ev.Input, toolName: ev.ToolName, toolUseID: ev.ToolUseID})
 	case event.NeedsInput, event.UserResponded, event.Finished, event.Errored:
 		// Qualquer outro evento de estado: não há permissão viva a responder.
 		a.l.clearPending(ev.SessionID)
@@ -845,12 +941,18 @@ type decision struct {
 	Behavior     string          `json:"behavior"`
 	UpdatedInput json.RawMessage `json:"updatedInput,omitempty"` // allow: input original intacto
 	Message      string          `json:"message,omitempty"`      // deny: justificativa
+	// ToolUseID é o tool_use_id nativo da ferramenta, ecoado em camelCase
+	// ("toolUseID") FORA do updatedInput — confirmado de ponta a ponta com o SDK
+	// oficial, presente tanto no allow quanto no deny. omitempty: fixtures sem
+	// tool_use_id (ex.: os testes sintéticos de Bash) simplesmente não o emitem.
+	ToolUseID string `json:"toolUseID,omitempty"`
 }
 
 // buildControlResponse monta o control_response de allow (devolvendo o input
-// original como updatedInput) ou deny (com a mensagem padrão).
+// original como updatedInput) ou deny (com a mensagem padrão), ecoando o
+// toolUseID do pendente em ambos.
 func buildControlResponse(p pending, allow bool) controlResponse {
-	d := decision{}
+	d := decision{ToolUseID: p.toolUseID}
 	if allow {
 		d.Behavior = "allow"
 		input := p.input
@@ -870,4 +972,60 @@ func buildControlResponse(p pending, allow bool) controlResponse {
 			Response:  d,
 		},
 	}
+}
+
+// answerUpdatedInput é o updatedInput do allow de uma pergunta de seleção
+// (AskUserQuestion): o array `questions` ORIGINAL ecoado inalterado (contrato
+// verificado do protocolo) + o mapa `answers` (question completa → rótulo(s)
+// escolhido(s)). A ordem dos campos no struct (Questions antes de Answers)
+// mantém o shape do exemplo verificado: {"questions":[...],"answers":{...}}.
+type answerUpdatedInput struct {
+	Questions json.RawMessage   `json:"questions"`
+	Answers   map[string]string `json:"answers"`
+}
+
+// buildAnswerResponse monta o control_response de allow de uma resposta a
+// AskUserQuestion: `answers` é um map[question]="label" (seleção única) ou
+// "label1, label2" (múltipla, juntado com ", " — verificado com o SDK oficial;
+// NUNCA um array). `questions` é ecoado inalterado a partir do input original do
+// pendente (não do array vindo do handler — defesa contra a usuária/app mandar
+// um `question` que não bate com o pedido nativo).
+func buildAnswerResponse(p pending, answers []session.QuestionAnswer) controlResponse {
+	m := make(map[string]string, len(answers))
+	for _, a := range answers {
+		m[a.Question] = strings.Join(a.Selected, ", ")
+	}
+	updated, _ := json.Marshal(answerUpdatedInput{
+		Questions: originalQuestions(p.input),
+		Answers:   m,
+	})
+	d := decision{
+		Behavior:     "allow",
+		UpdatedInput: updated,
+		ToolUseID:    p.toolUseID,
+	}
+	return controlResponse{
+		Type: "control_response",
+		Response: controlResponseBody{
+			Subtype:   "success",
+			RequestID: p.requestID,
+			Response:  d,
+		},
+	}
+}
+
+// originalQuestions extrai o array `questions` bruto do input original do
+// AskUserQuestion (guardado no pendente), para ecoar inalterado no
+// updatedInput — protocolo verificado: "questions deve ser ecoado inalterado".
+func originalQuestions(input json.RawMessage) json.RawMessage {
+	var in struct {
+		Questions json.RawMessage `json:"questions"`
+	}
+	if len(input) == 0 {
+		return json.RawMessage(`[]`)
+	}
+	if err := json.Unmarshal(input, &in); err != nil || len(in.Questions) == 0 {
+		return json.RawMessage(`[]`)
+	}
+	return in.Questions
 }

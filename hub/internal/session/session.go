@@ -52,6 +52,40 @@ type Session struct {
 	// local fora do tmux. Permite ao app abrir o terminal ao vivo dessa exata
 	// sessão (correlação robusta, mesmo com várias sessões na mesma pasta).
 	Pane string `json:"pane,omitempty"`
+	// PendingQuestions é preenchido quando o pending é uma pergunta de seleção
+	// (a ferramenta nativa AskUserQuestion do Claude Code) em vez de um pedido
+	// comum de permissão: o app troca o sim/não por um seletor (single/multi
+	// select) com as opções em texto. Vazio nos demais casos de needs_you (o
+	// app cai de volta no sim/não de PendingPrompt). O Engine é quem preenche
+	// (único escritor do Registry) — ver docs/02 e o protocolo do
+	// control_request can_use_tool.
+	PendingQuestions []Question `json:"pending_questions,omitempty"`
+}
+
+// Question é uma pergunta de seleção do AskUserQuestion, no formato que o app
+// renderiza: o texto da pergunta, um header curto (categoria/título), se aceita
+// múltiplas escolhas (multiSelect) e as opções disponíveis.
+type Question struct {
+	Question    string           `json:"question"`
+	Header      string           `json:"header,omitempty"`
+	MultiSelect bool             `json:"multiSelect"`
+	Options     []QuestionOption `json:"options"`
+}
+
+// QuestionOption é uma opção de resposta de uma Question: o rótulo (o texto que
+// vira a resposta, ecoado ao CLI) e uma descrição opcional.
+type QuestionOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+// QuestionAnswer é a resposta da usuária a UMA pergunta pendente: Question é o
+// texto EXATO da pergunta (chave do map `answers` do control_response) e
+// Selected são os rótulos escolhidos — 1 item em seleção única, N em múltipla.
+// Usado pela ação Launcher.Answer (POST /sessions/{id}/answer).
+type QuestionAnswer struct {
+	Question string   `json:"question"`
+	Selected []string `json:"selected"`
 }
 
 // Discovered é uma sessão do Claude Code encontrada no disco de uma máquina

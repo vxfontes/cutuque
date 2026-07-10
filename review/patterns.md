@@ -2,6 +2,13 @@
 
 Alimentado quando um padrão aparece pela 2ª vez ou mais.
 
+## campo-de-desambiguação-adicionado-mas-nunca-lido
+**Categoria:** correctness | design
+**Frequência:** 1x (candidato — critério de promoção é 2x) | **Primeira vez:** 2026-07-10
+**Descrição:** um campo é adicionado a uma struct especificamente para permitir uma validação nova (o próprio comentário do campo descreve o propósito de checagem), a leitura/gravação do campo é implementada, mas o CONSUMO (o `if` que efetivamente usa o campo para decidir/rejeitar) nunca é escrito — o campo fica "morto" (gravado, nunca lido), e o código segue em frente assumindo, sem checar, que o caso que o campo existiria para distinguir nunca vai acontecer. Visto em `hub/internal/launcher/launcher.go`: `pending.toolName` foi adicionado com o comentário explícito "toolName distingue uma pergunta de seleção (AskUserQuestion, respondida via Answer) de um pedido comum de permissão (respondido via Approve/Deny)", preenchido em `launchApplier.Apply`, mas `Launcher.Answer`/`respond` nunca leem `p.toolName` antes de agir — `Answer` constrói e envia um "allow" incondicional para QUALQUER pending, mesmo quando não é um `AskUserQuestion` (confirmado por PoC, ver `security.md#SEC-111`).
+**Recomendação:** quando um campo é adicionado com um comentário que descreve seu propósito como "distinguir X de Y para decidir Z", tratar a AUSÊNCIA do `if` correspondente como um sinal de revisão automático — grep pelo nome do campo no arquivo antes de aprovar; se o único uso for a atribuição (nunca uma leitura em um `if`/`switch`), o código não fez o que o comentário promete. Se este padrão aparecer de novo, promover para recomendação definitiva com uma regra de lint/checklist explícita de review.
+`[→ security.md#SEC-111]`
+
 ## reivindicação-não-atômica-de-recurso-compartilhado
 **Categoria:** correctness | concurrency
 **Frequência:** 5x | **Primeira vez:** anterior a 2026-07-03 (`Handle.Close`, `Launcher.respond` — histórico completo em `hub/review/patterns.md#reivindicação-não-atômica-de-recurso-compartilhado`) | **Última:** 2026-07-03 (`Engine.ensureRunning`)

@@ -46,6 +46,13 @@ const (
 // 2.1.198). O Launcher os guarda para responder pelo stdin; o Engine só usa
 // Data (resumo humano) para o estado.
 //
+// ToolName e ToolUseID também só aparecem em permission_requested: ToolName é o
+// nome nativo da ferramenta (ex.: "Bash", "AskUserQuestion") — o Engine o usa
+// para distinguir uma pergunta de seleção (AskUserQuestion) de um pedido comum de
+// permissão, e montar PendingQuestions a partir de Input. ToolUseID é o
+// tool_use_id nativo (camelCase "toolUseID" no control_response, verificado no
+// SDK oficial) que o Launcher ecoa de volta tanto no allow quanto no deny.
+//
 // Kind só é usado quando Type == OutputChunk: qualifica o pedaço de saída
 // como user/assistant/tool/tool_result (ver constantes Kind* acima) para o
 // contrato tipado de output do app. Nos demais tipos de evento fica vazio.
@@ -67,4 +74,6 @@ type Event struct {
 	External  bool            `json:"external,omitempty"`
 	ControlID string          `json:"control_id,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
+	ToolName  string          `json:"tool_name,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
 }

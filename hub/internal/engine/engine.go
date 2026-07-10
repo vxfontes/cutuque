@@ -5,6 +5,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"time"
 
@@ -161,9 +162,66 @@ func (e *Engine) Apply(ev event.Event) {
 	// segue o único escritor do Registry.
 	if target == session.StateNeedsYou {
 		e.reg.SetPendingPrompt(ev.SessionID, ev.Data)
+		// PendingQuestions (o seletor que o app mostra em vez do sim/não): só
+		// quando o pedido é a ferramenta nativa de seleção AskUserQuestion. Nos
+		// demais needs_you (permissão comum ou needs_input), garante limpo —
+		// senão uma pergunta de seleção anterior "vazaria" pro pedido seguinte.
+		if ev.Type == event.PermissionRequested && ev.ToolName == "AskUserQuestion" {
+			if qs, ok := parseQuestions(ev.Input); ok {
+				e.reg.SetPendingQuestions(ev.SessionID, qs)
+			} else {
+				e.reg.ClearPendingQuestions(ev.SessionID)
+			}
+		} else {
+			e.reg.ClearPendingQuestions(ev.SessionID)
+		}
 	} else {
-		e.reg.ClearPendingPrompt(ev.SessionID)
+		e.reg.ClearPendingPrompt(ev.SessionID) // já limpa PendingQuestions junto
 	}
+}
+
+// askUserQuestionsInput espelha o schema de input.questions do AskUserQuestion
+// (protocolo verificado na CLI 2.1.198/2.1.206, ver docs/03): cada pergunta tem
+// o texto, um header curto, se aceita múltiplas escolhas e as opções (rótulo +
+// descrição) que o app oferece à usuária.
+type askUserQuestionsInput struct {
+	Questions []struct {
+		Question    string `json:"question"`
+		Header      string `json:"header"`
+		MultiSelect bool   `json:"multiSelect"`
+		Options     []struct {
+			Label       string `json:"label"`
+			Description string `json:"description"`
+		} `json:"options"`
+	} `json:"questions"`
+}
+
+// parseQuestions decodifica o input bruto de um AskUserQuestion em
+// []session.Question (o formato que o Registry guarda e o app renderiza).
+// ok=false se o input não tiver questions (JSON inválido ou array vazio) — o
+// chamador trata como "sem seleção disponível" (limpa PendingQuestions).
+func parseQuestions(raw json.RawMessage) ([]session.Question, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+	var in askUserQuestionsInput
+	if err := json.Unmarshal(raw, &in); err != nil || len(in.Questions) == 0 {
+		return nil, false
+	}
+	qs := make([]session.Question, 0, len(in.Questions))
+	for _, q := range in.Questions {
+		opts := make([]session.QuestionOption, 0, len(q.Options))
+		for _, o := range q.Options {
+			opts = append(opts, session.QuestionOption{Label: o.Label, Description: o.Description})
+		}
+		qs = append(qs, session.Question{
+			Question:    q.Question,
+			Header:      q.Header,
+			MultiSelect: q.MultiSelect,
+			Options:     opts,
+		})
+	}
+	return qs, true
 }
 
 // ensureRunning garante que a sessão exista e esteja em running. Na criação,

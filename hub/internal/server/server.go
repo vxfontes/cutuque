@@ -78,6 +78,10 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		mux.Handle("POST /sessions", requireAuth(cfg.Token, LaunchHandler(lch)))
 		mux.Handle("POST /sessions/{id}/approve", requireAuth(cfg.Token, ApproveHandler(lch)))
 		mux.Handle("POST /sessions/{id}/deny", requireAuth(cfg.Token, DenyHandler(lch)))
+		// Pergunta de seleção (ferramenta nativa AskUserQuestion): a app troca o
+		// sim/não pelo seletor de PendingQuestions e responde aqui em vez de
+		// approve/deny.
+		mux.Handle("POST /sessions/{id}/answer", requireAuth(cfg.Token, AnswerHandler(lch)))
 		mux.Handle("POST /sessions/{id}/input", requireAuth(cfg.Token, InputHandler(lch)))
 		mux.Handle("POST /sessions/{id}/reply", requireAuth(cfg.Token, ReplyHandler(lch)))
 		// Máquinas disponíveis (picker do app) e apagar sessão (swipe-to-delete).

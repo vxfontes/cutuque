@@ -148,6 +148,89 @@ func TestParseControlRequestEmitsPermission(t *testing.T) {
 	}
 }
 
+// TestParseControlRequestAskUserQuestionSingle cobre o fixture REAL (capturado
+// da CLI 2.1.206) de uma pergunta de seleção ÚNICA: o permission_requested
+// resultante carrega ToolName="AskUserQuestion", ToolUseID e o Input contendo
+// o array `questions` intacto (o Engine faz o parse completo a partir daqui).
+func TestParseControlRequestAskUserQuestionSingle(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "fixture-askuserquestion-single.jsonl"))
+	if err != nil {
+		t.Fatalf("lendo fixture: %v", err)
+	}
+	evs := parseAll(t, data)
+	if len(evs) != 1 || evs[0].Type != event.PermissionRequested {
+		t.Fatalf("evs = %+v, quero um permission_requested", evs)
+	}
+	e := evs[0]
+	if e.ToolName != "AskUserQuestion" {
+		t.Errorf("ToolName = %q, quero \"AskUserQuestion\"", e.ToolName)
+	}
+	if e.ToolUseID != "toolu_016tGouKiqK5akLjpwsnByXx" {
+		t.Errorf("ToolUseID = %q, quero o tool_use_id da fixture", e.ToolUseID)
+	}
+	if e.ControlID != "f8a9ad13-7d58-4da2-af84-a59079a6047b" {
+		t.Errorf("ControlID = %q, quero o request_id da fixture", e.ControlID)
+	}
+	if e.Data != "Pergunta: Qual cor você prefere?" {
+		t.Errorf("Data = %q, quero \"Pergunta: Qual cor você prefere?\"", e.Data)
+	}
+	var in struct {
+		Questions []struct {
+			Question    string `json:"question"`
+			MultiSelect bool   `json:"multiSelect"`
+			Options     []struct {
+				Label string `json:"label"`
+			} `json:"options"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(e.Input, &in); err != nil {
+		t.Fatalf("Input inválido: %v", err)
+	}
+	if len(in.Questions) != 1 || in.Questions[0].Question != "Qual cor você prefere?" {
+		t.Fatalf("Input.questions = %+v, quero 1 pergunta \"Qual cor você prefere?\"", in.Questions)
+	}
+	if in.Questions[0].MultiSelect {
+		t.Error("MultiSelect = true, quero false (seleção única)")
+	}
+	if len(in.Questions[0].Options) != 3 || in.Questions[0].Options[0].Label != "Vermelho" {
+		t.Errorf("Options = %+v, quero 3 opções começando com Vermelho", in.Questions[0].Options)
+	}
+}
+
+// TestParseControlRequestAskUserQuestionMulti cobre o fixture REAL de uma
+// pergunta de seleção MÚLTIPLA (multiSelect:true).
+func TestParseControlRequestAskUserQuestionMulti(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "fixture-askuserquestion-multi.jsonl"))
+	if err != nil {
+		t.Fatalf("lendo fixture: %v", err)
+	}
+	evs := parseAll(t, data)
+	if len(evs) != 1 || evs[0].Type != event.PermissionRequested {
+		t.Fatalf("evs = %+v, quero um permission_requested", evs)
+	}
+	e := evs[0]
+	if e.ToolUseID != "toolu_01Ns9nkRpRW6hbzpwPybUjoA" {
+		t.Errorf("ToolUseID = %q, quero o tool_use_id da fixture", e.ToolUseID)
+	}
+	var in struct {
+		Questions []struct {
+			MultiSelect bool `json:"multiSelect"`
+			Options     []struct {
+				Label string `json:"label"`
+			} `json:"options"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(e.Input, &in); err != nil {
+		t.Fatalf("Input inválido: %v", err)
+	}
+	if len(in.Questions) != 1 || !in.Questions[0].MultiSelect {
+		t.Fatalf("Input.questions = %+v, quero multiSelect true", in.Questions)
+	}
+	if len(in.Questions[0].Options) != 4 {
+		t.Errorf("Options = %+v, quero 4 opções (Go/Swift/Python/Rust)", in.Questions[0].Options)
+	}
+}
+
 func TestParseControlRequestOtherSubtypeIgnored(t *testing.T) {
 	line := []byte(`{"type":"control_request","request_id":"r","request":{"subtype":"initialize"}}`)
 	evs, err := ParseLine(line)
