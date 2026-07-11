@@ -104,6 +104,13 @@ final class SessionDetailViewModel: ObservableObject {
         await runAction { try await self.api.deny(sessionID: self.session.id) }
     }
 
+    /// Responde a uma ou mais perguntas de seleção pendentes (AskUserQuestion).
+    /// Igual às demais ações: 409 recarrega a sessão e avisa "o estado mudou"
+    /// (o card de pergunta some sozinho quando a sessão sai de needs_you).
+    func answerQuestions(_ answers: [APIClient.AnswerItem]) async {
+        await runAction { try await self.api.answer(sessionID: self.session.id, answers: answers) }
+    }
+
     /// Envia texto livre ao agente. Retorna `true` se enviou (para limpar o campo).
     func sendInput(_ text: String) async -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -189,11 +196,25 @@ struct SessionDetailView: View {
     /// "competindo" visualmente com a resposta do agente.
     private var chatItems: [ChatItem] { ChatItem.grouping(model.chunks) }
 
+    /// Perguntas de seleção pendentes (ferramenta AskUserQuestion), quando o
+    /// pedido pendente NÃO é uma permissão comum sim/não. SÓ para sessões
+    /// lançadas pelo app (mesma regra do `permissionPrompt`) — sessões
+    /// externas respondem no terminal.
+    private var pendingQuestions: [PendingQuestion]? {
+        guard model.session.state == .needsYou, !model.session.isExternal,
+              let questions = model.session.pendingQuestions, !questions.isEmpty
+        else { return nil }
+        return questions
+    }
+
     /// Texto do pedido de permissão, se houver, quando a sessão precisa de você.
     /// SÓ para sessões lançadas pelo app (que o hub controla) — nessas o
     /// aprovar/negar funciona. Sessões externas (hook/tmux) respondem no terminal.
+    /// Mutuamente exclusivo com `pendingQuestions` — quando o pedido é uma
+    /// pergunta, o card de pergunta manda, nunca o sim/não.
     private var permissionPrompt: String? {
         guard model.session.state == .needsYou, !model.session.isExternal,
+              (model.session.pendingQuestions ?? []).isEmpty,
               let prompt = model.session.pendingPrompt,
               !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
@@ -212,8 +233,17 @@ struct SessionDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
-            // Card de permissão acima do terminal (invariante docs/04: sempre exibe o texto).
-            if let prompt = permissionPrompt {
+            // Card de permissão/pergunta acima do terminal (invariante docs/04:
+            // sempre exibe o texto). Pergunta manda quando presente — nunca o
+            // sim/não sem sentido para uma pergunta de seleção.
+            if let questions = pendingQuestions {
+                QuestionCardView(
+                    questions: questions,
+                    actionInProgress: model.actionInProgress,
+                    onSubmit: { answers in Task { await model.answerQuestions(answers) } },
+                    onCancel: { Task { await model.deny() } }
+                )
+            } else if let prompt = permissionPrompt {
                 permissionCard(prompt)
             } else if let prompt = externalPrompt {
                 externalPromptCard(prompt)

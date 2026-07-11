@@ -72,5 +72,61 @@ Quando uma ferramenta não é coberta pelas regras de permissão, o CLI **pausa*
 | Protocolo | Evento normalizado | Estado |
 |-----------|--------------------|--------|
 | `control_request/can_use_tool` | `permission_requested` (Data = resumo humano, ControlID = request_id) | → `needs_you` + `pending_prompt` |
+| `control_request/can_use_tool` (`tool_name: AskUserQuestion`) | `permission_requested` (+ ToolName/ToolUseID; Engine popula `PendingQuestions`) | → `needs_you` + `pending_questions` |
 | approve/deny do app | `user_responded` | → `running` |
+| answer do app (resposta de pergunta) | `user_responded` | → `running` |
 | user message via stdin | `user_responded` | → `running` |
+
+## Perguntas de seleção — `AskUserQuestion`
+
+> Verificado empiricamente em 2026-07-10 (CLI 2.1.198, probe
+> `scratchpad/probe_ask_question.py`, fixtures em
+> `hub/internal/adapter/claudecode/testdata/fixture-askuserquestion-*.jsonl`) e
+> cruzado com o fonte do SDK oficial `@anthropic-ai/claude-agent-sdk`.
+
+Quando o Claude faz uma pergunta de **seleção** (única ou múltipla, com opções em
+texto), ela chega pelo **mesmo** canal `can_use_tool`, com `tool_name` =
+`AskUserQuestion` — mas responder com allow "puro" roda a ferramenta **sem
+resposta** e o Claude reporta "usuário não respondeu". A escolha vai no
+`updatedInput`. No `--permission-mode default` o AskUserQuestion **sempre**
+dispara o `control_request` (nunca é auto-aprovado).
+
+**Pedido (CLI → hub):**
+
+```json
+{"type":"control_request","request_id":"…","request":{
+  "subtype":"can_use_tool","tool_name":"AskUserQuestion",
+  "tool_use_id":"toolu_…","requires_user_interaction":true,
+  "input":{"questions":[{
+    "question":"Qual cor você prefere?","header":"Cor","multiSelect":false,
+    "options":[{"label":"Vermelho","description":"…"},{"label":"Verde","description":"…"}]
+  }]}}}
+```
+
+- `questions`: 1 a 4. `header`: ≤12 chars. `options`: 2 a 4 (`label`+`description`, `preview?` opcional). `multiSelect`: bool.
+
+**Resposta (hub → CLI):** `allow` ecoando `questions` inalterado + `answers` (mapa
+`question` → rótulo) + `toolUseID` (camelCase, **fora** do `updatedInput`):
+
+```json
+{"type":"control_response","response":{"subtype":"success","request_id":"<o mesmo>","response":{
+  "behavior":"allow",
+  "updatedInput":{"questions":[<array ORIGINAL ecoado>],
+                  "answers":{"Qual cor você prefere?":"Vermelho"}},
+  "toolUseID":"toolu_…"}}}
+```
+
+- **multiSelect:** o valor continua **string**; vários rótulos juntados com `", "` (ex.: `"Go, Swift"`) — nunca array.
+- **"Other"/texto livre:** o valor é o próprio texto digitado (sem marcador).
+- **Cancelar** uma pergunta = `deny` normal (aceito para AskUserQuestion).
+
+**Guardas (SEC-111):** `Answer` só aceita pendente cujo `tool_name` é
+`AskUserQuestion`, e valida que cada `question` respondida existe no pedido;
+`Approve` binário recusa uma pergunta (tem que ser `answer`). Isso evita que um
+`/answer` numa permissão comum (Bash) vire um `allow` de execução com o input
+trocado.
+
+**Contrato com o app:** o JSON da sessão traz `pending_questions` quando o
+pendente é uma pergunta (senão ausente); o app responde em
+`POST /sessions/{id}/answer` com `{"answers":[{"question":"…","selected":["…"]}]}`
+(o hub junta múltiplos com `", "`).

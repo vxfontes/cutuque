@@ -520,9 +520,41 @@ struct APIClient {
         try await postAction(sessionID: sessionID, action: "approve")
     }
 
-    /// Nega o pedido de permissão pendente da sessão.
+    /// Nega o pedido de permissão pendente da sessão. Também usado para
+    /// CANCELAR uma pergunta de seleção pendente (o hub aceita deny de
+    /// pergunta; NÃO existe "aprovar" pergunta — só responder ou cancelar).
     func deny(sessionID: String) async throws {
         try await postAction(sessionID: sessionID, action: "deny")
+    }
+
+    /// Um item de resposta a uma pergunta de seleção: `question` é o texto
+    /// EXATO da pergunta (como veio em `pending_questions`); `selected` são os
+    /// labels escolhidos (1 para seleção única, N para múltipla) — ou o texto
+    /// livre digitado em "Outro", sem marcador especial.
+    struct AnswerItem: Encodable {
+        let question: String
+        let selected: [String]
+    }
+
+    private struct AnswerBody: Encodable {
+        let answers: [AnswerItem]
+    }
+
+    /// Responde a uma ou mais perguntas de seleção pendentes (ferramenta
+    /// AskUserQuestion). `POST /sessions/{id}/answer`. IMPORTANTE: pergunta
+    /// NÃO se aprova por `/approve` (o hub rejeita com 409) — só por aqui, ou
+    /// por `deny(sessionID:)` para cancelar.
+    func answer(sessionID: String, answers: [AnswerItem]) async throws {
+        let url = baseURL
+            .appendingPathComponent("sessions")
+            .appendingPathComponent(sessionID)
+            .appendingPathComponent("answer")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(AnswerBody(answers: answers))
+        try await send(request)
     }
 
     /// Marca a sessão como concluída (tira de needs_you) SEM apagá-la — usado

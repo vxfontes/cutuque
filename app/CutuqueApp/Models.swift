@@ -100,6 +100,29 @@ struct OutputChunk: Decodable, Identifiable, Equatable {
     }
 }
 
+// MARK: - Pergunta de seleção (AskUserQuestion)
+
+/// Uma opção de resposta para uma pergunta de seleção, com rótulo em destaque
+/// e descrição opcional em texto corrido.
+struct QuestionOption: Codable, Equatable, Hashable, Identifiable {
+    let label: String
+    let description: String?
+    var id: String { label }
+}
+
+/// Uma pergunta de seleção pendente (única ou múltipla). Presente no
+/// `pending_questions` da sessão quando o pedido pendente NÃO é uma permissão
+/// comum sim/não, e sim uma pergunta com opções (ferramenta AskUserQuestion do
+/// Claude Code). `header` é curto (≤12 chars, ex.: "Cor"); `question` é o
+/// texto exato a devolver em `POST /answer`.
+struct PendingQuestion: Codable, Equatable, Hashable, Identifiable {
+    let question: String
+    let header: String
+    let multiSelect: Bool
+    let options: [QuestionOption]
+    var id: String { question }
+}
+
 // MARK: - Sessão
 
 /// Uma sessão de agente reportada pelo hub.
@@ -125,10 +148,14 @@ struct Session: Codable, Identifiable, Equatable, Hashable {
     let external: Bool?
     /// Pasta onde a sessão roda (para a árvore no detalhe/ao-vivo).
     let cwd: String?
+    /// Perguntas de seleção pendentes (ferramenta AskUserQuestion), quando o
+    /// pedido pendente NÃO é uma permissão comum sim/não. Ausente/nil = pedido
+    /// comum (aprovar/negar como antes). 1 a 4 perguntas.
+    let pendingQuestions: [PendingQuestion]?
 
-    // pane/external/cwd podem faltar em respostas de um hub antigo → default seguro.
+    // pane/external/cwd/pendingQuestions podem faltar em respostas de um hub antigo → default seguro.
     private enum CodingKeys: String, CodingKey {
-        case id, machine, agent, title, state, createdAt, updatedAt, pendingPrompt, pane, external, cwd
+        case id, machine, agent, title, state, createdAt, updatedAt, pendingPrompt, pane, external, cwd, pendingQuestions
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -143,6 +170,7 @@ struct Session: Codable, Identifiable, Equatable, Hashable {
         pane = try? c.decode(String.self, forKey: .pane)
         external = try? c.decode(Bool.self, forKey: .external)
         cwd = try? c.decode(String.self, forKey: .cwd)
+        pendingQuestions = try? c.decode([PendingQuestion].self, forKey: .pendingQuestions)
     }
     /// True quando é uma sessão externa (hook/adoção) — o app NÃO mostra
     /// aprovar/negar (a resposta é no terminal do Mac).

@@ -23,23 +23,54 @@ final class PhoneWatchRelay: NSObject, WCSessionDelegate {
             case "needsYou":
                 let all = (try? await api.sessions()) ?? []
                 let needs = all.filter { $0.state == .needsYou }.map { s -> [String: Any] in
-                    [
+                    // Perguntas de seleção (AskUserQuestion), se houver — o relógio
+                    // usa isso pra desenhar as opções em vez do sim/não.
+                    let questions = (s.pendingQuestions ?? []).map { q -> [String: Any] in
+                        [
+                            "question": q.question,
+                            "header": q.header,
+                            "multiSelect": q.multiSelect,
+                            "options": q.options.map { opt -> [String: Any] in
+                                ["label": opt.label, "description": opt.description ?? ""]
+                            },
+                        ]
+                    }
+                    return [
                         "id": s.id,
                         "title": s.title,
                         "prompt": (s.pendingPrompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
                         "hasPane": s.tmuxTarget != nil,
+                        // Sessão externa (hook/tmux de terceiro): o hub NÃO controla o
+                        // gate dela, então o relógio a trata como read-only (não
+                        // oferece aprovar/negar/responder — a resposta é no terminal).
+                        "isExternal": s.isExternal,
+                        "questions": questions,
                     ]
                 }
                 replyHandler(["sessions": needs])
             case "approve":
-                try? await api.approve(sessionID: id)
-                replyHandler(["ok": true])
+                replyHandler(["ok": (try? await api.approve(sessionID: id)) != nil])
             case "deny":
-                try? await api.deny(sessionID: id)
-                replyHandler(["ok": true])
+                replyHandler(["ok": (try? await api.deny(sessionID: id)) != nil])
             case "reply":
-                if let text = message["text"] as? String { try? await api.reply(sessionID: id, text: text) }
-                replyHandler(["ok": true])
+                guard let text = message["text"] as? String, !text.isEmpty else { replyHandler(["ok": false]); return }
+                replyHandler(["ok": (try? await api.reply(sessionID: id, text: text)) != nil])
+            case "answer":
+                // Resposta a pergunta de seleção — vinda do pulso já pronta como
+                // [{"question":..., "selected":[...]}]. Pergunta não tem
+                // "aprovar": só responde (aqui) ou cancela (deny). Reporta sucesso
+                // REAL (não engole erro): senão o pulso dá haptic + dismiss de falso
+                // sucesso quando a resposta não chegou ao processo (ex.: 409).
+                guard let rawAnswers = message["answers"] as? [[String: Any]] else {
+                    replyHandler(["ok": false]); return
+                }
+                let items = rawAnswers.compactMap { dict -> APIClient.AnswerItem? in
+                    guard let question = dict["question"] as? String,
+                          let selected = dict["selected"] as? [String], !selected.isEmpty else { return nil }
+                    return APIClient.AnswerItem(question: question, selected: selected)
+                }
+                guard !items.isEmpty else { replyHandler(["ok": false]); return }
+                replyHandler(["ok": (try? await api.answer(sessionID: id, answers: items)) != nil])
             default:
                 replyHandler(["ok": false])
             }

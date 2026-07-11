@@ -2,6 +2,13 @@
 
 Alimentado quando um padrão aparece pela 2ª vez ou mais.
 
+## superfície-secundária-não-replica-o-gate-de-autorização-da-superfície-primária
+**Categoria:** security | design
+**Frequência:** 2x (as duas ocorrências nesta mesma leva) | **Primeira vez:** 2026-07-10 | **Última:** 2026-07-10
+**Descrição:** quando uma ação sensível nova é adicionada (aqui: responder/cancelar uma pergunta de seleção `AskUserQuestion`), o guard que decide QUANDO essa ação é segura de expor (aqui: `!isExternal` — sessão lançada pelo app vs. adotada de hook/terminal, que o hub não controla via canal de controle) é implementado corretamente na superfície PRIMÁRIA (`SessionDetailView.swift`, iOS) mas não é propagado às superfícies SECUNDÁRIAS que expõem a MESMA ação por um canal diferente. Duas ocorrências confirmadas na mesma revisão: (1) o relógio (`WatchConnector`/`WatchRootView`/`PhoneWatchRelay`) — o payload da ponte WatchConnectivity nem carrega o campo `isExternal`, só o proxy pré-existente `hasPane`, e o novo branch `hasQuestions` não reaplica nenhum gate, ao contrário do branch de Aprovar/Negar que já tinha `!session.hasPane`; (2) a notificação push (`hub/internal/notifier/notifier.go#buildPush` + `app/CutuqueApp/PushManager.swift`, nenhum dos dois tocado por esta leva) — a categoria `NEEDS_YOU` sempre expõe as quick actions `APPROVE_ACTION`/`DENY_ACTION`, sem distinguir se o pending é uma pergunta de seleção ou uma permissão comum, oferecendo um caminho de UM TOQUE, direto da tela de bloqueio, para acionar `/approve` sobre um pending que na verdade é um `AskUserQuestion` — o caminho de reprodução mais direto encontrado para o SEC-111 já catalogado (aberto).
+**Recomendação:** ao adicionar uma ação sensível nova que só é segura sob uma condição já modelada em UMA superfície (ex.: `Session.isExternal`), fazer um inventário explícito de TODAS as superfícies que hoje expõem ações irmãs da mesma sessão (lista viva atual: tela de detalhe iOS, lista iOS com swipe, relógio via WatchConnectivity, notificação push com quick actions) antes de considerar a mudança completa — e propagar o MESMO campo de gate (não um proxy correlacionado, como `hasPane`) para cada uma. Se este padrão aparecer de novo (3ª ocorrência, fora desta leva), promover para uma checklist formal de "matriz de superfícies x ações" no processo de review.
+`[→ security.md#SEC-112]` `[→ security.md#SEC-111]`
+
 ## campo-de-desambiguação-adicionado-mas-nunca-lido
 **Categoria:** correctness | design
 **Frequência:** 1x (candidato — critério de promoção é 2x) | **Primeira vez:** 2026-07-10
