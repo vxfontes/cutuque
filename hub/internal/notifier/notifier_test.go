@@ -2,6 +2,7 @@ package notifier
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -145,6 +146,29 @@ func TestNotifiesOnlyOnceForNeedsYou(t *testing.T) {
 
 // TestForegroundSuppressesPush: com o app em foreground, uma transição que
 // normalmente cutuca (done) NÃO dispara push.
+// TestNeedsYouQuestionUsesQuestionCategory: quando o needs_you é uma pergunta de
+// seleção (AskUserQuestion), o push usa a categoria NEEDS_YOU_QUESTION (só
+// Cancelar/Abrir no app), não a NEEDS_YOU comum (que tem Aprovar — sem sentido
+// numa pergunta, e rejeitado pelo hub — SEC-111).
+func TestNeedsYouQuestionUsesQuestionCategory(t *testing.T) {
+	eng, _, _, fake, _ := fixture(t)
+	startSession(eng, "sq")
+	input := `{"questions":[{"question":"Qual cor?","header":"Cor","multiSelect":false,"options":[{"label":"Vermelho","description":"x"},{"label":"Verde","description":"y"}]}]}`
+	eng.Apply(event.Event{
+		SessionID: "sq", Type: event.PermissionRequested,
+		ToolName: "AskUserQuestion", ToolUseID: "toolu_x",
+		Data: "Pergunta: Qual cor?", Input: json.RawMessage(input), At: time.Now(),
+	})
+
+	body := string(recv(t, fake).payload)
+	if !strings.Contains(body, `"category":"NEEDS_YOU_QUESTION"`) {
+		t.Errorf("push de pergunta sem category NEEDS_YOU_QUESTION: %s", body)
+	}
+	if strings.Contains(body, `"category":"NEEDS_YOU"`) && !strings.Contains(body, `"category":"NEEDS_YOU_QUESTION"`) {
+		t.Errorf("push de pergunta caiu na categoria comum NEEDS_YOU: %s", body)
+	}
+}
+
 func TestForegroundSuppressesPush(t *testing.T) {
 	eng, _, _, fake, n := fixture(t)
 	n.SetForeground(true, 1)

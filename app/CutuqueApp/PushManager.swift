@@ -8,6 +8,9 @@ import UserNotifications
 /// do payload; as ações são as escolhidas pelo usuário na notificação.
 enum PushCategory {
     static let needsYou = "NEEDS_YOU"
+    /// Pergunta de seleção (AskUserQuestion): não tem "Aprovar" (a resposta é a
+    /// escolha, feita no app). Só Cancelar (deny) + Abrir para responder.
+    static let needsYouQuestion = "NEEDS_YOU_QUESTION"
     static let done = "DONE"
     static let error = "ERROR"
 }
@@ -98,9 +101,20 @@ final class PushManager {
         let open = UNNotificationAction(
             identifier: PushAction.open, title: "Abrir", options: [.foreground])
 
+        // Cancelar uma pergunta = deny (o hub aceita deny de AskUserQuestion);
+        // reusa o identifier de deny, só muda o rótulo pro contexto de pergunta.
+        let cancel = UNNotificationAction(
+            identifier: PushAction.deny, title: "Cancelar", options: [.destructive])
+
         let needsYou = UNNotificationCategory(
             identifier: PushCategory.needsYou,
             actions: [reply, approve, deny, open],
+            intentIdentifiers: [], options: [])
+        // Pergunta: sem Aprovar (sem sentido — o hub rejeita) e sem reply de texto
+        // (a resposta é a escolha das opções, feita ao abrir). Só Cancelar + Abrir.
+        let needsYouQuestion = UNNotificationCategory(
+            identifier: PushCategory.needsYouQuestion,
+            actions: [cancel, open],
             intentIdentifiers: [], options: [])
         let done = UNNotificationCategory(
             identifier: PushCategory.done,
@@ -109,7 +123,7 @@ final class PushManager {
             identifier: PushCategory.error,
             actions: [open], intentIdentifiers: [], options: [])
 
-        UNUserNotificationCenter.current().setNotificationCategories([needsYou, done, error])
+        UNUserNotificationCenter.current().setNotificationCategories([needsYou, needsYouQuestion, done, error])
     }
 
     /// Converte o device token bruto em hex e envia ao hub. Falha silenciosa

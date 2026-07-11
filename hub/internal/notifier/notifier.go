@@ -533,7 +533,14 @@ func buildPush(s session.Session) ([]byte, apns.PushOptions) {
 	switch s.State {
 	case session.StateNeedsYou:
 		alert = apsAlert{Title: "⚠️ " + s.Title, Body: truncateRunes(s.PendingPrompt, promptMaxLen)}
-		category = "NEEDS_YOU"
+		// Pergunta de seleção (AskUserQuestion) não tem "aprovar" — a resposta é a
+		// escolha, feita no app. Usa uma categoria própria (só Cancelar + Abrir),
+		// senão o "Aprovar" do push viraria um no-op confuso (o hub rejeita — SEC-111).
+		if len(s.PendingQuestions) > 0 {
+			category = "NEEDS_YOU_QUESTION"
+		} else {
+			category = "NEEDS_YOU"
+		}
 		interruption = "time-sensitive"
 	case session.StateDone:
 		alert = apsAlert{Title: "✅ " + s.Title, Body: "concluiu · " + s.Machine}

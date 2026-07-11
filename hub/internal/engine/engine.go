@@ -161,11 +161,13 @@ func (e *Engine) Apply(ev event.Event) {
 	// do pedido; some ao sair de needs_you (aprovou/terminou/errou). O Engine
 	// segue o único escritor do Registry.
 	if target == session.StateNeedsYou {
-		e.reg.SetPendingPrompt(ev.SessionID, ev.Data)
 		// PendingQuestions (o seletor que o app mostra em vez do sim/não): só
 		// quando o pedido é a ferramenta nativa de seleção AskUserQuestion. Nos
 		// demais needs_you (permissão comum ou needs_input), garante limpo —
 		// senão uma pergunta de seleção anterior "vazaria" pro pedido seguinte.
+		// É setado ANTES do PendingPrompt de propósito: o push de needs_you
+		// dispara no broadcast do PendingPrompt, então as questions já precisam
+		// estar no snapshot para o push escolher a categoria de pergunta.
 		if ev.Type == event.PermissionRequested && ev.ToolName == "AskUserQuestion" {
 			if qs, ok := parseQuestions(ev.Input); ok {
 				e.reg.SetPendingQuestions(ev.SessionID, qs)
@@ -175,6 +177,7 @@ func (e *Engine) Apply(ev event.Event) {
 		} else {
 			e.reg.ClearPendingQuestions(ev.SessionID)
 		}
+		e.reg.SetPendingPrompt(ev.SessionID, ev.Data)
 	} else {
 		e.reg.ClearPendingPrompt(ev.SessionID) // já limpa PendingQuestions junto
 	}
