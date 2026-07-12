@@ -11,6 +11,30 @@ const STATE = {
   idle:      { color: '#6b7280', glyph: '○', label: 'idle' },      // ○
 };
 
+// Deriva um nome amigável do projeto a partir do cwd da sessão, para
+// identificar o botão pela PASTA/REPO em vez do assunto.
+// Regras:
+//  - Se o caminho contém `.maestri` (convenção .maestri/roles/{uuid}), usa a
+//    pasta imediatamente ANTES de `.maestri` (o repo, ex.: "acme").
+//  - Senão, pega a última pasta que NÃO seja um id/uuid ou pasta oculta.
+export function projectName(cwd) {
+  if (!cwd) return null;
+  const parts = String(cwd).split('/').filter(Boolean);
+  if (!parts.length) return null;
+  const mi = parts.lastIndexOf('.maestri');
+  if (mi > 0) return parts[mi - 1];
+  const isId = (s) =>
+    /^[0-9a-f]{8}(-[0-9a-f]{4,12}){1,4}$/i.test(s) || // uuid (completo ou parcial hex-traço)
+    /^[0-9a-f]{12,}$/i.test(s) ||                      // hash hex longo
+    /^\d{6,}$/.test(s);                                // id numérico longo
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const s = parts[i];
+    if (isId(s) || s.startsWith('.')) continue;
+    return s;
+  }
+  return parts[parts.length - 1];
+}
+
 function esc(t) {
   return String(t ?? '').replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
@@ -57,11 +81,19 @@ export function buttonSvg(session, { pulseOn = false } = {}) {
   let accent = st.color;
   if (session.state === 'needs_you' && pulseOn) accent = '#c07f16'; // âmbar mais fraco
 
-  const nameLines = wrap(session.title || session.machine || session.id, 12, 2);
+  // Hero = nome do REPO/pasta (identificador). Assunto vira linha secundária.
+  const proj = projectName(session.cwd);
+  const hero = proj || session.title || session.machine || session.id;
+  const subject = proj && session.title ? wrap(session.title, 20, 1)[0] : '';
+  const heroLines = wrap(hero, 12, subject ? 1 : 2);
 
-  const nameTspans = nameLines
-    .map((ln, i) => `<text x="18" y="${118 + i * 28}" fill="#e9eef5" font-family="-apple-system,Helvetica,Arial,sans-serif" font-size="25" font-weight="700">${esc(ln)}</text>`)
+  const heroTspans = heroLines
+    .map((ln, i) => `<text x="18" y="${100 + i * 27}" fill="#e9eef5" font-family="-apple-system,Helvetica,Arial,sans-serif" font-size="26" font-weight="700">${esc(ln)}</text>`)
     .join('');
+  const subjectTspan = subject
+    ? `<text x="18" y="${100 + heroLines.length * 27 + 4}" fill="#93a1b5" font-family="-apple-system,Helvetica,Arial,sans-serif" font-size="14.5">${esc(subject)}</text>`
+    : '';
+  const nameTspans = heroTspans + subjectTspan;
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="196" height="196" viewBox="0 0 196 196">
   <defs><radialGradient id="g" cx="30%" cy="0%" r="90%">

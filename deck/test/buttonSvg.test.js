@@ -1,6 +1,26 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buttonSvg, emptySvg, wrap } from '../src/buttonSvg.js';
+import { buttonSvg, emptySvg, wrap, projectName } from '../src/buttonSvg.js';
+
+test('projectName: .maestri/roles/{uuid} -> repo antes do .maestri', () => {
+  assert.equal(
+    projectName('/Users/example/Desktop/coding/acme/.maestri/roles/8c8575fc-1d68-4753-b6fc-5b39ad82c392'),
+    'acme',
+  );
+});
+
+test('projectName: cwd normal -> última pasta', () => {
+  assert.equal(projectName('/Users/example/Desktop/coding/personal/cutuque'), 'cutuque');
+});
+
+test('projectName: última pasta é uuid -> pula para a anterior', () => {
+  assert.equal(projectName('/repo/meuapp/3c30c8cd-49d8-449e-9bf8-2baba351ff55'), 'meuapp');
+});
+
+test('projectName: vazio/sem cwd -> null', () => {
+  assert.equal(projectName(''), null);
+  assert.equal(projectName(undefined), null);
+});
 
 function decode(dataUri) {
   assert.ok(dataUri.startsWith('data:image/svg+xml;base64,'), 'esperava data URI SVG base64');
