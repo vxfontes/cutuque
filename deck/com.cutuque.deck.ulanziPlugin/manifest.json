@@ -1,0 +1,16 @@
+{
+  "UUID": "com.cutuque.deck",
+  "Name": "Cutuque Deck",
+  "Version": "0.1.0",
+  "Author": "vxfontes",
+  "CodePath": "app/index.js",
+  "Actions": [
+    {
+      "UUID": "com.cutuque.deck.session",
+      "Name": "Cutuque Session",
+      "Tooltip": "Um slot de sessão do Cutuque",
+      "Icon": "../assets/icons/idle",
+      "States": [{ "Image": "../assets/icons/idle" }]
+    }
+  ]
+}
