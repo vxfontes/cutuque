@@ -1,6 +1,6 @@
 import WS from 'ws';
 
-export function createUlanziLink({ host, port, pluginUUID, WebSocketImpl = WS, onRun = () => {}, onReady = () => {} }) {
+export function createUlanziLink({ host, port, pluginUUID, WebSocketImpl = WS, onRun = () => {}, onReady = () => {}, onAdd = () => {} }) {
   const handles = new Map(); // key -> { key, actionid }
   let ws = null;
   let stopped = false;
@@ -11,7 +11,11 @@ export function createUlanziLink({ host, port, pluginUUID, WebSocketImpl = WS, o
     try { d = JSON.parse(raw.toString()); } catch { return; }
     switch (d.cmd) {
       case 'add':
-        if (d.key) { handles.set(d.key, { key: d.key, actionid: d.actionid }); onReady(); }
+        if (d.key) {
+          handles.set(d.key, { key: d.key, actionid: d.actionid });
+          onAdd({ key: d.key, actionid: d.actionid, param: d.param });
+          onReady();
+        }
         break;
       case 'run':
         onRun({ key: d.key, actionid: d.actionid, param: d.param });
