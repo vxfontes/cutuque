@@ -9,17 +9,20 @@ function fakeLink() {
   return {
     handles: () => handles,
     sendState: (h, icon, title) => sent.push({ key: h.key, icon, title }),
+    sendImage: (h, data) => sent.push({ key: h.key, data }),
     _sent: sent,
   };
 }
 
-test('render pinta o slot com handle', () => {
+test('render pinta o slot de sessão com imagem SVG (data URI)', () => {
   const link = fakeLink();
   const r = createRenderer({ link, slotToKey: (s) => s });
-  r.render([{ id: 'b', state: 'needs_you', title: 'b', updated_at: '1' }], { page: 0, muted: false });
+  r.render([{ id: 'b', state: 'needs_you', title: 'minha sessao', updated_at: '1' }], { page: 0, muted: false });
   const painted = link._sent.find((x) => x.key === '0_0');
-  assert.ok(painted.icon.endsWith('needs_you.png'));
-  assert.equal(painted.title, 'b');
+  assert.ok(painted.data.startsWith('data:image/svg+xml;base64,'), 'esperava data URI SVG');
+  const svg = Buffer.from(painted.data.split(',')[1], 'base64').toString('utf8');
+  assert.match(svg, /minha sessao/); // o nome da sessão aparece no card
+  assert.match(svg, /needs you/);    // o rótulo do estado aparece
 });
 
 test('startPulse re-renderiza quando há sessão needs_you', () => {

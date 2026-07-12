@@ -50,5 +50,14 @@ export function createUlanziLink({ host, port, pluginUUID, WebSocketImpl = WS, o
         param: { statelist: [{ uuid: pluginUUID, key, actionid, type: 2, path: iconPath, textData: title || '', showtext: !!title }] },
       }));
     },
+    // Pinta um botão com uma imagem custom (data URI base64, ex. SVG) — type 1.
+    // O deck aceita `data:image/svg+xml;base64,…`, o que permite cards ricos.
+    sendImage({ key, actionid }, data) {
+      if (!ws || ws.readyState !== 1) return;
+      ws.send(JSON.stringify({
+        cmd: 'state', uuid: pluginUUID, key, actionid,
+        param: { statelist: [{ uuid: pluginUUID, key, actionid, type: 1, data, textData: '', showtext: false }] },
+      }));
+    },
   };
 }

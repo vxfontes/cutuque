@@ -1,5 +1,6 @@
 // deck/src/renderer.js
 import { buildBoard } from './board.js';
+import { buttonSvg } from './buttonSvg.js';
 
 export function createRenderer({ link, slotToKey = (s) => s }) {
   let pulseOn = false;
@@ -10,7 +11,15 @@ export function createRenderer({ link, slotToKey = (s) => s }) {
     const handles = link.handles();
     for (const bs of board) {
       const handle = handles.get(slotToKey(bs.slot));
-      if (handle) link.sendState(handle, bs.iconPath, bs.title);
+      if (!handle) continue;
+      if (bs.kind === 'session') {
+        // Card rico via SVG (data URI). Slot sem sessão vira card vazio.
+        const pulse = !!bs.session && bs.session.state === 'needs_you' && pulseOn && !muted;
+        link.sendImage(handle, buttonSvg(bs.session, { pulseOn: pulse }));
+      } else {
+        // Botões de controle (prev/next/máquina/mute/menu): ícone simples.
+        link.sendState(handle, bs.iconPath, bs.title);
+      }
     }
   }
 
