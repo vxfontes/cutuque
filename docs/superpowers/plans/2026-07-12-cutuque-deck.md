@@ -1059,6 +1059,10 @@ git commit -m "feat(deck): ícones, manifest do plugin e fiação main"
 
 ### Task 10: Setup do profile + verificação end-to-end + checagem de compatibilidade
 
+> **Notas críticas do review final (adicionadas 2026-07-12):**
+> 1. **`slotToKey` vale para as 8 sessões, não só prev/next/mute.** O renderer casa `handles.get(slotToKey(bs.slot))`. Se os `key` que o Ulanzi manda nos eventos `add` reais NÃO forem literalmente `"0_0".."2_1"`, **nenhum** botão de sessão renderiza (não só os controles). Primeiro passo da Task 10: logar os eventos `add`/`run` reais, descobrir o formato de `key`/`actionid`, e definir `slotToKey` (e o roteamento de prev/next/mute) a partir disso. Só então ligar paginação/mute em `main.js` (mutar `page`/`muted` no `onRun`).
+> 2. **Empacotamento self-contained.** Copiar só `com.cutuque.deck.ulanziPlugin/` para fora de `deck/` quebra o import `../../src/main.js` E a resolução de `ws`. O setup precisa tornar o plugin autocontido: copiar `deck/src`, `deck/assets` e `deck/node_modules/ws` para dentro da pasta do plugin (com um `.gitignore` local para `node_modules/`), ajustando o import de `app/index.js` para a cópia interna. Confirmar que o Node do Ulanzi Studio resolve tudo a partir da pasta instalada.
+
 **Files:**
 - Create: `deck/scripts/setup-profile.mjs`
 
