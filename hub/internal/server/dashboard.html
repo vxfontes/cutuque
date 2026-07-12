@@ -119,7 +119,10 @@
   // Servido pelo próprio hub (mesma origem) -> o WS não é cross-origin e passa.
   // O token vem do query (?token=...); em dev cai no default.
   const params = new URLSearchParams(location.search);
-  const TOKEN = params.get('token') || 'dev-token';
+  // O hub injeta o próprio token no lugar do placeholder ao servir a página, então
+  // não é preciso passar ?token= (é o seu hub, só você acessa). Fallback: dev-token.
+  const INJECTED = '__CUTUQUE_TOKEN__';
+  const TOKEN = params.get('token') || (INJECTED.startsWith('__CUTUQUE') ? 'dev-token' : INJECTED);
   const wsScheme = location.protocol === 'https:' ? 'wss' : 'ws';
   const WS_URL = `${wsScheme}://${location.host}/ws?token=${encodeURIComponent(TOKEN)}`;
 
