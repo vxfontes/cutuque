@@ -1,12 +1,18 @@
 // deck/src/main.js
 import { resolveConfig } from './config.js';
-import { createHubClient } from './hubClient.js';
-import { createUlanziLink } from './ulanziLink.js';
-import { createRenderer } from './renderer.js';
-import { openContext } from './context.js';
-import { SESSION_SLOTS } from './board.js';
+import { createHubClient as realCreateHubClient } from './hubClient.js';
+import { createUlanziLink as realCreateUlanziLink } from './ulanziLink.js';
+import { createRenderer as realCreateRenderer } from './renderer.js';
+import { openContext as realOpenContext } from './context.js';
 
-export function startDeck({ env = process.env, argv = process.argv.slice(2) } = {}) {
+export function startDeck({ env = process.env, argv = process.argv.slice(2), deps = {} } = {}) {
+  const {
+    createHubClient = realCreateHubClient,
+    createUlanziLink = realCreateUlanziLink,
+    createRenderer = realCreateRenderer,
+    openContext = realOpenContext,
+  } = deps;
+
   const cfg = resolveConfig(env, argv);
   let page = 0;
   let muted = false;

@@ -5,8 +5,11 @@ export function sortByPriority(sessions) {
     const pa = PRIORITY[a.state] ?? 99;
     const pb = PRIORITY[b.state] ?? 99;
     if (pa !== pb) return pa - pb;
-    // empate: mais recente primeiro (updated_at desc)
-    return String(b.updated_at).localeCompare(String(a.updated_at));
+    // empate: mais recente primeiro (updated_at desc), comparação ordinal determinística
+    const ua = String(a.updated_at);
+    const ub = String(b.updated_at);
+    if (ub === ua) return 0;
+    return ub < ua ? -1 : 1;
   });
 }
 

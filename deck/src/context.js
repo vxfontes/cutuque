@@ -4,7 +4,13 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 
+const SAFE_SESSION_ID = /^[A-Za-z0-9_-]+$/;
+
 export async function openContext(sessionId, { hubBaseUrl, token, fetchImpl = fetch, spawnImpl }) {
+  if (typeof sessionId !== 'string' || !SAFE_SESSION_ID.test(sessionId)) {
+    process.stderr.write(`[deck] openContext: sessionId inválido: ${JSON.stringify(sessionId)}\n`);
+    return;
+  }
   const doSpawn = spawnImpl || ((cmd, args) => spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref());
   try {
     const res = await fetchImpl(`${hubBaseUrl}/sessions/${sessionId}/output`, {
