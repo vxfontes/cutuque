@@ -101,11 +101,11 @@
   };
   const ORDER = ['needs_you', 'error', 'running', 'done', 'idle'];
 
-  const params = new URLSearchParams(location.search);
-  const HUB = params.get('hub') || '127.0.0.1:8787';
-  const TOKEN = params.get('token') || 'dev-token';
+  // Conecta SAME-ORIGIN no próprio servidor do dashboard, que faz proxy WS para
+  // o hub (o hub recusa WS cross-origin do browser). O token/hub reais ficam no
+  // servidor (serve.mjs), não na página.
   const wsScheme = location.protocol === 'https:' ? 'wss' : 'ws';
-  const WS_URL = `${wsScheme}://${HUB}/ws?token=${encodeURIComponent(TOKEN)}`;
+  const WS_URL = `${wsScheme}://${location.host}/ws`;
 
   const sessions = new Map();
   let filter = 'all';
@@ -188,7 +188,7 @@
     setConn('', 'conectando…');
     let ws;
     try { ws = new WebSocket(WS_URL); } catch { setConn('bad', 'falha'); setTimeout(connect, 2000); return; }
-    ws.onopen = () => setConn('ok', `hub ${HUB}`);
+    ws.onopen = () => setConn('ok', 'ao vivo');
     ws.onclose = () => { setConn('bad', 'reconectando…'); setTimeout(connect, 2000); };
     ws.onerror = () => {};
     ws.onmessage = (ev) => {
