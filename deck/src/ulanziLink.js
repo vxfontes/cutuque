@@ -40,7 +40,7 @@ export function createUlanziLink({ host, port, pluginUUID, WebSocketImpl = WS, o
     stop() { stopped = true; clearTimeout(retry); if (ws) try { ws.close(); } catch {} },
     handles() { return handles; },
     sendState({ key, actionid }, iconPath, title) {
-      if (!ws) return;
+      if (!ws || ws.readyState !== 1) return;
       ws.send(JSON.stringify({
         cmd: 'state', uuid: pluginUUID, key, actionid,
         param: { statelist: [{ uuid: pluginUUID, key, actionid, type: 2, path: iconPath, textData: title || '', showtext: !!title }] },
