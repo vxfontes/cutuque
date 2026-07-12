@@ -1,0 +1,13 @@
+{
+  "name": "cutuque-deck",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cliente-mesa do Cutuque para Stream Deck Ulanzi (aditivo, só-leitura).",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
