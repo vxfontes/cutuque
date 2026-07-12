@@ -18,13 +18,13 @@ const seedInterval = 5 * time.Second
 // desktop-win com os agentes claude-code/codex.
 func seedSessions(now time.Time) []session.Session {
 	specs := []struct {
-		id, machine, agent, title string
-		state                     session.State
+		id, machine, agent, title, cwd string
+		state                          session.State
 	}{
-		{"seed-1", "macbook", "claude-code", "refatorar módulo de auth", session.StateRunning},
-		{"seed-2", "desktop-win", "codex", "rodar suíte de testes", session.StateNeedsYou},
-		{"seed-3", "macbook", "codex", "gerar migração do banco", session.StateDone},
-		{"seed-4", "desktop-win", "claude-code", "investigar flaky test", session.StateIdle},
+		{"seed-1", "macbook", "claude-code", "refatorar módulo de auth", "/Users/example/Desktop/coding/acme/.maestri/roles/8c8575fc-1d68-4753-b6fc-5b39ad82c392", session.StateRunning},
+		{"seed-2", "desktop-win", "codex", "rodar suíte de testes", "/Users/example/Desktop/coding/personal/cutuque", session.StateNeedsYou},
+		{"seed-3", "macbook", "codex", "gerar migração do banco", "/repo/acme-mobile/3c30c8cd-49d8-449e-9bf8-2baba351ff55", session.StateDone},
+		{"seed-4", "desktop-win", "claude-code", "investigar flaky test", "/Users/example/Desktop/coding/side-project", session.StateIdle},
 	}
 	out := make([]session.Session, len(specs))
 	for i, s := range specs {
@@ -36,6 +36,7 @@ func seedSessions(now time.Time) []session.Session {
 			Agent:     s.agent,
 			Title:     s.title,
 			State:     s.state,
+			Cwd:       s.cwd,
 			CreatedAt: created,
 			UpdatedAt: created,
 		}
