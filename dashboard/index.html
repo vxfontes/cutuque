@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cutuque — Command Center</title>
+<style>
+  :root {
+    --bg: #0b0e14; --panel: #12161f; --panel2: #171c27; --border: #262d3a;
+    --text: #e6edf3; --muted: #8b98ac; --faint: #5b6675;
+    --running: #2d7ff9; --needs_you: #f5a623; --done: #3dc46a; --error: #e5484d; --idle: #6b7280;
+    --shadow: 0 1px 3px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.25);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: radial-gradient(1200px 600px at 20% -10%, #131a28 0%, var(--bg) 55%) fixed;
+    color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 18px 24px; border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; background: rgba(11,14,20,.85); backdrop-filter: blur(10px); z-index: 5;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; letter-spacing: .2px; }
+  .brand .logo { width: 12px; height: 12px; border-radius: 50%; background: conic-gradient(from 0deg, var(--running), var(--needs_you), var(--done), var(--running)); box-shadow: 0 0 12px rgba(45,127,249,.6); }
+  .brand small { color: var(--faint); font-weight: 500; font-size: 12px; letter-spacing: .5px; text-transform: uppercase; }
+  .counts { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+    background: var(--panel2); border: 1px solid var(--border); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
+  }
+  .pill b { color: var(--text); font-weight: 600; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .conn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .conn .dot { background: var(--idle); }
+  .conn.ok .dot { background: var(--done); box-shadow: 0 0 8px rgba(61,196,106,.7); }
+  .conn.bad .dot { background: var(--error); box-shadow: 0 0 8px rgba(229,72,77,.7); }
+
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; padding: 14px 24px 0; }
+  .chip {
+    cursor: pointer; user-select: none; padding: 5px 12px; border-radius: 999px; font-size: 12.5px;
+    background: transparent; border: 1px solid var(--border); color: var(--muted); transition: .12s;
+  }
+  .chip:hover { color: var(--text); border-color: var(--faint); }
+  .chip.active { background: var(--panel2); color: var(--text); border-color: var(--faint); }
+  .chip .dot { display: inline-block; vertical-align: middle; margin-right: 6px; }
+
+  main { padding: 18px 24px 60px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+
+  .card {
+    position: relative; background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 100%);
+    border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; box-shadow: var(--shadow);
+    display: flex; gap: 13px; overflow: hidden; transition: transform .12s, border-color .12s;
+  }
+  .card:hover { transform: translateY(-1px); border-color: var(--faint); }
+  .card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--st, var(--idle)); }
+  .glyph {
+    flex: none; width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center;
+    font-size: 20px; font-weight: 700; color: var(--st);
+    background: color-mix(in srgb, var(--st) 14%, transparent); border: 1px solid color-mix(in srgb, var(--st) 35%, transparent);
+  }
+  .body { min-width: 0; flex: 1; }
+  .title { font-weight: 600; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta { color: var(--muted); font-size: 12px; margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .meta .sep { color: var(--faint); }
+  .tag { font-size: 11px; padding: 1px 7px; border-radius: 6px; background: var(--panel); border: 1px solid var(--border); color: var(--muted); }
+  .state-label { color: var(--st); font-weight: 600; text-transform: capitalize; }
+  .prompt {
+    margin-top: 10px; padding: 9px 11px; border-radius: 9px; font-size: 12.5px; color: #ffe9c2;
+    background: color-mix(in srgb, var(--needs_you) 12%, transparent); border: 1px solid color-mix(in srgb, var(--needs_you) 30%, transparent);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .card.needs_you { animation: glow 2.4s ease-in-out infinite; }
+  @keyframes glow { 0%,100% { box-shadow: var(--shadow); } 50% { box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--needs_you) 55%, transparent), 0 0 22px color-mix(in srgb, var(--needs_you) 30%, transparent); } }
+
+  .empty { text-align: center; color: var(--muted); padding: 80px 20px; }
+  .empty .big { font-size: 40px; opacity: .5; }
+  .ago { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="logo"></span> Cutuque <small>Command Center</small></div>
+    <div class="counts" id="counts"></div>
+    <div class="conn" id="conn"><span class="dot"></span><span id="connText">conectando…</span></div>
+  </header>
+  <div class="filters" id="filters"></div>
+  <main><div class="grid" id="grid"></div></main>
+
+<script>
+(() => {
+  const STATES = {
+    needs_you: { color: 'var(--needs_you)', glyph: '◐', label: 'needs you' },
+    error:     { color: 'var(--error)',     glyph: '✕', label: 'error' },
+    running:   { color: 'var(--running)',    glyph: '●', label: 'running' },
+    done:      { color: 'var(--done)',       glyph: '✓', label: 'done' },
+    idle:      { color: 'var(--idle)',       glyph: '○', label: 'idle' },
+  };
+  const ORDER = ['needs_you', 'error', 'running', 'done', 'idle'];
+
+  const params = new URLSearchParams(location.search);
+  const HUB = params.get('hub') || '127.0.0.1:8787';
+  const TOKEN = params.get('token') || 'dev-token';
+  const wsScheme = location.protocol === 'https:' ? 'wss' : 'ws';
+  const WS_URL = `${wsScheme}://${HUB}/ws?token=${encodeURIComponent(TOKEN)}`;
+
+  const sessions = new Map();
+  let filter = 'all';
+
+  const $grid = document.getElementById('grid');
+  const $counts = document.getElementById('counts');
+  const $filters = document.getElementById('filters');
+  const $conn = document.getElementById('conn');
+  const $connText = document.getElementById('connText');
+
+  function ago(iso) {
+    const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 60) return `${s | 0}s`;
+    if (s < 3600) return `${(s / 60) | 0}m`;
+    if (s < 86400) return `${(s / 3600) | 0}h`;
+    return `${(s / 86400) | 0}d`;
+  }
+  const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  function sortSessions(list) {
+    return list.slice().sort((a, b) => {
+      const pa = ORDER.indexOf(a.state), pb = ORDER.indexOf(b.state);
+      if (pa !== pb) return (pa < 0 ? 99 : pa) - (pb < 0 ? 99 : pb);
+      return String(b.updated_at).localeCompare(String(a.updated_at));
+    });
+  }
+
+  function render() {
+    const all = [...sessions.values()];
+    // counts
+    const by = Object.fromEntries(ORDER.map((s) => [s, 0]));
+    all.forEach((s) => { if (by[s.state] != null) by[s.state]++; });
+    $counts.innerHTML = ORDER.map((s) =>
+      `<span class="pill"><span class="dot" style="background:${STATES[s].color}"></span>${STATES[s].label} <b>${by[s]}</b></span>`
+    ).join('');
+
+    // filters
+    const chips = [['all', 'Tudo', all.length], ...ORDER.map((s) => [s, STATES[s].label, by[s]])];
+    $filters.innerHTML = chips.map(([key, lbl, n]) =>
+      `<span class="chip ${filter === key ? 'active' : ''}" data-f="${key}">${key !== 'all' ? `<span class="dot" style="background:${STATES[key].color}"></span>` : ''}${lbl} · ${n}</span>`
+    ).join('');
+
+    // cards
+    let list = sortSessions(all);
+    if (filter !== 'all') list = list.filter((s) => s.state === filter);
+    if (!list.length) {
+      $grid.innerHTML = `<div class="empty" style="grid-column:1/-1"><div class="big">◌</div>${all.length ? 'Nenhuma sessão neste filtro.' : 'Aguardando sessões do hub…'}</div>`;
+      return;
+    }
+    $grid.innerHTML = list.map((s) => {
+      const st = STATES[s.state] || STATES.idle;
+      const showPrompt = s.state === 'needs_you' && s.pending_prompt;
+      return `<div class="card ${s.state}" style="--st:${st.color}">
+        <div class="glyph">${st.glyph}</div>
+        <div class="body">
+          <div class="title">${esc(s.title || s.id)}</div>
+          <div class="meta">
+            <span class="state-label">${st.label}</span><span class="sep">·</span>
+            ${s.machine ? `<span class="tag">${esc(s.machine)}</span>` : ''}
+            ${s.agent ? `<span class="tag">${esc(s.agent)}</span>` : ''}
+            <span class="sep">·</span><span class="ago">${s.updated_at ? ago(s.updated_at) : ''}</span>
+          </div>
+          ${showPrompt ? `<div class="prompt">⚠ ${esc(s.pending_prompt)}</div>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  $filters.addEventListener('click', (e) => {
+    const chip = e.target.closest('.chip'); if (!chip) return;
+    filter = chip.dataset.f; render();
+  });
+
+  // periodic "ago" refresh
+  setInterval(render, 5000);
+
+  function setConn(state, text) { $conn.className = 'conn ' + state; $connText.textContent = text; }
+
+  function connect() {
+    setConn('', 'conectando…');
+    let ws;
+    try { ws = new WebSocket(WS_URL); } catch { setConn('bad', 'falha'); setTimeout(connect, 2000); return; }
+    ws.onopen = () => setConn('ok', `hub ${HUB}`);
+    ws.onclose = () => { setConn('bad', 'reconectando…'); setTimeout(connect, 2000); };
+    ws.onerror = () => {};
+    ws.onmessage = (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.type === 'snapshot') { sessions.clear(); (m.sessions || []).forEach((s) => sessions.set(s.id, s)); }
+      else if (m.type === 'session_updated' && m.session) sessions.set(m.session.id, m.session);
+      else if (m.type === 'session_removed') sessions.delete(m.session_id);
+      else return;
+      render();
+    };
+  }
+  render();
+  connect();
+})();
+</script>
+</body>
+</html>

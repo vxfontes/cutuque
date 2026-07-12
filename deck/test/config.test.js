@@ -10,7 +10,7 @@ test('usa defaults de dev quando env vazio', () => {
   assert.equal(c.hubWsUrl, 'ws://127.0.0.1:8787/ws?token=dev-token');
   assert.equal(c.host, '127.0.0.1');
   assert.equal(c.port, 3906);
-  assert.equal(c.pluginUUID, 'com.cutuque.deck');
+  assert.equal(c.pluginUUID, 'com.cutuque.agents.deck');
 });
 
 test('respeita env e argv do Studio', () => {

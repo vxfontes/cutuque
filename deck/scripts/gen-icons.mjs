@@ -1,5 +1,5 @@
 // deck/scripts/gen-icons.mjs
-// Gera PNGs 72x72 de cor sólida para cada estado (mais `needs_you_dim`)
+// Gera PNGs 196x196 de cor sólida para cada estado (mais `needs_you_dim`)
 // usando apenas módulos nativos do Node (node:zlib, node:fs) — sem
 // dependência de biblioteca externa de imagem.
 
@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { STATE_COLORS } from '../src/colors.js';
 
-const SIZE = 72;
+const SIZE = 196;
 const ICONS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'assets', 'icons');
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);

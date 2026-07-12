@@ -10,6 +10,8 @@ export function resolveConfig(env = {}, argv = []) {
     hubWsUrl,
     host: argv[0] || '127.0.0.1',
     port: Number(argv[1]) || 3906,
-    pluginUUID: 'com.cutuque.deck',
+    // O Ulanzi Studio exige UUID de plugin com exatamente 4 segmentos (como
+    // com.uptime.monitor.deck); com 3 segmentos ele NÃO registra/lança o plugin.
+    pluginUUID: 'com.cutuque.agents.deck',
   };
 }
