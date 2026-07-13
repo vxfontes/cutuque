@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"html"
 	"net/http"
+	"strings"
 )
 
 // boardProtocolMD é o protocolo do board para os agentes, embutido no binário e
@@ -25,12 +26,20 @@ func boardProtocolPage() []byte {
 		`</head><body><pre>` + html.EscapeString(boardProtocolMD) + `</pre></body></html>`)
 }
 
-// BoardProtocolHandler serve o protocolo do board.
+// BoardProtocolHandler serve o protocolo do board com content-negotiation:
+// navegador (Accept: text/html) recebe a página estilizada; curl/agentes
+// recebem o markdown CRU (limpo, sem HTML/escape) para ler e seguir.
 func BoardProtocolHandler() http.HandlerFunc {
 	page := boardProtocolPage()
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		_, _ = w.Write(page)
+		if strings.Contains(r.Header.Get("Accept"), "text/html") {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write(page)
+			return
+		}
+		// curl/agentes: markdown cru.
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		_, _ = w.Write([]byte(boardProtocolMD))
 	}
 }
