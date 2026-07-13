@@ -25,7 +25,11 @@ func BoardListHandler(st *board.Store) http.HandlerFunc {
 // BoardCreateHandler cria uma tarefa (coluna inicial a_fazer).
 func BoardCreateHandler(st *board.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var in struct{ Title, Group, Session string }
+		var in struct {
+			Title   string `json:"title"`
+			Group   string `json:"group"`
+			Session string `json:"session"`
+		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in) != nil || in.Title == "" {
 			writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "bad_request"})
 			return
