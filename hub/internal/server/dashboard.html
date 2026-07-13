@@ -358,12 +358,24 @@
     });
   }
 
-  function moveTask(id, col) {
-    fetch('/board/tasks/' + encodeURIComponent(id), {
-      method: 'PATCH',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ column: col }),
-    }).catch(() => {});
+  async function moveTask(id, col) {
+    try {
+      const res = await fetch('/board/tasks/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ column: col }),
+      });
+      if (!res.ok) {
+        console.error('moveTask falhou:', res.status);
+        // sinal visual leve: reverte o render (o WS não vai emitir board_updated),
+        // então re-renderiza o estado atual para o card "voltar" visualmente.
+        renderBoard();
+      }
+      // sucesso: o eco chega via WS (board_updated) e re-renderiza.
+    } catch (e) {
+      console.error('moveTask erro de rede:', e.message);
+      renderBoard();
+    }
   }
 
   $boardFilter.addEventListener('change', () => { boardFilter = $boardFilter.value; renderBoard(); });
