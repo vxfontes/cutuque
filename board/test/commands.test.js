@@ -6,14 +6,18 @@ function fakeCli(tasks = []) {
   const out = [];
   const created = [];
   const moved = [];
+  const comments = [];
+  const patches = [];
   return {
-    _out: out, _created: created, _moved: moved,
-    identity: { group: 'interconexao', session: 'cutuque', type: 'claude' },
+    _out: out, _created: created, _moved: moved, _comments: comments, _patches: patches,
+    identity: { group: 'interconexao', session: 'cutuque', type: 'claude', role: 'marcus' },
     out: (s) => out.push(s),
     client: {
       listTasks: async () => tasks,
       createTask: async (t) => { created.push(t); return { ...t, id: 'new1', column: 'a_fazer' }; },
       moveTask: async (id, col) => { moved.push([id, col]); return { id, column: col }; },
+      addComment: async (id, author, text) => { comments.push([id, author, text]); return { id }; },
+      patchTask: async (id, patch) => { patches.push([id, patch]); return { id, ...patch }; },
     },
   };
 }
@@ -25,6 +29,7 @@ test('add cria com as tags da identidade e imprime id', async () => {
   assert.equal(cli._created[0].group, 'interconexao');
   assert.equal(cli._created[0].session, 'cutuque');
   assert.equal(cli._created[0].type, 'claude');
+  assert.equal(cli._created[0].role, 'marcus');
   assert.ok(cli._out.join('\n').includes('new1'));
 });
 
@@ -43,4 +48,16 @@ test('move chama o client', async () => {
   const cli = fakeCli();
   await commands.move(cli, 'a', 'em_progresso');
   assert.deepEqual(cli._moved[0], ['a', 'em_progresso']);
+});
+
+test('comment adiciona com autor = role', async () => {
+  const cli = fakeCli();
+  await commands.comment(cli, 'abc', 'minha observação');
+  assert.deepEqual(cli._comments[0], ['abc', 'marcus', 'minha observação']);
+});
+
+test('desc faz patch da descrição', async () => {
+  const cli = fakeCli();
+  await commands.desc(cli, 'abc', 'nova descrição');
+  assert.deepEqual(cli._patches[0], ['abc', { description: 'nova descrição' }]);
 });
