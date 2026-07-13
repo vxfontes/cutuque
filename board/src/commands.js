@@ -98,6 +98,27 @@ export const commands = {
     if (!cs.length) cli.out('  (nenhum)');
     for (const c of cs) cli.out(`  - ${c.author}${c.created_at ? ` (${dt(c.created_at)})` : ''}: ${c.text}`);
   },
+  // mentions: lista os comentários que te mencionam (@nome) no seu escopo — a sua
+  // "caixa de entrada". Nome vem de --agent (ou da identidade). Só board ativo.
+  async mentions(cli, { flags = {} } = {}) {
+    const scope = resolveScope(cli.identity, flags);
+    const name = (flags.agent || cli.identity.role || cli.identity.type || '').trim();
+    if (!name) throw new Error('informe seu nome: cutuque task mentions --agent <você>');
+    const needle = '@' + name.toLowerCase();
+    const all = await cli.client.listTasks();
+    const hits = [];
+    for (const t of all.filter((x) => inScope(x, scope))) {
+      for (const c of t.comments || []) {
+        if (String(c.text || '').toLowerCase().includes(needle)) hits.push({ t, c });
+      }
+    }
+    cli.out(`Menções a @${name} em ${scopeLabel(scope)} (${hits.length}):`);
+    if (!hits.length) cli.out('  (nenhuma)');
+    for (const { t, c } of hits) {
+      cli.out(`\n  ${t.id}  ${t.title}  [${LABEL[t.column] || t.column}]`);
+      cli.out(`    ${c.author}: ${c.text}`);
+    }
+  },
   // week: acessa os concluídos ARQUIVADOS por semana. Sem label -> lista as semanas;
   // com label (ex: 2026-W28) -> mostra os cards daquela semana no escopo.
   async week(cli, { flags = {}, args = [] } = {}) {

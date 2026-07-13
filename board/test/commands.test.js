@@ -151,6 +151,32 @@ test('show lanca erro se id nao existe', async () => {
   await assert.rejects(() => commands.show(cli, 'naoexiste'));
 });
 
+test('mentions lista comentarios que mencionam @nome no escopo', async () => {
+  const cli = fakeCli([
+    { id: 'a', title: 'card A', column: 'em_progresso', group: 'interconexao', session: 'cutuque',
+      comments: [{ author: 'luka', text: '@marcus revisa isso por favor' }, { author: 'x', text: 'sem mencao' }] },
+    { id: 'b', title: 'card B', column: 'a_fazer', group: 'interconexao', session: 'outra',
+      comments: [{ author: 'ally', text: 'nada pra ninguem' }] },
+    { id: 'c', title: 'card C', column: 'a_fazer', group: 'outro', session: 'z',
+      comments: [{ author: 'y', text: '@marcus fora do ambiente' }] },
+  ]);
+  await commands.mentions(cli, { flags: { agent: 'marcus' } });
+  const out = cli._out.join('\n');
+  assert.ok(out.includes('Menções a @marcus'));
+  assert.ok(out.includes('card A') && out.includes('revisa isso'));
+  assert.ok(!out.includes('card B'));   // sem mencao
+  assert.ok(!out.includes('card C'));   // outro ambiente (fora do escopo padrao)
+});
+
+test('mentions --all cruza ambientes', async () => {
+  const cli = fakeCli([
+    { id: 'c', title: 'card C', column: 'a_fazer', group: 'outro', session: 'z',
+      comments: [{ author: 'y', text: '@marcus la no outro' }] },
+  ]);
+  await commands.mentions(cli, { flags: { agent: 'marcus', all: '' } });
+  assert.ok(cli._out.join('\n').includes('card C'));
+});
+
 test('move chama o client', async () => {
   const cli = fakeCli();
   await commands.move(cli, 'a', 'em_progresso');

@@ -26,7 +26,8 @@ cutuque task list                                  # board ATUAL do seu ambiente
 cutuque task show <id>                             # DETALHE: descrição, linha do tempo, log de ATIVIDADE e TODOS os comentários
 cutuque task add "<título>" --agent <role> [--desc "<descrição>"]   # cria (entra em "A fazer")
 cutuque task move <id> <coluna> [--agent <role>]   # move; passe --agent pra seu nome ir no log de atividade
-cutuque task comment <id> "<texto>" --agent <role> # adiciona uma observação no card
+cutuque task comment <id> "<texto>" --agent <role> # adiciona uma observação (use @nome pra direcionar)
+cutuque task mentions --agent <você>               # comentários que te mencionam (@você) — sua caixa de entrada
 cutuque task desc <id> "<descrição>"               # define/atualiza a descrição do card
 cutuque task week [<label>]                        # semanas arquivadas (sem label lista; com label ex 2026-W28 mostra os cards)
 ```
@@ -41,6 +42,12 @@ o histórico (o que já foi dito, decisões, ressalvas) e opinar com base nele, 
 `cutuque task show <id>` — ele traz a descrição, a linha do tempo, o **log de atividade**
 (quem criou/moveu/encalhou e quando) e **todos os comentários**. Funciona também para cards
 já arquivados (semanas passadas).
+
+**Direcionar com @menção:** ao comentar, use `@nome` pra endereçar a alguém —
+ex.: `cutuque task comment <id> "@lauren dá uma olhada nesse bug?" --agent marcus`.
+Quem foi mencionado descobre com `cutuque task mentions --agent <seu-nome>` (lista os
+comentários que citam `@você` no seu ambiente; use `--all` pra cruzar ambientes). É a
+forma de um agente chamar outro (auxiliar/revisor) e de saber o que foi pedido a ele.
 
 - **`--agent <role>` é OBRIGATÓRIO em `add` e `comment`** — é quem está fazendo
   (o sub-agente/orquestrador: `luka`, `ludmilla`, `marcus`, …). Vira o autor do
@@ -163,7 +170,22 @@ Requer Node no PATH. Basta uma vez por máquina (o `cutuque` fica no PATH).
 exporte `CUTUQUE_HUB` — o default já está certo. (Só a mantenedora, em dev
 local, usa `export CUTUQUE_HUB=127.0.0.1:8787`.)
 
-Se por acaso a CLI rodar **fora do tmux** (um shell não-interativo, por exemplo),
-o grupo/sessão caem para `local/default`. Nesse caso dá pra fixar a identidade com
-`CUTUQUE_GROUP` e `CUTUQUE_SESSION` (ex.: `export CUTUQUE_GROUP=interconexao
-CUTUQUE_SESSION=cutuque`). Dentro do tmux não precisa — é automático.
+## Identidade fora do tmux (macmini, hermes, cron…)
+
+Dentro do tmux o grupo (socket) e a sessão são detectados **automaticamente** — não
+precisa fazer nada. Mas se a CLI rodar **fora do tmux** (um shell não-interativo, um
+cron, uma máquina como o **macmini** ou o **hermes**), o grupo/sessão caem para
+`local/default` — o que polui o board e te tira do escopo do teu ambiente.
+
+Nesse caso, **fixe a identidade** com duas variáveis de ambiente (o grupo = o
+"ambiente", a sessão = quem você é ali):
+
+```bash
+export CUTUQUE_GROUP=hermes      # o ambiente/máquina
+export CUTUQUE_SESSION=deploy    # a "sessão" (o que você é nesse ambiente)
+cutuque task list                # agora aparece em hermes/deploy
+```
+
+Coloque esse `export` no seu `~/.zshrc`/`~/.bashrc` (ou no início do script/cron)
+da máquina. Os overrides têm prioridade sobre o tmux, então valem em qualquer lugar.
+(Só a mantenedora, em dev local, usa também `export CUTUQUE_HUB=127.0.0.1:8787`.)

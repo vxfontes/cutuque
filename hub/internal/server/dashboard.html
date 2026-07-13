@@ -201,6 +201,7 @@
   .m-comment .who { font-weight: 600; font-size: 12px; }
   .m-comment .when { color: var(--faint); font-size: 11px; margin-left: 6px; }
   .m-comment .txt { font-size: 13px; margin-top: 3px; white-space: pre-wrap; }
+  .mention { color: var(--running); font-weight: 600; }
   .m-comments-empty { color: var(--faint); font-size: 12.5px; font-style: italic; }
   .m-add { display: flex; gap: 8px; margin-top: 10px; }
   .m-add input { flex: 1; background: var(--panel2); border: 1px solid var(--border); border-radius: 9px; color: var(--text); padding: 8px 10px; font: inherit; font-size: 13px; }
@@ -553,6 +554,8 @@
     return `${(s / 86400) | 0}d`;
   }
   const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  // Destaca @menções (opera sobre texto JÁ escapado).
+  const mentionize = (s) => s.replace(/(^|[\s(])@([\w.-]+)/g, '$1<span class="mention">@$2</span>');
 
   function sortSessions(list) {
     return list.slice().sort((a, b) => {
@@ -830,7 +833,7 @@
       </div>` : ''}
       <div class="m-section"><h3>Comentários (${comments.length})</h3>
         <div class="m-comments">
-          ${comments.length ? comments.map((c) => `<div class="m-comment"><span class="who">${esc(c.author)}</span><span class="when">${c.created_at ? ago(c.created_at) : ''}</span><div class="txt">${esc(c.text)}</div></div>`).join('') : '<div class="m-comments-empty">Nenhum comentário ainda.</div>'}
+          ${comments.length ? comments.map((c) => `<div class="m-comment"><span class="who">${esc(c.author)}</span><span class="when">${c.created_at ? ago(c.created_at) : ''}</span><div class="txt">${mentionize(esc(c.text))}</div></div>`).join('') : '<div class="m-comments-empty">Nenhum comentário ainda.</div>'}
         </div>
         ${readOnly ? '' : `<form class="m-add" id="mAddForm"><input id="mAddInput" placeholder="Adicionar comentário…" autocomplete="off"><button type="submit">Enviar</button></form>`}
       </div>
