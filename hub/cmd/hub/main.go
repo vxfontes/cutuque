@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/vxfontes/cutuque/hub/internal/adapter/codex"
 	"github.com/vxfontes/cutuque/hub/internal/adapter/opencode"
 	"github.com/vxfontes/cutuque/hub/internal/apns"
+	"github.com/vxfontes/cutuque/hub/internal/board"
 	"github.com/vxfontes/cutuque/hub/internal/config"
 	"github.com/vxfontes/cutuque/hub/internal/devices"
 	"github.com/vxfontes/cutuque/hub/internal/engine"
@@ -44,9 +46,18 @@ func main() {
 	// docker) para sobreviverem a restart/deploy — senão sessões concluídas
 	// reaparecem como "rodando" e a lista some. Sem a env var, só memória (dev).
 	reg := registry.New()
+	// board.json vive no MESMO diretório da persistência de sessões: não há
+	// env var própria para o board, apenas reaproveita o volume já montado
+	// para CUTUQUE_SESSIONS_PATH. Sem a env var, o board segue só em memória
+	// (dev), igual ao registry.
+	boardStore := board.New()
 	if p := os.Getenv("CUTUQUE_SESSIONS_PATH"); p != "" {
 		reg = registry.NewAt(p)
 		logger.Info("sessões persistidas em disco", "path", p, "carregadas", len(reg.List()))
+
+		boardPath := filepath.Join(filepath.Dir(p), "board.json")
+		boardStore = board.NewAt(boardPath)
+		logger.Info("board persistido em disco", "path", boardPath, "tarefas", len(boardStore.List()))
 	}
 
 	// CUTUQUE_DATABASE_URL liga o histórico no Postgres (schema `cutuque`):
@@ -81,7 +92,7 @@ func main() {
 	// APNs (Fase 4): opcional. Se configurado, sobe o Notifier e habilita a rota
 	// de registro de devices; senão, o hub segue normalmente sem push.
 	var ntf *notifier.Notifier
-	var serverOpts []server.RouterOption
+	serverOpts := []server.RouterOption{server.WithBoard(boardStore)}
 	if cfg.APNSEnabled() {
 		client, err := apns.NewClient(cfg)
 		if err != nil {
