@@ -337,6 +337,7 @@ struct BoardTask: Identifiable, Decodable, Equatable {
     var type: String?
     var role: String?
     var encalhada: Bool?
+    var archived: Bool?
     var description: String?
     var comments: [BoardComment]?
     var activity: [BoardActivity]?

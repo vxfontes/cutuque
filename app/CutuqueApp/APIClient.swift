@@ -122,6 +122,20 @@ struct APIClient {
 
     private struct BoardEnvelope: Decodable { let tasks: [BoardTask] }
 
+    /// Busca cards (ativos E arquivados) por título/descrição/comentário.
+    /// `GET /board/search?q=`.
+    func searchBoard(_ q: String) async throws -> [BoardTask] {
+        var comps = URLComponents(url: baseURL.appendingPathComponent("board").appendingPathComponent("search"), resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "q", value: q)]
+        var request = URLRequest(url: comps.url!)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder.cutuque.decode(BoardEnvelope.self, from: data).tasks
+    }
+
     /// Semanas arquivadas (concluídos fechados por semana). `GET /board/archive`.
     func boardArchive() async throws -> [ArchivedWeek] {
         var request = URLRequest(url: baseURL.appendingPathComponent("board").appendingPathComponent("archive"))

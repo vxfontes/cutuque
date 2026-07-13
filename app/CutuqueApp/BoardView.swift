@@ -10,6 +10,7 @@ final class BoardModel: ObservableObject {
     @Published var tasks: [BoardTask] = []
     @Published var isLoading = false
     @Published var errorText: String?
+    @Published var searchResults: [BoardTask] = []
 
     // Filtros (E), espelham o dashboard web.
     @Published var filterGroup = "all"
@@ -44,6 +45,11 @@ final class BoardModel: ObservableObject {
     func closeWeek() async {
         do { try await api.closeWeek(); await load() }
         catch { errorText = "Falha ao fechar a semana." }
+    }
+    func search(_ q: String) async {
+        let term = q.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !term.isEmpty else { searchResults = []; return }
+        searchResults = (try? await api.searchBoard(term)) ?? []
     }
 
     // Valores distintos para os filtros.
@@ -83,18 +89,37 @@ struct BoardView: View {
     @State private var selected: BoardTask?
     @State private var showCloseWeekConfirm = false
     @State private var showArchive = false
+    @State private var searchText = ""
+    @State private var searchTask: Task<Void, Never>?
+
+    private var isSearching: Bool { !searchText.trimmingCharacters(in: .whitespaces).isEmpty }
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                FilterBar(model: model)
-                Divider()
-                if model.isLoading && model.tasks.isEmpty {
-                    Spacer(); ProgressView(); Spacer()
-                } else if model.tasks.isEmpty, let err = model.errorText {
-                    Spacer(); ContentUnavailableView(err, systemImage: "wifi.exclamationmark"); Spacer()
+            Group {
+                if isSearching {
+                    searchResultsView
                 } else {
-                    boardScroller
+                    VStack(spacing: 0) {
+                        FilterBar(model: model)
+                        Divider()
+                        if model.isLoading && model.tasks.isEmpty {
+                            Spacer(); ProgressView(); Spacer()
+                        } else if model.tasks.isEmpty, let err = model.errorText {
+                            Spacer(); ContentUnavailableView(err, systemImage: "wifi.exclamationmark"); Spacer()
+                        } else {
+                            boardScroller
+                        }
+                    }
+                }
+            }
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always),
+                        prompt: "Buscar título, descrição, comentários…")
+            .onChange(of: searchText) { _, q in
+                searchTask?.cancel()
+                searchTask = Task {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    if !Task.isCancelled { await model.search(q) }
                 }
             }
             .navigationTitle("Cutuque Board")
@@ -129,7 +154,7 @@ struct BoardView: View {
                 Text("Os concluídos serão arquivados e saem do board; to-dos antigos não iniciados viram encalhados. Normalmente acontece sozinho no domingo 23:59.")
             }
             .sheet(item: $selected) { task in
-                BoardTaskDetailView(task: task, model: model)
+                BoardTaskDetailView(task: task, model: model, readOnly: task.archived == true)
             }
             .sheet(isPresented: $showArchive) {
                 ArchiveView()
@@ -167,6 +192,34 @@ struct BoardView: View {
             }
             .scrollTargetBehavior(.viewAligned)
             .refreshable { await model.load() }
+        }
+    }
+
+    // Resultados da busca (título + descrição + comentários; ativos e arquivados).
+    private var searchResultsView: some View {
+        Group {
+            if model.searchResults.isEmpty {
+                ContentUnavailableView.search(text: searchText)
+            } else {
+                List {
+                    Section("\(model.searchResults.count) resultado(s)") {
+                        ForEach(model.searchResults) { t in
+                            Button { selected = t } label: {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    if t.archived == true {
+                                        Text("ARQUIVADO").font(.caption2).fontWeight(.semibold)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    BoardCardRow(task: t)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+                        }
+                    }
+                }
+                .listStyle(.plain)
+            }
         }
     }
 }
