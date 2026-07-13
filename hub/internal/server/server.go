@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/vxfontes/cutuque/hub/internal/board"
 	"github.com/vxfontes/cutuque/hub/internal/config"
 	"github.com/vxfontes/cutuque/hub/internal/devices"
 	"github.com/vxfontes/cutuque/hub/internal/engine"
@@ -18,6 +19,7 @@ type routerConfig struct {
 	renudge    RenudgeController
 	foreground ForegroundController
 	history    HistoryReader
+	board      *board.Store
 }
 
 // RouterOption configura dependências opcionais do Router.
@@ -47,6 +49,13 @@ func WithForeground(fc ForegroundController) RouterOption {
 // (CUTUQUE_DATABASE_URL não configurado) as rotas não são registradas.
 func WithHistory(h HistoryReader) RouterOption {
 	return func(rc *routerConfig) { rc.history = h }
+}
+
+// WithBoard habilita as rotas /board* (quadro Kanban), apoiadas no store dado.
+// Sem esta opção as rotas não são registradas (ex.: testes que não exercem
+// board).
+func WithBoard(st *board.Store) RouterOption {
+	return func(rc *routerConfig) { rc.board = st }
 }
 
 // Router registra as rotas do hub. As rotas protegidas passam pelo middleware
@@ -136,6 +145,14 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 
 	// Dev-only: seed de dados fake. Em prod o handler responde 404.
 	mux.Handle("POST /dev/seed", requireAuth(cfg.Token, SeedHandler(cfg, reg)))
+
+	// Quadro Kanban (Cutuque Board). Só quando há store.
+	if rc.board != nil {
+		mux.Handle("GET /board", requireAuth(cfg.Token, BoardListHandler(rc.board)))
+		mux.Handle("POST /board/tasks", requireAuth(cfg.Token, BoardCreateHandler(rc.board)))
+		mux.Handle("PATCH /board/tasks/{id}", requireAuth(cfg.Token, BoardPatchHandler(rc.board)))
+		mux.Handle("DELETE /board/tasks/{id}", requireAuth(cfg.Token, BoardDeleteHandler(rc.board)))
+	}
 
 	return mux
 }
