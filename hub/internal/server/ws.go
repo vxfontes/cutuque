@@ -8,6 +8,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 
+	"github.com/vxfontes/cutuque/hub/internal/board"
 	"github.com/vxfontes/cutuque/hub/internal/registry"
 	"github.com/vxfontes/cutuque/hub/internal/session"
 )
@@ -47,9 +48,31 @@ type removedMessage struct {
 	SessionID string `json:"session_id"`
 }
 
+// boardSnapshotMessage é enviada ao conectar (quando há board.Store): o
+// estado atual de todas as tasks do quadro.
+type boardSnapshotMessage struct {
+	Type  string       `json:"type"` // sempre "board_snapshot"
+	Tasks []board.Task `json:"tasks"`
+}
+
+// boardUpdatedMessage é enviada a cada mudança numa task (Add/Update).
+type boardUpdatedMessage struct {
+	Type string     `json:"type"` // sempre "board_updated"
+	Task board.Task `json:"task"`
+}
+
+// boardRemovedMessage é enviada quando uma task é apagada (Store.Remove).
+type boardRemovedMessage struct {
+	Type string `json:"type"` // sempre "board_removed"
+	ID   string `json:"id"`
+}
+
 // WSHandler faz o upgrade para WebSocket e transmite o estado das sessões:
 // um snapshot inicial e, em seguida, uma mensagem por mudança no registry.
-func WSHandler(reg *registry.Registry) http.HandlerFunc {
+// Se bd não for nil, também transmite o estado do quadro Kanban (Cutuque
+// Board): um snapshot inicial e uma mensagem por mudança no store. Se bd for
+// nil, o handler funciona exatamente como antes (aditivo/seguro).
+func WSHandler(reg *registry.Registry, bd *board.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, nil)
 		if err != nil {
@@ -65,6 +88,23 @@ func WSHandler(reg *registry.Registry) http.HandlerFunc {
 		outSub := reg.SubscribeOutput()
 		defer reg.UnsubscribeOutput(outSub)
 
+		// Board (Cutuque Board): assinatura opcional, só quando bd != nil
+		// (aditivo). Mesma lógica de assinar antes do snapshot para não
+		// perder eventos entre os dois.
+		var bsub *board.Sub
+		// boardCh/boardRemovedCh ficam nil quando bd == nil: ler de um canal
+		// nil num select nunca dispara aquele case, então os dois novos
+		// cases abaixo simplesmente nunca disparam (aditivo/seguro), sem
+		// precisar espalhar `if bd != nil` por todo o loop.
+		var boardCh <-chan board.Task
+		var boardRemovedCh <-chan string
+		if bd != nil {
+			bsub = bd.Subscribe()
+			defer bd.Unsubscribe(bsub)
+			boardCh = bsub.C
+			boardRemovedCh = bsub.Removed
+		}
+
 		// CloseRead descarta o que o cliente enviar e cancela o ctx quando a
 		// conexão cai, permitindo encerrar o loop de escrita.
 		ctx := c.CloseRead(r.Context())
@@ -72,6 +112,13 @@ func WSHandler(reg *registry.Registry) http.HandlerFunc {
 		snap := snapshotMessage{Type: "snapshot", Sessions: reg.List()}
 		if err := writeJSON(ctx, c, snap); err != nil {
 			return
+		}
+
+		if bd != nil {
+			boardSnap := boardSnapshotMessage{Type: "board_snapshot", Tasks: bd.List()}
+			if err := writeJSON(ctx, c, boardSnap); err != nil {
+				return
+			}
 		}
 
 		ping := time.NewTicker(wsPingInterval)
@@ -111,6 +158,22 @@ func WSHandler(reg *registry.Registry) http.HandlerFunc {
 					return
 				}
 				msg := removedMessage{Type: "session_removed", SessionID: id}
+				if err := writeJSON(ctx, c, msg); err != nil {
+					return
+				}
+			case t, ok := <-boardCh:
+				if !ok {
+					return
+				}
+				msg := boardUpdatedMessage{Type: "board_updated", Task: t}
+				if err := writeJSON(ctx, c, msg); err != nil {
+					return
+				}
+			case id, ok := <-boardRemovedCh:
+				if !ok {
+					return
+				}
+				msg := boardRemovedMessage{Type: "board_removed", ID: id}
 				if err := writeJSON(ctx, c, msg); err != nil {
 					return
 				}

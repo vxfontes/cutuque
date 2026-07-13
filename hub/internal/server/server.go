@@ -82,7 +82,7 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 	// Protegidas por token.
 	mux.Handle("GET /sessions", requireAuth(cfg.Token, SessionsHandler(reg)))
 	mux.Handle("GET /sessions/{id}/output", requireAuth(cfg.Token, SessionOutputHandler(reg)))
-	mux.Handle("GET /ws", requireAuth(cfg.Token, WSHandler(reg)))
+	mux.Handle("GET /ws", requireAuth(cfg.Token, WSHandler(reg, rc.board)))
 	mux.Handle("POST /hooks/claude", requireAuth(cfg.Token, HookHandler(eng)))
 
 	// Comandos (Fase 3): lançar, aprovar/negar e enviar texto.
