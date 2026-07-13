@@ -150,11 +150,14 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 
 	// Quadro Kanban (Cutuque Board). Só quando há store.
 	if rc.board != nil {
-		mux.Handle("GET /board", requireAuth(cfg.Token, BoardListHandler(rc.board)))
-		mux.Handle("POST /board/tasks", requireAuth(cfg.Token, BoardCreateHandler(rc.board)))
-		mux.Handle("PATCH /board/tasks/{id}", requireAuth(cfg.Token, BoardPatchHandler(rc.board)))
-		mux.Handle("DELETE /board/tasks/{id}", requireAuth(cfg.Token, BoardDeleteHandler(rc.board)))
-		mux.Handle("POST /board/tasks/{id}/comments", requireAuth(cfg.Token, BoardCommentHandler(rc.board)))
+		// Board: SEM token. O hub só escuta na interface Tailscale (rede interna,
+		// não exposto à internet), e os agentes usam o CLI sem credencial. Só o
+		// board é aberto; os demais endpoints (sessões, hooks, ws…) seguem com token.
+		mux.Handle("GET /board", BoardListHandler(rc.board))
+		mux.Handle("POST /board/tasks", BoardCreateHandler(rc.board))
+		mux.Handle("PATCH /board/tasks/{id}", BoardPatchHandler(rc.board))
+		mux.Handle("DELETE /board/tasks/{id}", BoardDeleteHandler(rc.board))
+		mux.Handle("POST /board/tasks/{id}/comments", BoardCommentHandler(rc.board))
 	}
 
 	return mux

@@ -86,7 +86,8 @@ Antes de usar a CLI, exporte no seu shell/tmux:
 
 ```bash
 export CUTUQUE_HUB=192.0.2.10:8787
-export CUTUQUE_TOKEN=<token do hub>
 ```
 
-Sem isso a CLI cai no default de dev (`127.0.0.1`) e **não vai achar o hub**.
+**Não precisa de token** — o board é aberto na rede interna (Tailscale, não
+exposto). Sem `CUTUQUE_HUB` a CLI cai no default de dev (`127.0.0.1`) e **não
+acha o hub**.
