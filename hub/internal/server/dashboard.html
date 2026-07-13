@@ -153,6 +153,10 @@
   .m-add { display: flex; gap: 8px; margin-top: 10px; }
   .m-add input { flex: 1; background: var(--panel2); border: 1px solid var(--border); border-radius: 9px; color: var(--text); padding: 8px 10px; font: inherit; font-size: 13px; }
   .m-add button { background: var(--running); border: none; color: #fff; border-radius: 9px; padding: 0 14px; font-weight: 600; cursor: pointer; }
+  .m-move { display: flex; gap: 6px; flex-wrap: wrap; }
+  .m-move-btn { background: var(--panel2); border: 1px solid var(--border); color: var(--muted); border-radius: 8px; padding: 7px 11px; font: inherit; font-size: 12px; cursor: pointer; }
+  .m-move-btn:hover:not(:disabled) { color: var(--text); border-color: var(--faint); }
+  .m-move-btn.current { background: color-mix(in srgb, var(--running) 20%, transparent); color: var(--text); border-color: var(--running); cursor: default; }
   .task-card {
     background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 100%);
     border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; cursor: grab; box-shadow: var(--shadow);
@@ -166,8 +170,21 @@
 
   @media (max-width: 640px) {
     .board-toolbar { padding: 12px 14px 0; }
-    .board-main { padding: 12px 14px 48px; }
-    .board-col { min-width: 200px; max-height: none; }
+    .board-toolbar select { flex: 1; font-size: 16px; } /* 16px evita zoom no iOS */
+    .board-main { padding: 12px 14px 40px; }
+    /* uma coluna por tela, com snap e a próxima "espiando" */
+    .board-cols { gap: 10px; scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; scroll-padding: 14px; }
+    .board-col { min-width: 84vw; max-width: 84vw; max-height: none; scroll-snap-align: start; }
+    .board-col-body { max-height: 62vh; }
+    /* tabs sempre visíveis e tocáveis */
+    .tabs { gap: 4px; }
+    .tab { padding: 7px 12px; }
+    /* modal quase full-width, tocável */
+    .modal-overlay { padding: 3vh 8px; align-items: flex-start; }
+    .modal { max-width: none; padding: 18px 16px 16px; border-radius: 14px; }
+    .modal h2 { font-size: 17px; }
+    .m-add input { font-size: 16px; }
+    .m-move-btn { padding: 9px 12px; font-size: 13px; }
   }
 </style>
 </head>
@@ -469,6 +486,11 @@
       <div class="m-tags">${tags.join('')}</div>
       <div style="font-size:12.5px;color:var(--muted)">Coluna: <b>${COL_LABEL[t.column] || esc(t.column)}</b>${t.role ? ` · Quem: <b>${esc(t.role)}</b>` : ''}</div>
       <div class="m-desc ${t.description ? '' : 'empty'}">${t.description ? esc(t.description) : 'sem descrição'}</div>
+      <div class="m-section"><h3>Mover para</h3>
+        <div class="m-move">
+          ${Object.keys(COL_LABEL).map((c) => `<button class="m-move-btn${t.column === c ? ' current' : ''}" data-col="${c}"${t.column === c ? ' disabled' : ''}>${COL_LABEL[c]}</button>`).join('')}
+        </div>
+      </div>
       <div class="m-section"><h3>Linha do tempo</h3>
         <div class="m-timeline">
           <span class="k">Criado</span><span>${fmtDT(t.created_at)}</span>
@@ -487,6 +509,9 @@
       e.preventDefault();
       const v = document.getElementById('mAddInput').value.trim();
       if (v && openCardId) addComment(openCardId, v);
+    });
+    $cardModalBody.querySelectorAll('.m-move-btn').forEach((b) => {
+      b.addEventListener('click', () => { if (openCardId && !b.disabled) moveTask(openCardId, b.dataset.col); });
     });
   }
   function openCard(id) { const t = tasks.get(id); if (!t) return; openCardId = id; renderCardModal(t); $cardModal.hidden = false; }

@@ -78,12 +78,15 @@ refletir a realidade.
 > sessão (grupo tmux + sessão) é automática — não passe tags. Mantenha o quadro
 > sempre atualizado.
 
-## Configuração
+## Configuração (IMPORTANTE)
 
-A CLI fala com o hub (default `http://127.0.0.1:8787`, token `dev-token` em dev).
-Sobrescreva por ambiente quando necessário:
+⚠️ **Use SEMPRE o hub no Tailscale — `192.0.2.10:8787`.** Não existe
+`localhost`/`127.0.0.1:8787` pra você (aquilo é só o dev local da mantenedora).
+Antes de usar a CLI, exporte no seu shell/tmux:
 
 ```bash
-export CUTUQUE_HUB=192.0.2.10:8787   # ou CUTUQUE_DECK_HUB
-export CUTUQUE_TOKEN=<seu-token>
+export CUTUQUE_HUB=192.0.2.10:8787
+export CUTUQUE_TOKEN=<token do hub>
 ```
+
+Sem isso a CLI cai no default de dev (`127.0.0.1`) e **não vai achar o hub**.
