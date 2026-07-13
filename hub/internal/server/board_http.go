@@ -3,9 +3,18 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/vxfontes/cutuque/hub/internal/board"
 )
+
+// boardLoc é o fuso do fechamento semanal (domingo 23:59).
+func boardLoc() *time.Location {
+	if loc, err := time.LoadLocation("America/Sao_Paulo"); err == nil {
+		return loc
+	}
+	return time.UTC
+}
 
 // NOTA: reusa o helper JÁ EXISTENTE `writeJSONResp(w, status, v)` (settings.go).
 // NÃO declarar `writeJSON` aqui — o pacote server já tem um `writeJSON` com
@@ -53,6 +62,7 @@ func BoardPatchHandler(st *board.Store) http.HandlerFunc {
 			Title       *string `json:"title"`
 			Description *string `json:"description"`
 			Role        *string `json:"role"`
+			Encalhada   *bool   `json:"encalhada"`
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in) != nil {
 			writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "bad_request"})
@@ -62,7 +72,16 @@ func BoardPatchHandler(st *board.Store) http.HandlerFunc {
 			writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "invalid_column"})
 			return
 		}
-		t, ok := st.Update(id, in.Column, in.Title, in.Description, in.Role)
+		var t board.Task
+		ok := false
+		if in.Column != nil || in.Title != nil || in.Description != nil || in.Role != nil {
+			t, ok = st.Update(id, in.Column, in.Title, in.Description, in.Role)
+		}
+		// Encalhada é aplicada por último (o Update limpa a marca ao mover; um
+		// pedido explícito de encalhada=true tem que sobrepor isso).
+		if in.Encalhada != nil {
+			t, ok = st.SetEncalhada(id, *in.Encalhada)
+		}
 		if !ok {
 			writeJSONResp(w, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
@@ -93,6 +112,26 @@ func BoardCommentHandler(st *board.Store) http.HandlerFunc {
 			return
 		}
 		writeJSONResp(w, http.StatusCreated, t)
+	}
+}
+
+// BoardArchiveHandler responde o arquivo (concluídos por semana, mais recente 1º).
+func BoardArchiveHandler(st *board.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		weeks := st.ArchivedWeeks()
+		if weeks == nil {
+			weeks = []board.ArchivedWeek{}
+		}
+		writeJSONResp(w, http.StatusOK, map[string]any{"weeks": weeks})
+	}
+}
+
+// BoardCloseHandler fecha a semana manualmente (arquiva concluídos + marca encalhadas).
+func BoardCloseHandler(st *board.Store) http.HandlerFunc {
+	loc := boardLoc()
+	return func(w http.ResponseWriter, r *http.Request) {
+		archived, stalled := st.CloseWeek(time.Now().In(loc))
+		writeJSONResp(w, http.StatusOK, map[string]int{"archived": archived, "stalled": stalled})
 	}
 }
 

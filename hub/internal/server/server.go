@@ -159,8 +159,12 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		mux.Handle("GET /board", BoardListHandler(rc.board))
 		mux.Handle("POST /board/tasks", BoardCreateHandler(rc.board))
 		mux.Handle("PATCH /board/tasks/{id}", BoardPatchHandler(rc.board))
-		mux.Handle("DELETE /board/tasks/{id}", BoardDeleteHandler(rc.board))
+		// DELETE exige token: só a mantenedora (dashboard/app, com token injetado) apaga
+		// cards. Os agentes usam o CLI sem token e não conseguem deletar.
+		mux.Handle("DELETE /board/tasks/{id}", requireAuth(cfg.Token, BoardDeleteHandler(rc.board)))
 		mux.Handle("POST /board/tasks/{id}/comments", BoardCommentHandler(rc.board))
+		mux.Handle("GET /board/archive", BoardArchiveHandler(rc.board))
+		mux.Handle("POST /board/close", BoardCloseHandler(rc.board))
 	}
 
 	return mux

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata" // tz embutida: LoadLocation("America/Sao_Paulo") funciona no container alpine
 
 	"github.com/vxfontes/cutuque/hub/internal/adapter/claudecode"
 	"github.com/vxfontes/cutuque/hub/internal/adapter/codex"
@@ -58,6 +59,13 @@ func main() {
 		boardPath := filepath.Join(filepath.Dir(p), "board.json")
 		boardStore = board.NewAt(boardPath)
 		logger.Info("board persistido em disco", "path", boardPath, "tarefas", len(boardStore.List()))
+	}
+
+	// Fechamento semanal automático (domingo 23:59 America/Sao_Paulo): arquiva os
+	// concluídos e marca encalhadas. Manual: POST /board/close.
+	if loc, err := time.LoadLocation("America/Sao_Paulo"); err == nil {
+		board.StartWeeklyCloser(boardStore, loc)
+		logger.Info("fechamento semanal do board agendado", "tz", "America/Sao_Paulo")
 	}
 
 	// CUTUQUE_DATABASE_URL liga o histórico no Postgres (schema `cutuque`):

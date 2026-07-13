@@ -1,6 +1,37 @@
 const COLS = ['a_fazer', 'em_progresso', 'feito', 'em_revisao', 'concluido'];
 const LABEL = { a_fazer: 'A fazer', em_progresso: 'Em progresso', feito: 'Feito', em_revisao: 'Em revisão', concluido: 'Concluído' };
 
+// Escopo do list/week. Padrão: o AMBIENTE (grupo) da identidade — o orquestrador
+// e os subagentes compartilham a visão do ambiente. Flags ampliam/estreitam:
+//   --all            todos os ambientes
+//   --group <nome>   um ambiente específico
+//   --session|--mine só a minha sessão
+export function resolveScope(identity, flags = {}) {
+  if ('all' in flags) return { kind: 'all' };
+  if (flags.group) return { kind: 'group', group: flags.group };
+  if ('session' in flags || 'mine' in flags) return { kind: 'session', group: identity.group, session: identity.session };
+  return { kind: 'group', group: identity.group };
+}
+export function inScope(t, s) {
+  if (s.kind === 'all') return true;
+  if (s.kind === 'group') return t.group === s.group;
+  return t.group === s.group && t.session === s.session;
+}
+function scopeLabel(s) {
+  if (s.kind === 'all') return 'todos os ambientes';
+  if (s.kind === 'group') return s.group;
+  return `${s.group}/${s.session}`;
+}
+function cardLine(t) {
+  const marks = [];
+  const who = t.role || t.type;
+  if (who) marks.push(who);
+  if (t.encalhada) marks.push('encalhada');
+  const nc = (t.comments || []).length;
+  if (nc) marks.push(`${nc}c`);
+  return `  ${t.id}  ${t.title}${marks.length ? `  (${marks.join(', ')})` : ''}`;
+}
+
 export const commands = {
   async add(cli, title, { desc = '' } = {}) {
     const t = await cli.client.createTask({
@@ -21,16 +52,46 @@ export const commands = {
     await cli.client.patchTask(id, { description: text });
     cli.out(`✓ descrição atualizada em ${id}`);
   },
-  async list(cli) {
+  // list: board atual (não-arquivados, INCLUINDO encalhados) no escopo escolhido.
+  async list(cli, { flags = {} } = {}) {
+    const scope = resolveScope(cli.identity, flags);
     const all = await cli.client.listTasks();
-    const mine = all.filter((t) => t.group === cli.identity.group && t.session === cli.identity.session);
-    cli.out(`Board de ${cli.identity.group}/${cli.identity.session} (${mine.length}):`);
+    const mine = all.filter((t) => inScope(t, scope));
+    cli.out(`Board ${scopeLabel(scope)} (${mine.length}):`);
     for (const col of COLS) {
       const items = mine.filter((t) => t.column === col);
       if (!items.length) continue;
       cli.out(`\n${LABEL[col]}:`);
-      for (const t of items) cli.out(`  ${t.id}  ${t.title}`);
+      for (const t of items) cli.out(cardLine(t));
     }
+  },
+  // week: acessa os concluídos ARQUIVADOS por semana. Sem label -> lista as semanas;
+  // com label (ex: 2026-W28) -> mostra os cards daquela semana no escopo.
+  async week(cli, { flags = {}, args = [] } = {}) {
+    const scope = resolveScope(cli.identity, flags);
+    const weeks = await cli.client.archive();
+    const label = args[0];
+    if (!label) {
+      if (!weeks.length) { cli.out('Nenhuma semana arquivada ainda.'); return; }
+      cli.out(`Semanas arquivadas (${scopeLabel(scope)}):`);
+      for (const w of weeks) {
+        const n = w.tasks.filter((t) => inScope(t, scope)).length;
+        cli.out(`  ${w.label}  ${w.start} – ${w.end}  (${n} concluído${n === 1 ? '' : 's'})`);
+      }
+      cli.out(`\nuse: cutuque task week ${weeks[0].label}`);
+      return;
+    }
+    const wk = weeks.find((w) => w.label === label);
+    if (!wk) throw new Error(`semana não encontrada: ${label}`);
+    const items = wk.tasks.filter((t) => inScope(t, scope));
+    cli.out(`${wk.label} (${wk.start} – ${wk.end}) — ${scopeLabel(scope)} (${items.length}):`);
+    for (const t of items) cli.out(cardLine(t));
+  },
+  // close-week: fecha a semana manualmente (arquiva concluídos + marca encalhados).
+  // Normalmente roda sozinho (domingo 23:59); aqui é o gatilho manual.
+  async closeWeek(cli) {
+    const r = await cli.client.closeWeek();
+    cli.out(`✓ semana fechada: ${r.archived} arquivado(s), ${r.stalled} encalhado(s)`);
   },
   async move(cli, id, column) {
     if (!COLS.includes(column)) throw new Error(`coluna inválida: ${column} (use: ${COLS.join(', ')})`);

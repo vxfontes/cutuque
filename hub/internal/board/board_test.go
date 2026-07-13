@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestAddListUpdateRemove(t *testing.T) {
@@ -93,5 +94,68 @@ func TestTimelineCommentsDescRole(t *testing.T) {
 	}
 	if _, ok := s.AddComment("inexistente", "x", "y"); ok {
 		t.Fatalf("AddComment em id inexistente deveria falhar")
+	}
+}
+
+func TestSetEncalhada(t *testing.T) {
+	s := New()
+	a := s.Add(NewTask{Title: "marcar manual", Group: "g", Session: "s"})
+	u, ok := s.SetEncalhada(a.ID, true)
+	if !ok || !u.Encalhada {
+		t.Fatalf("SetEncalhada(true) falhou: ok=%v %+v", ok, u)
+	}
+	// mover limpa a marca
+	col := "em_progresso"
+	u, _ = s.Update(a.ID, &col, nil, nil, nil)
+	if u.Encalhada {
+		t.Fatalf("mover deveria limpar encalhada")
+	}
+	if _, ok := s.SetEncalhada("inexistente", true); ok {
+		t.Fatalf("SetEncalhada em id inexistente deveria falhar")
+	}
+}
+
+func TestCloseWeekArchivesAndStalls(t *testing.T) {
+	s := New()
+	done := s.Add(NewTask{Title: "feito", Group: "g", Session: "x"})
+	col := "concluido"
+	s.Update(done.ID, &col, nil, nil, nil)
+	oldTodo := s.Add(NewTask{Title: "antigo", Group: "g", Session: "x"})
+	recentTodo := s.Add(NewTask{Title: "novo", Group: "g", Session: "x"})
+	prog := s.Add(NewTask{Title: "rodando", Group: "g", Session: "x"})
+	p := "em_progresso"
+	s.Update(prog.ID, &p, nil, nil, nil)
+
+	// backdate o oldTodo para antes desta semana (white-box)
+	s.mu.Lock()
+	ot := s.byID[oldTodo.ID]
+	ot.CreatedAt = time.Now().AddDate(0, 0, -14)
+	s.byID[oldTodo.ID] = ot
+	s.mu.Unlock()
+
+	archived, stalled := s.CloseWeek(time.Now())
+	if archived != 1 {
+		t.Fatalf("archived=%d, esperava 1", archived)
+	}
+	if stalled != 1 {
+		t.Fatalf("stalled=%d, esperava 1", stalled)
+	}
+	if _, ok := s.Get(done.ID); ok {
+		t.Fatalf("concluido deveria ter saído do board")
+	}
+	if g, _ := s.Get(oldTodo.ID); !g.Encalhada {
+		t.Fatalf("oldTodo deveria ser encalhada")
+	}
+	if g, _ := s.Get(recentTodo.ID); g.Encalhada {
+		t.Fatalf("recentTodo NÃO deveria ser encalhada")
+	}
+	weeks := s.ArchivedWeeks()
+	if len(weeks) != 1 || len(weeks[0].Tasks) != 1 || weeks[0].Tasks[0].ID != done.ID {
+		t.Fatalf("arquivo inesperado: %+v", weeks)
+	}
+	// mover a encalhada para em_progresso limpa a marca
+	s.Update(oldTodo.ID, &p, nil, nil, nil)
+	if g, _ := s.Get(oldTodo.ID); g.Encalhada {
+		t.Fatalf("mover deveria limpar encalhada")
 	}
 }

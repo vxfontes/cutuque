@@ -6,23 +6,41 @@
 <title>Cutuque — Command Center</title>
 <style>
   :root {
-    --bg: #0b0e14; --panel: #12161f; --panel2: #171c27; --border: #262d3a;
+    color-scheme: dark;
+    --bg: #0b0e14; --bg2: #131a28; --panel: #12161f; --panel2: #171c27; --border: #262d3a;
     --text: #e6edf3; --muted: #8b98ac; --faint: #5b6675;
     --running: #2d7ff9; --needs_you: #f5a623; --done: #3dc46a; --error: #e5484d; --idle: #6b7280;
+    --header-bg: rgba(11,14,20,.85);
+    --prompt-text: #ffe9c2; --type-text: #c9b8ff; --type-base: #8b5cf6; --warn-text: #f5a623;
     --shadow: 0 1px 3px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.25);
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #f5f7fb; --bg2: #e6edfa; --panel: #ffffff; --panel2: #eef2f9; --border: #d7dEe8;
+    --text: #17202e; --muted: #56617a; --faint: #8a95a8;
+    --header-bg: rgba(245,247,251,.85);
+    --prompt-text: #7a4b00; --type-text: #6d28d9; --type-base: #8b5cf6; --warn-text: #9a6600;
+    --shadow: 0 1px 2px rgba(20,30,50,.07), 0 8px 24px rgba(20,30,50,.10);
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
   body {
-    background: radial-gradient(1200px 600px at 20% -10%, #131a28 0%, var(--bg) 55%) fixed;
+    background: radial-gradient(1200px 600px at 20% -10%, var(--bg2) 0%, var(--bg) 55%) fixed;
     color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
+  .ic { width: 12px; height: 12px; vertical-align: -2px; flex: none; display: inline-block; }
   header {
     display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
     padding: 18px 24px; border-bottom: 1px solid var(--border);
-    position: sticky; top: 0; background: rgba(11,14,20,.85); backdrop-filter: blur(10px); z-index: 5;
+    position: sticky; top: 0; background: var(--header-bg); backdrop-filter: blur(10px); z-index: 5;
   }
+  .theme-toggle {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--muted);
+    border-radius: 8px; width: 34px; height: 30px; display: grid; place-items: center; cursor: pointer; transition: .12s;
+  }
+  .theme-toggle:hover { color: var(--text); border-color: var(--faint); }
+  .theme-toggle .ic { width: 16px; height: 16px; vertical-align: 0; }
   .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; letter-spacing: .2px; }
   .brand .logo { width: 12px; height: 12px; border-radius: 50%; background: conic-gradient(from 0deg, var(--running), var(--needs_you), var(--done), var(--running)); box-shadow: 0 0 12px rgba(45,127,249,.6); }
   .brand small { color: var(--faint); font-weight: 500; font-size: 12px; letter-spacing: .5px; text-transform: uppercase; }
@@ -104,14 +122,35 @@
   .tab:hover { color: var(--text); }
   .tab.active { background: var(--panel2); color: var(--text); border-color: var(--border); }
 
-  #boardView { display: none; }
+  #sessionsView, #boardView, #arquivoView { display: none; }
+  body[data-view="sessions"] #sessionsView { display: block; }
   body[data-view="board"] #boardView { display: block; }
-  body[data-view="board"] #sessionsView { display: none; }
+  body[data-view="arquivo"] #arquivoView { display: block; }
 
-  .board-toolbar { display: flex; gap: 10px; align-items: center; padding: 14px 24px 0; }
+  .board-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 14px 24px 0; }
+  .board-btn {
+    background: var(--panel2); color: var(--muted); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 12px; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: .12s;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .board-btn:hover { color: var(--text); border-color: var(--faint); }
+  .board-btn .ic { width: 14px; height: 14px; }
   .board-toolbar select {
-    background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
-    padding: 6px 10px; font: inherit; font-size: 12.5px;
+    appearance: none; -webkit-appearance: none;
+    background-color: var(--panel2); color: var(--text);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b98ac' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 11px center; background-size: 12px;
+    border: 1px solid var(--border); border-radius: 9px;
+    padding: 7px 32px 7px 12px; font: inherit; font-size: 12.5px; font-weight: 500;
+    max-width: 200px; cursor: pointer; transition: border-color .12s, background-color .12s, color .12s;
+  }
+  .board-toolbar select:hover { border-color: var(--faint); }
+  .board-toolbar select:focus-visible { outline: none; border-color: var(--running); box-shadow: 0 0 0 3px color-mix(in srgb, var(--running) 22%, transparent); }
+  /* filtro ativo (≠ todos) ganha realce */
+  .board-toolbar select.active {
+    color: var(--running); border-color: color-mix(in srgb, var(--running) 55%, var(--border));
+    background-color: color-mix(in srgb, var(--running) 12%, var(--panel2));
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%232d7ff9' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
   }
   .board-main { padding: 14px 24px 60px; }
   .board-cols { display: flex; gap: 14px; align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
@@ -137,7 +176,10 @@
   .modal-close { position: absolute; top: 12px; right: 14px; background: transparent; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
   .modal-close:hover { color: var(--text); }
   .modal h2 { margin: 0 26px 4px 0; font-size: 18px; }
-  .modal .m-tags { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 4px; }
+  .modal .m-tags { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 4px; --tc: var(--faint); }
+  .modal .m-tags[data-type="claude"]   { --tc: #2d7ff9; }
+  .modal .m-tags[data-type="codex"]    { --tc: #22c55e; }
+  .modal .m-tags[data-type="opencode"] { --tc: #a855f7; }
   .modal .m-desc { color: var(--muted); font-size: 13.5px; white-space: pre-wrap; margin: 10px 0; }
   .modal .m-desc.empty { color: var(--faint); font-style: italic; }
   .m-section { margin-top: 16px; }
@@ -157,28 +199,120 @@
   .m-move-btn { background: var(--panel2); border: 1px solid var(--border); color: var(--muted); border-radius: 8px; padding: 7px 11px; font: inherit; font-size: 12px; cursor: pointer; }
   .m-move-btn:hover:not(:disabled) { color: var(--text); border-color: var(--faint); }
   .m-move-btn.current { background: color-mix(in srgb, var(--running) 20%, transparent); color: var(--text); border-color: var(--running); cursor: default; }
+  .m-move-btn .ic { width: 13px; height: 13px; vertical-align: -2px; }
+  .m-enc-btn { color: var(--error); border-color: color-mix(in srgb, var(--error) 40%, var(--border)); }
+  .m-enc-btn:hover:not(:disabled) { color: var(--error); border-color: var(--error); }
+  .m-enc-btn.current { background: color-mix(in srgb, var(--error) 20%, transparent); border-color: var(--error); color: var(--text); }
+  .m-footer { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; }
+  .m-delete { display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 1px solid color-mix(in srgb, var(--error) 40%, var(--border)); color: var(--error); border-radius: 8px; padding: 7px 12px; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: .12s; }
+  .m-delete:hover { background: color-mix(in srgb, var(--error) 12%, transparent); border-color: var(--error); }
+  .m-delete .ic { width: 14px; height: 14px; }
+  /* Modal de confirmação */
+  .confirm { position: relative; width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 22px; }
+  .confirm h3 { margin: 0 0 8px; font-size: 16px; }
+  .confirm p { margin: 0 0 18px; color: var(--muted); font-size: 13.5px; }
+  .confirm-actions { display: flex; gap: 10px; justify-content: flex-end; }
+  .confirm-actions button { font: inherit; font-size: 13px; font-weight: 600; border-radius: 8px; padding: 8px 16px; cursor: pointer; border: 1px solid var(--border); }
+  .cf-cancel { background: var(--panel2); color: var(--text); }
+  .cf-cancel:hover { border-color: var(--faint); }
+  .cf-delete { background: var(--error); color: #fff; border-color: var(--error); }
+  .cf-delete:hover { filter: brightness(1.08); }
   .task-card {
-    background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 100%);
-    border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; cursor: grab; box-shadow: var(--shadow);
+    position: relative; overflow: hidden;
+    --tc: var(--faint); /* cor do tipo de IA; default cinza p/ sem tipo */
+    background: linear-gradient(180deg, color-mix(in srgb, var(--tc) 8%, var(--panel)) 0%, var(--panel2) 100%);
+    border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 10px 14px; cursor: grab; box-shadow: var(--shadow);
   }
+  /* barra de destaque à esquerda, na cor do tipo */
+  .task-card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--tc); }
+  .task-card[data-type="claude"]   { --tc: #2d7ff9; } /* azul */
+  .task-card[data-type="codex"]    { --tc: #22c55e; } /* verde */
+  .task-card[data-type="opencode"] { --tc: #a855f7; } /* roxo */
   .task-card:active { cursor: grabbing; }
   .task-card.dragging { opacity: .4; }
-  .task-title { font-weight: 600; font-size: 13px; word-break: break-word; margin-bottom: 6px; }
-  .task-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 11px; color: var(--muted); }
-  .tag-type { text-transform: uppercase; letter-spacing: .04em; font-weight: 600; color: #c9b8ff; background: color-mix(in srgb, #8b5cf6 16%, transparent); border-color: color-mix(in srgb, #8b5cf6 35%, transparent); }
-  .task-dates { margin-top: 6px; font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .task-title { font-weight: 600; font-size: 13px; word-break: break-word; margin-bottom: 8px; }
+  /* linha 1: tags (tipo, grupo, sessão) */
+  .task-tags { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  /* linha 2 (abaixo das tags): ago + comentários + datas + selo, tudo junto */
+  .task-stats { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-top: 8px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .task-stats .ic { width: 11px; height: 11px; }
+  .task-stats .stat, .task-stats .task-comments { display: inline-flex; align-items: center; gap: 4px; }
+  .tag-type { text-transform: uppercase; letter-spacing: .04em; font-weight: 600; color: var(--tc); background: color-mix(in srgb, var(--tc) 16%, transparent); border-color: color-mix(in srgb, var(--tc) 40%, transparent); }
+  .task-comments { color: var(--muted); }
+  .task-stalled { font-size: 10.5px; color: var(--warn-text); background: color-mix(in srgb, var(--warn-text) 14%, transparent); border: 1px solid color-mix(in srgb, var(--warn-text) 30%, transparent); border-radius: 6px; padding: 0 5px; display: inline-flex; align-items: center; gap: 4px; }
+  /* Encalhada: to-do antigo esquecido — sombra vermelha + alerta (ícone injetado no título) */
+  .task-card.encalhada { border-color: color-mix(in srgb, var(--error) 55%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--error) 30%, transparent), 0 4px 16px color-mix(in srgb, var(--error) 22%, transparent); }
+  .task-card.encalhada .task-title .ic { color: var(--error); margin-right: 2px; }
+  /* Coluna Encalhadas (à esquerda do board): alarme vermelho, só aparece quando há itens */
+  .board-cols { padding-top: 36px; }
+  .board-col.col-encalhadas { display: none; position: relative; overflow: visible; }
+  .board-col.col-encalhadas.has-enc { display: flex; }
+  .board-col.col-encalhadas.has-enc {
+    border-color: color-mix(in srgb, var(--error) 55%, var(--border));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--error) 35%, transparent), 0 0 26px color-mix(in srgb, var(--error) 26%, transparent);
+    background: color-mix(in srgb, var(--error) 5%, var(--panel));
+  }
+  .board-col.col-encalhadas .board-col-head { color: var(--error); padding-top: 22px; border-bottom-color: color-mix(in srgb, var(--error) 30%, var(--border)); }
+  .board-col.col-encalhadas .board-col-head .count { color: var(--error); }
+  .enc-badge {
+    display: none; position: absolute; top: -30px; left: 50%; transform: translateX(-50%);
+    width: 50px; height: 48px; z-index: 3;
+    filter: drop-shadow(0 3px 5px color-mix(in srgb, var(--error) 45%, transparent));
+  }
+  .col-encalhadas.has-enc .enc-badge { display: block; }
+  /* Cards encalhados: neutros pra não poluir — barra de alerta vermelha e degradê
+     neutro (SEM a cor do tipo). Só a tag do tipo mantém a cor (claude/codex/opencode). */
+  .task-card.encalhada { background: linear-gradient(180deg, color-mix(in srgb, var(--error) 4%, var(--panel)) 0%, var(--panel2) 100%); }
+  .task-card.encalhada::before { background: var(--error); }
+  /* Página Arquivo (acessada por botão): hierarquia mês > semana */
+  .arq-head { display: flex; align-items: center; gap: 12px; padding: 18px 24px 0; }
+  .arq-head h2 { margin: 0; font-size: 17px; }
+  .arq-empty { color: var(--muted); padding: 60px 24px; text-align: center; }
+  .arq-wrap { padding: 18px 24px 60px; max-width: 940px; margin: 0 auto; }
+  .arq-month { margin-bottom: 26px; }
+  .arq-month-head {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+    margin: 0 2px 12px; padding-bottom: 8px; border-bottom: 2px solid var(--border);
+  }
+  .arq-month-head .mname { font-size: 16px; font-weight: 700; }
+  .arq-month-head .cnt { font-size: 12px; font-weight: 500; color: var(--faint); white-space: nowrap; }
+  .arq-week { border: 1px solid var(--border); border-radius: 12px; margin-bottom: 10px; background: var(--panel); overflow: hidden; }
+  .arq-week > summary { cursor: pointer; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; gap: 10px; list-style: none; }
+  .arq-week > summary::-webkit-details-marker { display: none; }
+  .arq-week > summary:hover { background: var(--panel2); }
+  .arq-week .wk-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .arq-week .wk-chev { color: var(--faint); transition: transform .15s; flex: none; }
+  .arq-week[open] .wk-chev { transform: rotate(90deg); }
+  .arq-week .wk-range { font-weight: 600; font-size: 13.5px; }
+  .arq-week .wk-sub { color: var(--faint); font-weight: 400; font-size: 11.5px; }
+  .arq-week .rng { color: var(--faint); font-weight: 400; font-size: 12.5px; white-space: nowrap; flex: none; }
+  .arq-week[open] > summary { border-bottom: 1px solid var(--border); }
+  .arq-items { padding: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
 
+  /* ===== Responsivo ===== */
+  @media (max-width: 900px) {
+    header { padding: 14px 16px; }
+    .board-toolbar, .arq-head { padding-left: 16px; padding-right: 16px; }
+    .board-main { padding-left: 16px; padding-right: 16px; }
+    .arq-wrap { padding-left: 16px; padding-right: 16px; }
+  }
   @media (max-width: 640px) {
-    .board-toolbar { padding: 12px 14px 0; }
-    .board-toolbar select { flex: 1; font-size: 16px; } /* 16px evita zoom no iOS */
+    .board-toolbar { padding: 12px 14px 0; flex-wrap: wrap; }
+    .board-toolbar select { flex: 1 1 45%; min-width: 0; max-width: none; font-size: 16px; } /* 16px evita zoom no iOS */
+    .board-toolbar .board-btn { flex: 1 1 100%; justify-content: center; }
     .board-main { padding: 12px 14px 40px; }
     /* uma coluna por tela, com snap e a próxima "espiando" */
-    .board-cols { gap: 10px; scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; scroll-padding: 14px; }
-    .board-col { min-width: 84vw; max-width: 84vw; max-height: none; scroll-snap-align: start; }
-    .board-col-body { max-height: 62vh; }
+    .board-cols { gap: 10px; padding-top: 40px; scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; scroll-padding: 14px; }
+    .board-col { min-width: 86vw; max-width: 86vw; max-height: none; scroll-snap-align: start; }
+    .board-col-body { max-height: 60vh; }
     /* tabs sempre visíveis e tocáveis */
     .tabs { gap: 4px; }
     .tab { padding: 7px 12px; }
+    /* arquivo em coluna única, tocável */
+    .arq-head { padding: 14px 14px 0; }
+    .arq-wrap { padding: 14px 14px 40px; }
+    .arq-items { grid-template-columns: 1fr; }
+    .arq-week > summary { padding: 14px; }
     /* modal quase full-width, tocável */
     .modal-overlay { padding: 3vh 8px; align-items: flex-start; }
     .modal { max-width: none; padding: 18px 16px 16px; border-radius: 14px; }
@@ -186,17 +320,24 @@
     .m-add input { font-size: 16px; }
     .m-move-btn { padding: 9px 12px; font-size: 13px; }
   }
+  @media (max-width: 420px) {
+    .brand small { display: none; }
+    .counts { gap: 6px; }
+    .pill { padding: 3px 8px; font-size: 11px; }
+    .board-col { min-width: 90vw; max-width: 90vw; }
+  }
 </style>
 </head>
-<body data-view="sessions">
+<body data-view="board">
   <header>
     <div class="brand"><span class="logo"></span> Cutuque <small>Command Center</small></div>
     <nav class="tabs" id="tabs">
-      <button type="button" class="tab active" data-view="sessions">Sessões</button>
-      <button type="button" class="tab" data-view="board">Board</button>
+      <button type="button" class="tab" data-view="sessions">Sessões</button>
+      <button type="button" class="tab active" data-view="board">Board</button>
     </nav>
     <div class="counts" id="counts"></div>
     <div class="conn" id="conn"><span class="dot"></span><span id="connText">conectando…</span></div>
+    <button type="button" class="theme-toggle" id="themeToggle" title="Alternar tema" aria-label="Alternar tema"></button>
   </header>
   <div id="sessionsView">
     <div class="filters" id="filters"></div>
@@ -204,10 +345,27 @@
   </div>
   <section id="boardView">
     <div class="board-toolbar">
-      <select id="boardFilter"><option value="all">Todos</option></select>
+      <select id="filterGroup" class="board-filter" title="Filtrar por ambiente"></select>
+      <select id="filterType" class="board-filter" title="Filtrar por tipo de IA"></select>
+      <select id="filterSession" class="board-filter" title="Filtrar por sessão"></select>
+      <button type="button" class="board-btn" id="arquivoBtn" title="Ver arquivo semanal"></button>
     </div>
     <div class="board-main">
       <div class="board-cols" id="boardCols">
+        <div class="board-col col-encalhadas" id="colEncalhadas" data-col="encalhadas">
+          <svg class="enc-badge" viewBox="0 0 52 50" aria-hidden="true">
+            <g stroke="#e5484d" stroke-width="2.6" stroke-linecap="round">
+              <line x1="26" y1="1.5" x2="26" y2="8"/>
+              <line x1="12" y1="5" x2="16" y2="11"/>
+              <line x1="40" y1="5" x2="36" y2="11"/>
+            </g>
+            <path d="M22.1 16.4 4.2 42.3c-1.6 2.3 0 5.4 2.8 5.4h38c2.8 0 4.4-3.1 2.8-5.4L29.9 16.4c-1.9-2.7-5.9-2.7-7.8 0z" fill="#e5484d" stroke="#fff" stroke-width="1.5"/>
+            <path d="M26 26v10" stroke="#fff" stroke-width="3.6" stroke-linecap="round"/>
+            <circle cx="26" cy="42.5" r="2.4" fill="#fff"/>
+          </svg>
+          <div class="board-col-head">Encalhadas <span class="count" id="count-encalhadas">0</span></div>
+          <div class="board-col-body" id="col-encalhadas" data-col="encalhadas"></div>
+        </div>
         <div class="board-col" data-col="a_fazer">
           <div class="board-col-head">A fazer <span class="count" id="count-a_fazer">0</span></div>
           <div class="board-col-body" id="col-a_fazer" data-col="a_fazer"></div>
@@ -232,10 +390,29 @@
     </div>
   </section>
 
+  <section id="arquivoView">
+    <div class="arq-head">
+      <button type="button" class="board-btn" id="arquivoBack"></button>
+      <h2>Arquivo semanal</h2>
+    </div>
+    <div class="arq-wrap" id="arqWrap"><div class="arq-empty">Carregando arquivo…</div></div>
+  </section>
+
   <div id="cardModal" class="modal-overlay" hidden>
     <div class="modal" role="dialog" aria-modal="true">
       <button class="modal-close" id="cardModalClose" aria-label="Fechar">✕</button>
       <div id="cardModalBody"></div>
+    </div>
+  </div>
+
+  <div id="confirmModal" class="modal-overlay" hidden>
+    <div class="confirm" role="dialog" aria-modal="true">
+      <h3>Apagar card?</h3>
+      <p id="confirmText">Esta ação não pode ser desfeita.</p>
+      <div class="confirm-actions">
+        <button type="button" class="cf-cancel" id="confirmCancel">Cancelar</button>
+        <button type="button" class="cf-delete" id="confirmDelete">Apagar</button>
+      </div>
     </div>
   </div>
 
@@ -249,6 +426,42 @@
     idle:      { color: 'var(--idle)',       glyph: '○', label: 'idle' },
   };
   const ORDER = ['needs_you', 'error', 'running', 'done', 'idle'];
+
+  // Ícones SVG (currentColor -> herdam a cor e o tema). Sem emoji.
+  const svg = (inner, o = 'fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round') =>
+    `<svg class="ic" viewBox="0 0 24 24" style="${o}" aria-hidden="true">${inner}</svg>`;
+  const ICONS = {
+    chat: svg('<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5z"/>'),
+    clock: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+    alert: svg('<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/>'),
+    play: svg('<path d="M8 5v14l11-7z"/>', 'fill:currentColor;stroke:none'),
+    stop: svg('<rect x="6" y="6" width="12" height="12" rx="2"/>', 'fill:currentColor;stroke:none'),
+    sun: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'),
+    moon: svg('<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/>'),
+    archive: svg('<path d="M21 8v13H3V8"/><rect x="1" y="3" width="22" height="5" rx="1"/><path d="M10 12h4"/>'),
+    back: svg('<path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/>'),
+    chev: svg('<path d="M9 6l6 6-6 6"/>'),
+    trash: svg('<path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/>'),
+  };
+
+  // Tema light/dark com seletor (persistido). Default: preferência do sistema.
+  const $themeToggle = document.getElementById('themeToggle');
+  function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    // mostra o ícone do modo pro qual vai alternar
+    $themeToggle.innerHTML = theme === 'light' ? ICONS.moon : ICONS.sun;
+  }
+  (function initTheme() {
+    let t;
+    try { t = localStorage.getItem('cutuque-theme'); } catch { /* sem storage */ }
+    if (!t) t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    applyTheme(t);
+  })();
+  $themeToggle.addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+    applyTheme(next);
+    try { localStorage.setItem('cutuque-theme', next); } catch { /* sem storage */ }
+  });
 
   // Servido pelo próprio hub (mesma origem) -> o WS não é cross-origin e passa.
   // O token vem do query (?token=...); em dev cai no default.
@@ -289,7 +502,6 @@
     ['concluido', 'Concluído'],
   ];
   const tasks = new Map();
-  let boardFilter = 'all';
   let dragId = null;
 
   const $grid = document.getElementById('grid');
@@ -299,7 +511,11 @@
   const $connText = document.getElementById('connText');
   const $tabs = document.getElementById('tabs');
   const $boardCols = document.getElementById('boardCols');
-  const $boardFilter = document.getElementById('boardFilter');
+  // Três filtros independentes (E): ambiente (grupo), tipo, sessão.
+  const $fGroup = document.getElementById('filterGroup');
+  const $fType = document.getElementById('filterType');
+  const $fSession = document.getElementById('filterSession');
+  const boardFilters = { group: 'all', type: 'all', session: 'all' };
 
   function ago(iso) {
     const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
@@ -357,7 +573,7 @@
             ${s.agent ? `<span class="tag">${esc(s.agent)}</span>` : ''}
             <span class="sep">·</span><span class="ago">${s.updated_at ? ago(s.updated_at) : ''}</span>
           </div>
-          ${showPrompt ? `<div class="prompt">⚠ ${esc(s.pending_prompt)}</div>` : ''}
+          ${showPrompt ? `<div class="prompt">${ICONS.alert} ${esc(s.pending_prompt)}</div>` : ''}
         </div>
       </div>`;
     }).join('');
@@ -372,77 +588,149 @@
   function cardHtml(t) {
     const tags = [t.group, t.session].filter(Boolean);
     const typeTag = t.type ? `<span class="tag tag-type">${esc(t.type)}</span>` : '';
-    // Datas derivadas (visualização interna, discreta): início/fim relativos.
-    const dates = [];
-    if (t.started_at) dates.push(`▶ ${ago(t.started_at)}`);
-    if (t.ended_at) dates.push(`■ ${ago(t.ended_at)}`);
-    const datesHtml = dates.length ? `<div class="task-dates">${dates.join(' · ')}</div>` : '';
-    return `<div class="task-card" draggable="true" data-id="${esc(t.id)}">
+    const nComments = (t.comments || []).length;
+    const ACTIVE = ['em_progresso', 'feito', 'em_revisao'];
+    // Linha única de stats (abaixo das tags): ago + comentários + datas + selo.
+    const stats = [];
+    if (t.updated_at) stats.push(`<span class="stat ago" title="atualizado">${ago(t.updated_at)}</span>`);
+    if (nComments) stats.push(`<span class="task-comments" title="${nComments} coment.">${ICONS.chat} ${nComments}</span>`);
+    if (t.started_at) stats.push(`<span class="stat" title="iniciado">${ICONS.play} ${ago(t.started_at)}</span>`);
+    if (t.ended_at) stats.push(`<span class="stat" title="finalizado">${ICONS.stop} ${ago(t.ended_at)}</span>`);
+    if (ACTIVE.includes(t.column) && t.updated_at) {
+      const days = Math.floor((Date.now() - new Date(t.updated_at).getTime()) / 86400000);
+      if (days >= 7) stats.push(`<span class="task-stalled" title="sem update há ${days} dias">${ICONS.clock} parado há ${days}d</span>`);
+    }
+    return `<div class="task-card" draggable="true" data-id="${esc(t.id)}" data-type="${esc(t.type || '')}">
       <div class="task-title">${esc(t.title)}</div>
-      <div class="task-meta">
-        ${typeTag}
-        ${tags.map((tg) => `<span class="tag">${esc(tg)}</span>`).join('')}
-        ${t.updated_at ? `<span class="ago">${ago(t.updated_at)}</span>` : ''}
-      </div>
-      ${datesHtml}
+      <div class="task-tags">${typeTag}${tags.map((tg) => `<span class="tag">${esc(tg)}</span>`).join('')}</div>
+      ${stats.length ? `<div class="task-stats">${stats.join('')}</div>` : ''}
     </div>`;
+  }
+
+  // Popula um <select> de filtro com os valores distintos; a 1ª opção é
+  // "<label>: todos" (auto-rotulada). Reseta pra 'all' se o valor sumiu.
+  function fillFilter(sel, key, label, values) {
+    if (boardFilters[key] !== 'all' && !values.includes(boardFilters[key])) boardFilters[key] = 'all';
+    sel.innerHTML = `<option value="all">${label}: todos</option>` +
+      values.map((v) => `<option value="${esc(v)}">${label}: ${esc(v)}</option>`).join('');
+    sel.value = boardFilters[key];
+    sel.classList.toggle('active', boardFilters[key] !== 'all');
   }
 
   function renderBoard() {
     const all = [...tasks.values()];
 
-    // filtro por grupo/sessão, derivado das tags presentes
-    const tagSet = new Set();
-    all.forEach((t) => {
-      if (t.group) tagSet.add('g:' + t.group);
-      if (t.type) tagSet.add('t:' + t.type);
-      if (t.session) tagSet.add('s:' + t.session);
-    });
-    const tagList = [...tagSet].sort();
-    const LABELS = { 'g:': 'Grupo: ', 't:': 'Tipo: ', 's:': 'Sessão: ' };
-    const cur = $boardFilter.value || 'all';
-    $boardFilter.innerHTML = ['<option value="all">Todos</option>']
-      .concat(tagList.map((tg) => `<option value="${esc(tg)}">${LABELS[tg.slice(0, 2)]}${esc(tg.slice(2))}</option>`))
-      .join('');
-    $boardFilter.value = (tagList.includes(cur) || cur === 'all') ? cur : 'all';
-    boardFilter = $boardFilter.value;
+    // Popula cada filtro com os valores distintos presentes, preservando a seleção.
+    // O 1º item ("… todos") é auto-rotulado, então não precisa de label externo.
+    const distinct = (key) => [...new Set(all.map((t) => t[key]).filter(Boolean))].sort();
+    fillFilter($fGroup, 'group', 'Ambiente', distinct('group'));
+    fillFilter($fType, 'type', 'Tipo', distinct('type'));
+    fillFilter($fSession, 'session', 'Sessão', distinct('session'));
 
-    let list = all;
-    if (boardFilter !== 'all') {
-      const kind = boardFilter.slice(0, 2), val = boardFilter.slice(2);
-      list = list.filter((t) => (kind === 'g:' ? t.group === val : kind === 't:' ? t.type === val : t.session === val));
-    }
+    // Aplica os 3 filtros combinados (E).
+    let list = all.filter((t) =>
+      (boardFilters.group === 'all' || t.group === boardFilters.group) &&
+      (boardFilters.type === 'all' || t.type === boardFilters.type) &&
+      (boardFilters.session === 'all' || t.session === boardFilters.session));
 
+    // Coluna Encalhadas (à esquerda): a_fazer marcados como encalhada, com alerta.
+    const enc = list.filter((t) => t.encalhada)
+      .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    document.getElementById('count-encalhadas').textContent = enc.length;
+    document.getElementById('colEncalhadas').classList.toggle('has-enc', enc.length > 0);
+    document.getElementById('col-encalhadas').innerHTML = enc.length
+      ? enc.map((t) => cardHtml(t)
+          .replace('class="task-card"', 'class="task-card encalhada"')
+          .replace('<div class="task-title">', `<div class="task-title">${ICONS.alert}`)).join('')
+      : `<div class="col-empty">—</div>`;
+
+    // Colunas reais (a_fazer exclui os encalhados, que já estão na coluna à esquerda).
     BOARD_COLUMNS.forEach(([col]) => {
       const body = document.getElementById('col-' + col);
-      const items = list.filter((t) => t.column === col)
+      const items = list.filter((t) => t.column === col && !(col === 'a_fazer' && t.encalhada))
         .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
       document.getElementById('count-' + col).textContent = items.length;
       body.innerHTML = items.length ? items.map(cardHtml).join('') : `<div class="col-empty">—</div>`;
     });
   }
 
-  async function moveTask(id, col) {
+  // Datas em pt-BR. Datas do arquivo vêm como "2026-07-06"; parseia ao meio-dia
+  // pra não escorregar de dia por fuso.
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  const dnum = (d) => d.toLocaleDateString('pt-BR', { day: 'numeric' });
+  const dmon = (d) => d.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
+  function ptRange(startStr, endStr) {
+    const s = new Date(startStr + 'T12:00:00'), e = new Date(endStr + 'T12:00:00');
+    if (s.getMonth() === e.getMonth()) return `${dnum(s)} – ${dnum(e)} de ${dmon(e)}`;
+    return `${dnum(s)} de ${dmon(s)} – ${dnum(e)} de ${dmon(e)}`;
+  }
+  // Mês "dono" da semana ISO = o da quinta-feira (start + 3 dias).
+  function monthOf(startStr) {
+    const thu = new Date(startStr + 'T12:00:00'); thu.setDate(thu.getDate() + 3);
+    return { key: thu.getFullYear() + '-' + String(thu.getMonth()).padStart(2, '0'),
+             label: cap(thu.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })) };
+  }
+
+  async function renderArquivo() {
+    const wrap = document.getElementById('arqWrap');
+    try {
+      const res = await fetch('/board/archive', { headers: { Authorization: 'Bearer ' + TOKEN } });
+      const data = await res.json();
+      const weeks = data.weeks || [];
+      // guarda os arquivados por id pro modal de detalhe (eles não estão no mapa `tasks`)
+      archivedById.clear();
+      weeks.forEach((wk) => (wk.tasks || []).forEach((t) => archivedById.set(t.id, t)));
+      if (!weeks.length) { wrap.innerHTML = `<div class="arq-empty">Nada arquivado ainda. Os concluídos vêm pra cá no fechamento da semana.</div>`; return; }
+      // agrupa por mês (semanas já vêm mais recentes primeiro)
+      const months = [];
+      const byKey = new Map();
+      for (const wk of weeks) {
+        const m = monthOf(wk.start);
+        let g = byKey.get(m.key);
+        if (!g) { g = { label: m.label, weeks: [], total: 0 }; byKey.set(m.key, g); months.push(g); }
+        g.weeks.push(wk); g.total += wk.tasks.length;
+      }
+      const plural = (n) => `${n} concluído${n === 1 ? '' : 's'}`;
+      let first = true;
+      wrap.innerHTML = months.map((g) => `
+        <section class="arq-month">
+          <div class="arq-month-head"><span class="mname">${esc(g.label)}</span><span class="cnt">${plural(g.total)}</span></div>
+          ${g.weeks.map((wk) => {
+            const open = first ? (first = false, 'open') : '';
+            const wnum = (wk.label.split('-W')[1] || '').replace(/^0/, '');
+            return `<details class="arq-week" ${open}>
+              <summary>
+                <span class="wk-title">${ICONS.chev.replace('class="ic"', 'class="ic wk-chev"')}<span>
+                  <span class="wk-range">${ptRange(wk.start, wk.end)}</span>
+                  ${wnum ? ` <span class="wk-sub">· semana ${wnum}</span>` : ''}
+                </span></span>
+                <span class="rng">${plural(wk.tasks.length)}</span>
+              </summary>
+              <div class="arq-items">${wk.tasks.map(cardHtml).join('')}</div>
+            </details>`;
+          }).join('')}
+        </section>`).join('');
+    } catch (e) { wrap.innerHTML = `<div class="arq-empty">Falha ao carregar o arquivo.</div>`; }
+  }
+
+  // PATCH genérico de card (coluna, encalhada, etc). O eco chega via WS e re-renderiza.
+  async function patchTask(id, patch) {
     try {
       const res = await fetch('/board/tasks/' + encodeURIComponent(id), {
         method: 'PATCH',
         headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ column: col }),
+        body: JSON.stringify(patch),
       });
-      if (!res.ok) {
-        console.error('moveTask falhou:', res.status);
-        // sinal visual leve: reverte o render (o WS não vai emitir board_updated),
-        // então re-renderiza o estado atual para o card "voltar" visualmente.
-        renderBoard();
-      }
-      // sucesso: o eco chega via WS (board_updated) e re-renderiza.
-    } catch (e) {
-      console.error('moveTask erro de rede:', e.message);
-      renderBoard();
-    }
+      if (!res.ok) { console.error('patchTask falhou:', res.status); renderBoard(); }
+    } catch (e) { console.error('patchTask erro de rede:', e.message); renderBoard(); }
   }
+  const moveTask = (id, col) => patchTask(id, { column: col });
+  // Marcar como encalhada = volta pra "A fazer" e sinaliza como esquecida.
+  const markEncalhada = (id) => patchTask(id, { column: 'a_fazer', encalhada: true });
 
-  $boardFilter.addEventListener('change', () => { boardFilter = $boardFilter.value; renderBoard(); });
+  [[$fGroup, 'group'], [$fType, 'type'], [$fSession, 'session']].forEach(([sel, key]) => {
+    sel.addEventListener('change', () => { boardFilters[key] = sel.value; renderBoard(); });
+  });
 
   $boardCols.addEventListener('dragstart', (e) => {
     const card = e.target.closest('.task-card'); if (!card) return;
@@ -455,42 +743,50 @@
     dragId = null;
   });
 
-  BOARD_COLUMNS.forEach(([col]) => {
-    const body = document.getElementById('col-' + col);
+  // Registra uma coluna como alvo de drop. onDrop(id) executa a ação da coluna.
+  function makeDroppable(bodyId, onDrop) {
+    const body = document.getElementById(bodyId);
     body.addEventListener('dragover', (e) => { e.preventDefault(); body.classList.add('dragover'); });
     body.addEventListener('dragleave', () => body.classList.remove('dragover'));
     body.addEventListener('drop', (e) => {
       e.preventDefault();
       body.classList.remove('dragover');
       const id = dragId || (e.dataTransfer && e.dataTransfer.getData('text/plain'));
-      if (id) moveTask(id, col);
+      if (id) onDrop(id);
       dragId = null;
     });
-  });
+  }
+  BOARD_COLUMNS.forEach(([col]) => makeDroppable('col-' + col, (id) => moveTask(id, col)));
+  // Arrastar para a coluna Encalhadas marca o card manualmente como encalhado.
+  makeDroppable('col-encalhadas', (id) => markEncalhada(id));
 
   // ---- Modal de detalhe do card (estilo Trello) ----
   const $cardModal = document.getElementById('cardModal');
   const $cardModalBody = document.getElementById('cardModalBody');
   let openCardId = null;
+  let openReadOnly = false;         // arquivados: só leitura (sem mover/apagar/comentar)
+  const archivedById = new Map();   // cards arquivados (não estão no mapa `tasks`)
   const COL_LABEL = { a_fazer: 'A fazer', em_progresso: 'Em progresso', feito: 'Feito', em_revisao: 'Em revisão', concluido: 'Concluído' };
   const fmtDT = (iso) => { if (!iso) return '—'; try { return new Date(iso).toLocaleString('pt-BR'); } catch { return '—'; } };
 
-  function renderCardModal(t) {
+  function renderCardModal(t, readOnly) {
     const tags = [];
     if (t.type) tags.push(`<span class="tag tag-type">${esc(t.type)}</span>`);
     if (t.group) tags.push(`<span class="tag">${esc(t.group)}</span>`);
     if (t.session) tags.push(`<span class="tag">${esc(t.session)}</span>`);
     const comments = t.comments || [];
+    const colInfo = readOnly ? 'Arquivado' : (COL_LABEL[t.column] || esc(t.column));
     $cardModalBody.innerHTML = `
       <h2>${esc(t.title)}</h2>
-      <div class="m-tags">${tags.join('')}</div>
-      <div style="font-size:12.5px;color:var(--muted)">Coluna: <b>${COL_LABEL[t.column] || esc(t.column)}</b>${t.role ? ` · Quem: <b>${esc(t.role)}</b>` : ''}</div>
+      <div class="m-tags" data-type="${esc(t.type || '')}">${tags.join('')}</div>
+      <div style="font-size:12.5px;color:var(--muted)">${readOnly ? 'Status' : 'Coluna'}: <b>${colInfo}</b>${t.role ? ` · Quem: <b>${esc(t.role)}</b>` : ''}</div>
       <div class="m-desc ${t.description ? '' : 'empty'}">${t.description ? esc(t.description) : 'sem descrição'}</div>
-      <div class="m-section"><h3>Mover para</h3>
+      ${readOnly ? '' : `<div class="m-section"><h3>Mover para</h3>
         <div class="m-move">
-          ${Object.keys(COL_LABEL).map((c) => `<button class="m-move-btn${t.column === c ? ' current' : ''}" data-col="${c}"${t.column === c ? ' disabled' : ''}>${COL_LABEL[c]}</button>`).join('')}
+          ${Object.keys(COL_LABEL).map((c) => `<button class="m-move-btn${!t.encalhada && t.column === c ? ' current' : ''}" data-col="${c}"${!t.encalhada && t.column === c ? ' disabled' : ''}>${COL_LABEL[c]}</button>`).join('')}
+          <button class="m-move-btn m-enc-btn${t.encalhada ? ' current' : ''}" data-enc="1"${t.encalhada ? ' disabled' : ''}>${ICONS.alert} Encalhada</button>
         </div>
-      </div>
+      </div>`}
       <div class="m-section"><h3>Linha do tempo</h3>
         <div class="m-timeline">
           <span class="k">Criado</span><span>${fmtDT(t.created_at)}</span>
@@ -503,19 +799,38 @@
         <div class="m-comments">
           ${comments.length ? comments.map((c) => `<div class="m-comment"><span class="who">${esc(c.author)}</span><span class="when">${c.created_at ? ago(c.created_at) : ''}</span><div class="txt">${esc(c.text)}</div></div>`).join('') : '<div class="m-comments-empty">Nenhum comentário ainda.</div>'}
         </div>
-        <form class="m-add" id="mAddForm"><input id="mAddInput" placeholder="Adicionar comentário…" autocomplete="off"><button type="submit">Enviar</button></form>
-      </div>`;
+        ${readOnly ? '' : `<form class="m-add" id="mAddForm"><input id="mAddInput" placeholder="Adicionar comentário…" autocomplete="off"><button type="submit">Enviar</button></form>`}
+      </div>
+      ${readOnly ? '' : `<div class="m-footer">
+        <button type="button" class="m-delete" id="mDeleteBtn">${ICONS.trash} Apagar card</button>
+      </div>`}`;
+    if (readOnly) return; // arquivados: sem ações
     document.getElementById('mAddForm').addEventListener('submit', (e) => {
       e.preventDefault();
       const v = document.getElementById('mAddInput').value.trim();
       if (v && openCardId) addComment(openCardId, v);
     });
     $cardModalBody.querySelectorAll('.m-move-btn').forEach((b) => {
-      b.addEventListener('click', () => { if (openCardId && !b.disabled) moveTask(openCardId, b.dataset.col); });
+      b.addEventListener('click', () => {
+        if (!openCardId || b.disabled) return;
+        if (b.dataset.enc) markEncalhada(openCardId);
+        else moveTask(openCardId, b.dataset.col);
+      });
+    });
+    document.getElementById('mDeleteBtn').addEventListener('click', () => {
+      if (openCardId) askDelete(openCardId, t.title);
     });
   }
-  function openCard(id) { const t = tasks.get(id); if (!t) return; openCardId = id; renderCardModal(t); $cardModal.hidden = false; }
-  function closeCard() { openCardId = null; $cardModal.hidden = true; }
+  function openCard(id, readOnly = false) {
+    const t = tasks.get(id) || archivedById.get(id);
+    if (!t) return;
+    // se veio do arquivo (não está no board ativo), é só leitura
+    const ro = readOnly || !tasks.has(id);
+    openCardId = id; openReadOnly = ro;
+    renderCardModal(t, ro);
+    $cardModal.hidden = false;
+  }
+  function closeCard() { openCardId = null; openReadOnly = false; $cardModal.hidden = true; }
   async function addComment(id, text) {
     try {
       const res = await fetch('/board/tasks/' + encodeURIComponent(id) + '/comments', {
@@ -529,13 +844,55 @@
   $boardCols.addEventListener('click', (e) => { const card = e.target.closest('.task-card'); if (card) openCard(card.dataset.id); });
   document.getElementById('cardModalClose').addEventListener('click', closeCard);
   $cardModal.addEventListener('click', (e) => { if (e.target === $cardModal) closeCard(); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$cardModal.hidden) closeCard(); });
+
+  // ---- Apagar card (só a mantenedora: DELETE exige token, injetado nesta página) ----
+  const $confirmModal = document.getElementById('confirmModal');
+  let pendingDeleteId = null;
+  function askDelete(id, title) {
+    pendingDeleteId = id;
+    document.getElementById('confirmText').textContent = `"${title}" será apagado. Esta ação não pode ser desfeita.`;
+    $confirmModal.hidden = false;
+  }
+  function closeConfirm() { pendingDeleteId = null; $confirmModal.hidden = true; }
+  async function deleteTask(id) {
+    try {
+      const res = await fetch('/board/tasks/' + encodeURIComponent(id), {
+        method: 'DELETE', headers: { Authorization: 'Bearer ' + TOKEN },
+      });
+      if (!res.ok) { console.error('delete falhou:', res.status); return; }
+      // sucesso: o board_removed chega via WS e re-renderiza; fecha os modais.
+      tasks.delete(id); renderBoard();
+      if (openCardId === id) closeCard();
+    } catch (e) { console.error('delete erro:', e.message); }
+  }
+  document.getElementById('confirmCancel').addEventListener('click', closeConfirm);
+  document.getElementById('confirmDelete').addEventListener('click', () => {
+    const id = pendingDeleteId; closeConfirm();
+    if (id) deleteTask(id);
+  });
+  $confirmModal.addEventListener('click', (e) => { if (e.target === $confirmModal) closeConfirm(); });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (!$confirmModal.hidden) closeConfirm();
+    else if (!$cardModal.hidden) closeCard();
+  });
 
   $tabs.addEventListener('click', (e) => {
     const btn = e.target.closest('.tab'); if (!btn) return;
     document.body.dataset.view = btn.dataset.view;
     $tabs.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b === btn));
   });
+
+  // Arquivo: botão no board que leva a uma página própria (com voltar).
+  const $arquivoBtn = document.getElementById('arquivoBtn');
+  const $arquivoBack = document.getElementById('arquivoBack');
+  $arquivoBtn.innerHTML = `${ICONS.archive} Arquivo`;
+  $arquivoBack.innerHTML = `${ICONS.back} Voltar ao board`;
+  $arquivoBtn.addEventListener('click', () => { document.body.dataset.view = 'arquivo'; renderArquivo(); });
+  $arquivoBack.addEventListener('click', () => { document.body.dataset.view = 'board'; });
+  // clicar num card na página Arquivo também abre o modal de detalhe
+  document.getElementById('arqWrap').addEventListener('click', (e) => { const c = e.target.closest('.task-card'); if (c) openCard(c.dataset.id); });
 
   // periodic "ago" refresh
   setInterval(() => { render(); renderBoard(); }, 5000);
@@ -555,7 +912,7 @@
       else if (m.type === 'session_updated' && m.session) { sessions.set(m.session.id, m.session); render(); }
       else if (m.type === 'session_removed') { sessions.delete(m.session_id); render(); }
       else if (m.type === 'board_snapshot') { tasks.clear(); (m.tasks || []).forEach((t) => tasks.set(t.id, t)); renderBoard(); }
-      else if (m.type === 'board_updated' && m.task) { tasks.set(m.task.id, m.task); renderBoard(); if (openCardId === m.task.id) renderCardModal(m.task); }
+      else if (m.type === 'board_updated' && m.task) { tasks.set(m.task.id, m.task); renderBoard(); if (openCardId === m.task.id) renderCardModal(m.task, openReadOnly); }
       else if (m.type === 'board_removed') { tasks.delete(m.id); renderBoard(); if (openCardId === m.id) closeCard(); }
     };
   }

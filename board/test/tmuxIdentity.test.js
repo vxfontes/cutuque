@@ -15,3 +15,19 @@ test('fora do tmux cai no fallback', () => {
   assert.equal(id.group, 'macbook');
   assert.equal(id.session, 'default');
 });
+test('override CUTUQUE_GROUP/CUTUQUE_SESSION tem prioridade', () => {
+  const id = tmuxIdentity(
+    { CUTUQUE_GROUP: 'interconexao', CUTUQUE_SESSION: 'cutuque', TMUX: '/tmp/tmux/outro,1,0' },
+    () => 'sessao-do-tmux\n',
+  );
+  assert.equal(id.group, 'interconexao');
+  assert.equal(id.session, 'cutuque');
+});
+test('override parcial combina com tmux', () => {
+  const id = tmuxIdentity(
+    { CUTUQUE_GROUP: 'meu-grupo', TMUX: '/tmp/tmux/socket,1,0' },
+    () => 'sessao-tmux\n',
+  );
+  assert.equal(id.group, 'meu-grupo');
+  assert.equal(id.session, 'sessao-tmux');
+});

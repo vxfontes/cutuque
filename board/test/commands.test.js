@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { commands } from '../src/commands.js';
+import { commands, resolveScope, inScope } from '../src/commands.js';
 
-function fakeCli(tasks = []) {
+function fakeCli(tasks = [], weeks = []) {
   const out = [];
   const created = [];
   const moved = [];
@@ -18,6 +18,8 @@ function fakeCli(tasks = []) {
       moveTask: async (id, col) => { moved.push([id, col]); return { id, column: col }; },
       addComment: async (id, author, text) => { comments.push([id, author, text]); return { id }; },
       patchTask: async (id, patch) => { patches.push([id, patch]); return { id, ...patch }; },
+      archive: async () => weeks,
+      closeWeek: async () => ({ archived: 2, stalled: 1 }),
     },
   };
 }
@@ -33,15 +35,88 @@ test('add cria com as tags da identidade e imprime id', async () => {
   assert.ok(cli._out.join('\n').includes('new1'));
 });
 
-test('list filtra pela sessão atual', async () => {
+test('list mostra o ambiente (grupo) por padrão, inclui outra sessão do mesmo grupo', async () => {
   const cli = fakeCli([
     { id: 'a', title: 't1', column: 'a_fazer', group: 'interconexao', session: 'cutuque' },
+    { id: 'c', title: 't3', column: 'em_progresso', group: 'interconexao', session: 'subagente' },
     { id: 'b', title: 't2', column: 'feito', group: 'outro', session: 'x' },
   ]);
-  await commands.list(cli);
+  await commands.list(cli, { flags: {} });
   const printed = cli._out.join('\n');
   assert.ok(printed.includes('t1'));
-  assert.ok(!printed.includes('t2')); // de outra sessão, filtrado
+  assert.ok(printed.includes('t3')); // mesma "ambiente" (grupo), outra sessão -> aparece
+  assert.ok(!printed.includes('t2')); // outro ambiente -> filtrado
+});
+
+test('list --session estreita para a minha sessão', async () => {
+  const cli = fakeCli([
+    { id: 'a', title: 't1', column: 'a_fazer', group: 'interconexao', session: 'cutuque' },
+    { id: 'c', title: 't3', column: 'em_progresso', group: 'interconexao', session: 'subagente' },
+  ]);
+  await commands.list(cli, { flags: { session: '' } });
+  const printed = cli._out.join('\n');
+  assert.ok(printed.includes('t1'));
+  assert.ok(!printed.includes('t3'));
+});
+
+test('list --all mostra todos os ambientes e marca encalhada + comentários', async () => {
+  const cli = fakeCli([
+    { id: 'a', title: 't1', column: 'a_fazer', group: 'interconexao', session: 'cutuque', encalhada: true, comments: [{}, {}] },
+    { id: 'b', title: 't2', column: 'feito', group: 'outro', session: 'x' },
+  ]);
+  await commands.list(cli, { flags: { all: '' } });
+  const printed = cli._out.join('\n');
+  assert.ok(printed.includes('t1') && printed.includes('t2'));
+  assert.ok(printed.includes('encalhada'));
+  assert.ok(printed.includes('2c'));
+});
+
+test('resolveScope: padrão grupo, flags ampliam/estreitam', () => {
+  const id = { group: 'interconexao', session: 'cutuque' };
+  assert.deepEqual(resolveScope(id, {}), { kind: 'group', group: 'interconexao' });
+  assert.deepEqual(resolveScope(id, { all: '' }), { kind: 'all' });
+  assert.deepEqual(resolveScope(id, { group: 'x' }), { kind: 'group', group: 'x' });
+  assert.deepEqual(resolveScope(id, { session: '' }), { kind: 'session', group: 'interconexao', session: 'cutuque' });
+});
+
+test('inScope respeita grupo/sessão/all', () => {
+  assert.ok(inScope({ group: 'g', session: 's' }, { kind: 'all' }));
+  assert.ok(inScope({ group: 'g', session: 's' }, { kind: 'group', group: 'g' }));
+  assert.ok(!inScope({ group: 'g', session: 's' }, { kind: 'group', group: 'z' }));
+  assert.ok(!inScope({ group: 'g', session: 's2' }, { kind: 'session', group: 'g', session: 's' }));
+});
+
+test('week sem label lista as semanas com contagem no escopo', async () => {
+  const cli = fakeCli([], [
+    { label: '2026-W28', start: '2026-07-06', end: '2026-07-12', tasks: [
+      { id: 'a', title: 'concluida', group: 'interconexao', session: 'cutuque', role: 'marcus' },
+      { id: 'b', title: 'de outro', group: 'outro', session: 'x' },
+    ] },
+  ]);
+  await commands.week(cli, { flags: {}, args: [] });
+  const printed = cli._out.join('\n');
+  assert.ok(printed.includes('2026-W28'));
+  assert.ok(printed.includes('(1 concluído)')); // só 1 no meu ambiente
+});
+
+test('week <label> mostra os cards daquela semana no escopo', async () => {
+  const cli = fakeCli([], [
+    { label: '2026-W28', start: '2026-07-06', end: '2026-07-12', tasks: [
+      { id: 'a', title: 'minha concluida', group: 'interconexao', session: 'cutuque', role: 'marcus' },
+      { id: 'b', title: 'de outro', group: 'outro', session: 'x' },
+    ] },
+  ]);
+  await commands.week(cli, { flags: {}, args: ['2026-W28'] });
+  const printed = cli._out.join('\n');
+  assert.ok(printed.includes('minha concluida'));
+  assert.ok(!printed.includes('de outro'));
+});
+
+test('close-week reporta arquivados e encalhados', async () => {
+  const cli = fakeCli();
+  await commands.closeWeek(cli);
+  assert.ok(cli._out.join('\n').includes('2 arquivado'));
+  assert.ok(cli._out.join('\n').includes('1 encalhado'));
 });
 
 test('move chama o client', async () => {

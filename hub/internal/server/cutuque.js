@@ -19,17 +19,28 @@ function resolveConfig(env = {}) {
 }
 
 // ===== src/tmuxIdentity.js =====
-// Identidade da sessão a partir do tmux. group = nome do socket (tmux -L <group>),
-// derivado do caminho do socket em $TMUX; session = nome da sessão atual.
+// Identidade da sessão. Prioridade: override explícito (CUTUQUE_GROUP/
+// CUTUQUE_SESSION) > detecção pelo tmux (group = nome do socket em $TMUX,
+// session = sessão atual) > fallback (hostname/default). O override é útil quando
+// a CLI roda fora do tmux (ex.: um shell não-interativo) e o auto-detect não vê.
 function tmuxIdentity(env = process.env, runCmd = defaultRun) {
-  if (!env.TMUX) {
-    return { group: env.HOSTNAME || 'local', session: 'default' };
+  const ovGroup = (env.CUTUQUE_GROUP || '').trim();
+  const ovSession = (env.CUTUQUE_SESSION || '').trim();
+
+  let group = ovGroup;
+  let session = ovSession;
+
+  if ((!group || !session) && env.TMUX) {
+    if (!group) group = basename(String(env.TMUX).split(',')[0]) || '';
+    if (!session) {
+      try { session = String(runCmd("tmux display-message -p '#S'")).trim(); } catch { /* fallback */ }
+    }
   }
-  const socketPath = String(env.TMUX).split(',')[0];
-  const group = basename(socketPath) || 'default';
-  let session = 'default';
-  try { session = String(runCmd("tmux display-message -p '#S'")).trim() || 'default'; } catch { /* fallback */ }
-  return { group, session };
+
+  return {
+    group: group || env.HOSTNAME || 'local',
+    session: session || 'default',
+  };
 }
 
 function defaultRun(cmd) {
@@ -78,12 +89,45 @@ function createHubClient({ hubBaseUrl, token, fetchImpl = fetch }) {
     async moveTask(id, column) { return req('PATCH', `/board/tasks/${id}`, { column }); },
     async patchTask(id, patch) { return req('PATCH', `/board/tasks/${id}`, patch); },
     async addComment(id, author, text) { return req('POST', `/board/tasks/${id}/comments`, { author, text }); },
+    async archive() { return (await req('GET', '/board/archive')).weeks || []; },
+    async closeWeek() { return req('POST', '/board/close', {}); },
   };
 }
 
 // ===== src/commands.js =====
 const COLS = ['a_fazer', 'em_progresso', 'feito', 'em_revisao', 'concluido'];
 const LABEL = { a_fazer: 'A fazer', em_progresso: 'Em progresso', feito: 'Feito', em_revisao: 'Em revisão', concluido: 'Concluído' };
+
+// Escopo do list/week. Padrão: o AMBIENTE (grupo) da identidade — o orquestrador
+// e os subagentes compartilham a visão do ambiente. Flags ampliam/estreitam:
+//   --all            todos os ambientes
+//   --group <nome>   um ambiente específico
+//   --session|--mine só a minha sessão
+function resolveScope(identity, flags = {}) {
+  if ('all' in flags) return { kind: 'all' };
+  if (flags.group) return { kind: 'group', group: flags.group };
+  if ('session' in flags || 'mine' in flags) return { kind: 'session', group: identity.group, session: identity.session };
+  return { kind: 'group', group: identity.group };
+}
+function inScope(t, s) {
+  if (s.kind === 'all') return true;
+  if (s.kind === 'group') return t.group === s.group;
+  return t.group === s.group && t.session === s.session;
+}
+function scopeLabel(s) {
+  if (s.kind === 'all') return 'todos os ambientes';
+  if (s.kind === 'group') return s.group;
+  return `${s.group}/${s.session}`;
+}
+function cardLine(t) {
+  const marks = [];
+  const who = t.role || t.type;
+  if (who) marks.push(who);
+  if (t.encalhada) marks.push('encalhada');
+  const nc = (t.comments || []).length;
+  if (nc) marks.push(`${nc}c`);
+  return `  ${t.id}  ${t.title}${marks.length ? `  (${marks.join(', ')})` : ''}`;
+}
 
 const commands = {
   async add(cli, title, { desc = '' } = {}) {
@@ -105,16 +149,46 @@ const commands = {
     await cli.client.patchTask(id, { description: text });
     cli.out(`✓ descrição atualizada em ${id}`);
   },
-  async list(cli) {
+  // list: board atual (não-arquivados, INCLUINDO encalhados) no escopo escolhido.
+  async list(cli, { flags = {} } = {}) {
+    const scope = resolveScope(cli.identity, flags);
     const all = await cli.client.listTasks();
-    const mine = all.filter((t) => t.group === cli.identity.group && t.session === cli.identity.session);
-    cli.out(`Board de ${cli.identity.group}/${cli.identity.session} (${mine.length}):`);
+    const mine = all.filter((t) => inScope(t, scope));
+    cli.out(`Board ${scopeLabel(scope)} (${mine.length}):`);
     for (const col of COLS) {
       const items = mine.filter((t) => t.column === col);
       if (!items.length) continue;
       cli.out(`\n${LABEL[col]}:`);
-      for (const t of items) cli.out(`  ${t.id}  ${t.title}`);
+      for (const t of items) cli.out(cardLine(t));
     }
+  },
+  // week: acessa os concluídos ARQUIVADOS por semana. Sem label -> lista as semanas;
+  // com label (ex: 2026-W28) -> mostra os cards daquela semana no escopo.
+  async week(cli, { flags = {}, args = [] } = {}) {
+    const scope = resolveScope(cli.identity, flags);
+    const weeks = await cli.client.archive();
+    const label = args[0];
+    if (!label) {
+      if (!weeks.length) { cli.out('Nenhuma semana arquivada ainda.'); return; }
+      cli.out(`Semanas arquivadas (${scopeLabel(scope)}):`);
+      for (const w of weeks) {
+        const n = w.tasks.filter((t) => inScope(t, scope)).length;
+        cli.out(`  ${w.label}  ${w.start} – ${w.end}  (${n} concluído${n === 1 ? '' : 's'})`);
+      }
+      cli.out(`\nuse: cutuque task week ${weeks[0].label}`);
+      return;
+    }
+    const wk = weeks.find((w) => w.label === label);
+    if (!wk) throw new Error(`semana não encontrada: ${label}`);
+    const items = wk.tasks.filter((t) => inScope(t, scope));
+    cli.out(`${wk.label} (${wk.start} – ${wk.end}) — ${scopeLabel(scope)} (${items.length}):`);
+    for (const t of items) cli.out(cardLine(t));
+  },
+  // close-week: fecha a semana manualmente (arquiva concluídos + marca encalhados).
+  // Normalmente roda sozinho (domingo 23:59); aqui é o gatilho manual.
+  async closeWeek(cli) {
+    const r = await cli.client.closeWeek();
+    cli.out(`✓ semana fechada: ${r.archived} arquivado(s), ${r.stalled} encalhado(s)`);
   },
   async move(cli, id, column) {
     if (!COLS.includes(column)) throw new Error(`coluna inválida: ${column} (use: ${COLS.join(', ')})`);
@@ -126,20 +200,32 @@ const commands = {
 // ===== bin/cutuque.js =====
 const USAGE = `uso:
   cutuque task add "<título>" --agent <role> [--desc "<descrição>"]
-  cutuque task list
+  cutuque task list [--all | --group <nome> | --session]
   cutuque task move <id> <a_fazer|em_progresso|feito|em_revisao|concluido>
   cutuque task comment <id> "<texto>" --agent <role>
   cutuque task desc <id> "<descrição>"
+  cutuque task week [<label>] [--all | --group <nome> | --session]
+  cutuque task close-week
 
---agent <role> = quem está fazendo (ex: marcus, luka, ludmilla). Obrigatório em add e comment.`;
+--agent <role> = quem está fazendo (ex: marcus, luka, ludmilla). Obrigatório em add e comment.
+list/week mostram por padrão o SEU ambiente (grupo). Encalhados aparecem no list.
+week sem label lista as semanas arquivadas; com label (ex: 2026-W28) mostra os cards.`;
+
+// Flags booleanas (não consomem o próximo argumento).
+const BOOL_FLAGS = new Set(['all', 'session', 'mine']);
 
 // Separa flags (--k v) dos argumentos posicionais.
 function parseArgs(argv) {
   const flags = {};
   const pos = [];
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i].startsWith('--')) { flags[argv[i].slice(2)] = argv[i + 1] ?? ''; i++; }
-    else pos.push(argv[i]);
+    if (argv[i].startsWith('--')) {
+      const key = argv[i].slice(2);
+      const next = argv[i + 1];
+      if (BOOL_FLAGS.has(key) || next === undefined || next.startsWith('--')) {
+        flags[key] = '';
+      } else { flags[key] = next; i++; }
+    } else pos.push(argv[i]);
   }
   return { flags, pos };
 }
@@ -163,7 +249,11 @@ async function main() {
       if (!cli.identity.role) throw new Error('--agent <role> é obrigatório no add');
       await commands.add(cli, title, { desc: flags.desc || '' });
     } else if (action === 'list') {
-      await commands.list(cli);
+      await commands.list(cli, { flags });
+    } else if (action === 'week') {
+      await commands.week(cli, { flags, args: pos });
+    } else if (action === 'close-week') {
+      await commands.closeWeek(cli);
     } else if (action === 'move') {
       const [id, column] = pos;
       if (!id || !column) throw new Error('uso: cutuque task move <id> <coluna>');

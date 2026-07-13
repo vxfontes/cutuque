@@ -14,5 +14,7 @@ export function createHubClient({ hubBaseUrl, token, fetchImpl = fetch }) {
     async moveTask(id, column) { return req('PATCH', `/board/tasks/${id}`, { column }); },
     async patchTask(id, patch) { return req('PATCH', `/board/tasks/${id}`, patch); },
     async addComment(id, author, text) { return req('POST', `/board/tasks/${id}/comments`, { author, text }); },
+    async archive() { return (await req('GET', '/board/archive')).weeks || []; },
+    async closeWeek() { return req('POST', '/board/close', {}); },
   };
 }
