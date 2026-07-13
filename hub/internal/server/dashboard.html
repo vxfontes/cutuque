@@ -94,16 +94,99 @@
     .grid { grid-template-columns: 1fr; gap: 10px; }
     .card { padding: 12px 14px; }
   }
+
+  /* Abas (Sessões / Board) */
+  .tabs { display: flex; gap: 4px; }
+  .tab {
+    cursor: pointer; padding: 6px 14px; border-radius: 9px; border: 1px solid transparent;
+    background: transparent; color: var(--muted); font: inherit; font-weight: 600; font-size: 13px; transition: .12s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { background: var(--panel2); color: var(--text); border-color: var(--border); }
+
+  #boardView { display: none; }
+  body[data-view="board"] #boardView { display: block; }
+  body[data-view="board"] #sessionsView { display: none; }
+
+  .board-toolbar { display: flex; gap: 10px; align-items: center; padding: 14px 24px 0; }
+  .board-toolbar select {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 10px; font: inherit; font-size: 12.5px;
+  }
+  .board-main { padding: 14px 24px 60px; }
+  .board-cols { display: flex; gap: 14px; align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
+  .board-col {
+    flex: 1 1 240px; min-width: 220px; max-width: 300px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    display: flex; flex-direction: column; max-height: calc(100vh - 220px); box-shadow: var(--shadow);
+  }
+  .board-col-head {
+    padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between;
+    align-items: center; color: var(--muted); font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .4px;
+  }
+  .board-col-head .count { font-variant-numeric: tabular-nums; color: var(--faint); }
+  .board-col-body { padding: 10px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex: 1; min-height: 80px; }
+  .board-col-body.dragover { background: color-mix(in srgb, var(--running) 10%, transparent); outline: 1px dashed var(--running); outline-offset: -4px; }
+  .col-empty { text-align: center; color: var(--faint); font-size: 12px; padding: 18px 4px; }
+  .task-card {
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 100%);
+    border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; cursor: grab; box-shadow: var(--shadow);
+  }
+  .task-card:active { cursor: grabbing; }
+  .task-card.dragging { opacity: .4; }
+  .task-title { font-weight: 600; font-size: 13px; word-break: break-word; margin-bottom: 6px; }
+  .task-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 11px; color: var(--muted); }
+
+  @media (max-width: 640px) {
+    .board-toolbar { padding: 12px 14px 0; }
+    .board-main { padding: 12px 14px 48px; }
+    .board-col { min-width: 200px; max-height: none; }
+  }
 </style>
 </head>
-<body>
+<body data-view="sessions">
   <header>
     <div class="brand"><span class="logo"></span> Cutuque <small>Command Center</small></div>
+    <nav class="tabs" id="tabs">
+      <button type="button" class="tab active" data-view="sessions">Sessões</button>
+      <button type="button" class="tab" data-view="board">Board</button>
+    </nav>
     <div class="counts" id="counts"></div>
     <div class="conn" id="conn"><span class="dot"></span><span id="connText">conectando…</span></div>
   </header>
-  <div class="filters" id="filters"></div>
-  <main><div class="grid" id="grid"></div></main>
+  <div id="sessionsView">
+    <div class="filters" id="filters"></div>
+    <main><div class="grid" id="grid"></div></main>
+  </div>
+  <section id="boardView">
+    <div class="board-toolbar">
+      <select id="boardFilter"><option value="all">Todos</option></select>
+    </div>
+    <div class="board-main">
+      <div class="board-cols" id="boardCols">
+        <div class="board-col" data-col="a_fazer">
+          <div class="board-col-head">A fazer <span class="count" id="count-a_fazer">0</span></div>
+          <div class="board-col-body" id="col-a_fazer" data-col="a_fazer"></div>
+        </div>
+        <div class="board-col" data-col="em_progresso">
+          <div class="board-col-head">Em progresso <span class="count" id="count-em_progresso">0</span></div>
+          <div class="board-col-body" id="col-em_progresso" data-col="em_progresso"></div>
+        </div>
+        <div class="board-col" data-col="feito">
+          <div class="board-col-head">Feito <span class="count" id="count-feito">0</span></div>
+          <div class="board-col-body" id="col-feito" data-col="feito"></div>
+        </div>
+        <div class="board-col" data-col="em_revisao">
+          <div class="board-col-head">Em revisão <span class="count" id="count-em_revisao">0</span></div>
+          <div class="board-col-body" id="col-em_revisao" data-col="em_revisao"></div>
+        </div>
+        <div class="board-col" data-col="concluido">
+          <div class="board-col-head">Concluído <span class="count" id="count-concluido">0</span></div>
+          <div class="board-col-body" id="col-concluido" data-col="concluido"></div>
+        </div>
+      </div>
+    </div>
+  </section>
 
 <script>
 (() => {
@@ -146,11 +229,26 @@
   const sessions = new Map();
   let filter = 'all';
 
+  // --- Board (Kanban) ---
+  const BOARD_COLUMNS = [
+    ['a_fazer', 'A fazer'],
+    ['em_progresso', 'Em progresso'],
+    ['feito', 'Feito'],
+    ['em_revisao', 'Em revisão'],
+    ['concluido', 'Concluído'],
+  ];
+  const tasks = new Map();
+  let boardFilter = 'all';
+  let dragId = null;
+
   const $grid = document.getElementById('grid');
   const $counts = document.getElementById('counts');
   const $filters = document.getElementById('filters');
   const $conn = document.getElementById('conn');
   const $connText = document.getElementById('connText');
+  const $tabs = document.getElementById('tabs');
+  const $boardCols = document.getElementById('boardCols');
+  const $boardFilter = document.getElementById('boardFilter');
 
   function ago(iso) {
     const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
@@ -219,8 +317,89 @@
     filter = chip.dataset.f; render();
   });
 
+  // --- Board (Kanban) ---
+  function cardHtml(t) {
+    const tags = [t.group, t.session].filter(Boolean);
+    return `<div class="task-card" draggable="true" data-id="${esc(t.id)}">
+      <div class="task-title">${esc(t.title)}</div>
+      <div class="task-meta">
+        ${tags.map((tg) => `<span class="tag">${esc(tg)}</span>`).join('')}
+        ${t.updated_at ? `<span class="ago">${ago(t.updated_at)}</span>` : ''}
+      </div>
+    </div>`;
+  }
+
+  function renderBoard() {
+    const all = [...tasks.values()];
+
+    // filtro por grupo/sessão, derivado das tags presentes
+    const tagSet = new Set();
+    all.forEach((t) => { if (t.group) tagSet.add('g:' + t.group); if (t.session) tagSet.add('s:' + t.session); });
+    const tagList = [...tagSet].sort();
+    const cur = $boardFilter.value || 'all';
+    $boardFilter.innerHTML = ['<option value="all">Todos</option>']
+      .concat(tagList.map((tg) => `<option value="${esc(tg)}">${tg.startsWith('g:') ? 'Grupo: ' : 'Sessão: '}${esc(tg.slice(2))}</option>`))
+      .join('');
+    $boardFilter.value = (tagList.includes(cur) || cur === 'all') ? cur : 'all';
+    boardFilter = $boardFilter.value;
+
+    let list = all;
+    if (boardFilter !== 'all') {
+      const kind = boardFilter.slice(0, 2), val = boardFilter.slice(2);
+      list = list.filter((t) => (kind === 'g:' ? t.group === val : t.session === val));
+    }
+
+    BOARD_COLUMNS.forEach(([col]) => {
+      const body = document.getElementById('col-' + col);
+      const items = list.filter((t) => t.column === col)
+        .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
+      document.getElementById('count-' + col).textContent = items.length;
+      body.innerHTML = items.length ? items.map(cardHtml).join('') : `<div class="col-empty">—</div>`;
+    });
+  }
+
+  function moveTask(id, col) {
+    fetch('/board/tasks/' + encodeURIComponent(id), {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ column: col }),
+    }).catch(() => {});
+  }
+
+  $boardFilter.addEventListener('change', () => { boardFilter = $boardFilter.value; renderBoard(); });
+
+  $boardCols.addEventListener('dragstart', (e) => {
+    const card = e.target.closest('.task-card'); if (!card) return;
+    dragId = card.dataset.id;
+    card.classList.add('dragging');
+    if (e.dataTransfer) { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', dragId); }
+  });
+  $boardCols.addEventListener('dragend', (e) => {
+    const card = e.target.closest('.task-card'); if (card) card.classList.remove('dragging');
+    dragId = null;
+  });
+
+  BOARD_COLUMNS.forEach(([col]) => {
+    const body = document.getElementById('col-' + col);
+    body.addEventListener('dragover', (e) => { e.preventDefault(); body.classList.add('dragover'); });
+    body.addEventListener('dragleave', () => body.classList.remove('dragover'));
+    body.addEventListener('drop', (e) => {
+      e.preventDefault();
+      body.classList.remove('dragover');
+      const id = dragId || (e.dataTransfer && e.dataTransfer.getData('text/plain'));
+      if (id) moveTask(id, col);
+      dragId = null;
+    });
+  });
+
+  $tabs.addEventListener('click', (e) => {
+    const btn = e.target.closest('.tab'); if (!btn) return;
+    document.body.dataset.view = btn.dataset.view;
+    $tabs.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b === btn));
+  });
+
   // periodic "ago" refresh
-  setInterval(render, 5000);
+  setInterval(() => { render(); renderBoard(); }, 5000);
 
   function setConn(state, text) { $conn.className = 'conn ' + state; $connText.textContent = text; }
 
@@ -233,14 +412,16 @@
     ws.onerror = () => {};
     ws.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch { return; }
-      if (m.type === 'snapshot') { sessions.clear(); (m.sessions || []).forEach((s) => sessions.set(s.id, s)); }
-      else if (m.type === 'session_updated' && m.session) sessions.set(m.session.id, m.session);
-      else if (m.type === 'session_removed') sessions.delete(m.session_id);
-      else return;
-      render();
+      if (m.type === 'snapshot') { sessions.clear(); (m.sessions || []).forEach((s) => sessions.set(s.id, s)); render(); }
+      else if (m.type === 'session_updated' && m.session) { sessions.set(m.session.id, m.session); render(); }
+      else if (m.type === 'session_removed') { sessions.delete(m.session_id); render(); }
+      else if (m.type === 'board_snapshot') { tasks.clear(); (m.tasks || []).forEach((t) => tasks.set(t.id, t)); renderBoard(); }
+      else if (m.type === 'board_updated' && m.task) { tasks.set(m.task.id, m.task); renderBoard(); }
+      else if (m.type === 'board_removed') { tasks.delete(m.id); renderBoard(); }
     };
   }
   render();
+  renderBoard();
   connect();
 })();
 </script>
