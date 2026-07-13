@@ -69,14 +69,20 @@ refletir a realidade.
 
 ## Bloco para colar no CLAUDE.md / regras do agente
 
-> **Cutuque Board.** Você participa de um quadro Kanban compartilhado via a CLI
-> `cutuque`. **Antes de iniciar qualquer tarefa**, rode `cutuque task list` para
-> ver suas atividades e onde estão. Registre atividades pendentes com
-> `cutuque task add "…"`. Conforme progride, mova o card:
-> `cutuque task move <id> em_progresso` ao iniciar → `feito` ao terminar (aguardando
-> revisão) → `em_revisao` ao revisar → `concluido` ao concluir. A identificação da
-> sessão (grupo tmux + sessão) é automática — não passe tags. Mantenha o quadro
-> sempre atualizado.
+> **Cutuque Board (obrigatório).** Você participa de um Kanban compartilhado dos
+> agentes via a CLI `cutuque`.
+> **Config (uma vez):** `export CUTUQUE_HUB=192.0.2.10:8787` — sempre o hub no
+> Tailscale; **não** use localhost; **não** precisa de token.
+> **Antes de começar qualquer tarefa:** `cutuque task list` (veja o que já existe
+> na sua sessão e onde está).
+> **Registre o que vai fazer:** `cutuque task add "<atividade>" --agent <seu-role> [--desc "<detalhe>"]`.
+> **Mova conforme progride:** `cutuque task move <id> em_progresso` (ao iniciar) →
+> `feito` (terminou, aguardando review) → `em_revisao` (revisando) → `concluido`
+> (concluído de fato).
+> **Comente as observações:** `cutuque task comment <id> "<observação>" --agent <seu-role>`.
+> `--agent <role>` (quem está fazendo: luka, marcus, ludmilla…) é **OBRIGATÓRIO** em
+> `add` e `comment`. Grupo/sessão do tmux e o tipo (claude/codex/opencode) são
+> detectados automaticamente. Mantenha o quadro sempre atualizado.
 
 ## Configuração (IMPORTANTE)
 
