@@ -20,6 +20,13 @@ function fakeCli(tasks = [], weeks = []) {
       patchTask: async (id, patch) => { patches.push([id, patch]); return { id, ...patch }; },
       archive: async () => weeks,
       closeWeek: async () => ({ archived: 2, stalled: 1 }),
+      search: async (q) => {
+        const low = String(q).toLowerCase();
+        return tasks.filter((t) =>
+          String(t.title || '').toLowerCase().includes(low) ||
+          String(t.description || '').toLowerCase().includes(low) ||
+          (t.comments || []).some((c) => String(c.text || '').toLowerCase().includes(low)));
+      },
     },
   };
 }
@@ -175,6 +182,33 @@ test('mentions --all cruza ambientes', async () => {
   ]);
   await commands.mentions(cli, { flags: { agent: 'marcus', all: '' } });
   assert.ok(cli._out.join('\n').includes('card C'));
+});
+
+test('search acha por titulo/descricao/comentario e marca arquivado', async () => {
+  const cli = fakeCli([
+    { id: 'a', title: 'corrigir OAuth', column: 'a_fazer', group: 'interconexao', session: 'cutuque' },
+    { id: 'b', title: 'outra', column: 'a_fazer', group: 'interconexao', session: 'cutuque', description: 'usa oauth aqui' },
+    { id: 'c', title: 'com coment', column: 'feito', group: 'interconexao', session: 'cutuque', comments: [{ author: 'x', text: 'tem OAuth no comentario' }] },
+    { id: 'd', title: 'arquivado oauth', column: 'concluido', group: 'interconexao', session: 'cutuque', archived: true },
+    { id: 'e', title: 'nada', column: 'a_fazer', group: 'interconexao', session: 'cutuque' },
+  ]);
+  await commands.search(cli, { flags: {}, args: ['oauth'] });
+  const out = cli._out.join('\n');
+  assert.ok(out.includes('corrigir OAuth') && out.includes('em: título'));
+  assert.ok(out.includes('outra') && out.includes('descrição'));
+  assert.ok(out.includes('com coment') && out.includes('comentário'));
+  assert.ok(out.includes('arquivado oauth') && out.includes('ARQUIVADO'));
+  assert.ok(!out.includes('  nada '));
+});
+
+test('find filtra por role/column', async () => {
+  const cli = fakeCli([
+    { id: 'a', title: 't1', column: 'em_progresso', group: 'interconexao', session: 'cutuque', role: 'marcus' },
+    { id: 'b', title: 't2', column: 'a_fazer', group: 'interconexao', session: 'cutuque', role: 'lauren' },
+  ]);
+  await commands.find(cli, { flags: { role: 'marcus' } });
+  const out = cli._out.join('\n');
+  assert.ok(out.includes('t1') && !out.includes('t2'));
 });
 
 test('move chama o client', async () => {

@@ -98,6 +98,37 @@ export const commands = {
     if (!cs.length) cli.out('  (nenhum)');
     for (const c of cs) cli.out(`  - ${c.author}${c.created_at ? ` (${dt(c.created_at)})` : ''}: ${c.text}`);
   },
+  // search: acha cards (ativos E arquivados) cujo título/descrição/comentário
+  // contenha o termo. Escopo padrão = ambiente (--all cruza tudo).
+  async search(cli, { flags = {}, args = [] } = {}) {
+    const term = args.join(' ').trim();
+    if (!term) throw new Error('uso: cutuque task search <termo>');
+    const scope = resolveScope(cli.identity, flags);
+    const all = await cli.client.search(term);
+    const hits = all.filter((t) => inScope(t, scope));
+    cli.out(`Busca "${term}" em ${scopeLabel(scope)} (${hits.length}):`);
+    if (!hits.length) cli.out('  (nada)');
+    const low = term.toLowerCase();
+    for (const t of hits) {
+      const where = [];
+      if (String(t.title || '').toLowerCase().includes(low)) where.push('título');
+      if (String(t.description || '').toLowerCase().includes(low)) where.push('descrição');
+      if ((t.comments || []).some((c) => String(c.text || '').toLowerCase().includes(low))) where.push('comentário');
+      const status = t.archived ? 'ARQUIVADO' : (LABEL[t.column] || t.column);
+      cli.out(`  ${t.id}  ${t.title}  [${status}]${where.length ? `  (em: ${where.join(', ')})` : ''}`);
+    }
+  },
+  // find: filtra o board ativo por --role / --column / --type (no escopo).
+  async find(cli, { flags = {} } = {}) {
+    const scope = resolveScope(cli.identity, flags);
+    let hits = (await cli.client.listTasks()).filter((t) => inScope(t, scope));
+    if (flags.role) hits = hits.filter((t) => (t.role || '') === flags.role);
+    if (flags.column) hits = hits.filter((t) => t.column === flags.column);
+    if (flags.type) hits = hits.filter((t) => (t.type || '') === flags.type);
+    cli.out(`Find em ${scopeLabel(scope)} (${hits.length}):`);
+    if (!hits.length) cli.out('  (nada)');
+    for (const t of hits) cli.out(cardLine(t));
+  },
   // mentions: lista os comentários que te mencionam (@nome) no seu escopo — a sua
   // "caixa de entrada". Nome vem de --agent (ou da identidade). Só board ativo.
   async mentions(cli, { flags = {} } = {}) {

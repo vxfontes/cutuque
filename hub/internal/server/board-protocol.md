@@ -27,6 +27,8 @@ cutuque task show <id>                             # DETALHE: descrição, linha
 cutuque task add "<título>" --agent <role> [--desc "<descrição>"]   # cria (entra em "A fazer")
 cutuque task move <id> <coluna> [--agent <role>]   # move; passe --agent pra seu nome ir no log de atividade
 cutuque task comment <id> "<texto>" --agent <role> # adiciona uma observação (use @nome pra direcionar)
+cutuque task search <termo>                        # busca título+descrição+comentários (ativos E arquivados)
+cutuque task find [--role <r>] [--column <c>] [--type <t>]   # filtra o board ativo
 cutuque task mentions --agent <você>               # comentários que te mencionam (@você) — sua caixa de entrada
 cutuque task desc <id> "<descrição>"               # define/atualiza a descrição do card
 cutuque task week [<label>]                        # semanas arquivadas (sem label lista; com label ex 2026-W28 mostra os cards)
@@ -42,6 +44,11 @@ o histórico (o que já foi dito, decisões, ressalvas) e opinar com base nele, 
 `cutuque task show <id>` — ele traz a descrição, a linha do tempo, o **log de atividade**
 (quem criou/moveu/encalhou e quando) e **todos os comentários**. Funciona também para cards
 já arquivados (semanas passadas).
+
+**Investigar com `search`:** pra achar tudo sobre um assunto (um erro, uma feature,
+um nome), use `cutuque task search <termo>` — varre título, descrição e comentários
+de **todos** os cards, **ativos e arquivados**, e diz onde bateu. Ótimo pra puxar
+contexto antes de mexer em algo. `find` filtra o board ativo por role/coluna/tipo.
 
 **Direcionar com @menção:** ao comentar, use `@nome` pra endereçar a alguém —
 ex.: `cutuque task comment <id> "@lauren dá uma olhada nesse bug?" --agent marcus`.

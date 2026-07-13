@@ -11,6 +11,7 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -39,6 +40,9 @@ type Task struct {
 	// Setado no CloseWeek; limpo em qualquer movimentação. O dashboard mostra numa
 	// coluna de alerta à esquerda do board.
 	Encalhada bool `json:"encalhada,omitempty"`
+	// Archived é transitório: só preenchido nos resultados de Search para o card
+	// arquivado (não é persistido; o arquivo real é o archived_week/archive).
+	Archived bool `json:"archived,omitempty"`
 	// Description é o texto longo do que está sendo feito (detalhe do card).
 	Description string `json:"description,omitempty"`
 	// Comments são as observações que os agentes (e a usuária) vão adicionando.
@@ -111,6 +115,9 @@ type Store interface {
 	Remove(id string) bool
 	CloseWeek(now time.Time) (archived, stalled int)
 	ArchivedWeeks() []ArchivedWeek
+	// Search acha cards (ativos E arquivados) cujo título, descrição OU algum
+	// comentário contenha q (case-insensitive). Nos arquivados, Archived=true.
+	Search(q string) []Task
 	Subscribe() *Sub
 	Unsubscribe(sub *Sub)
 }
@@ -310,6 +317,43 @@ func (s *MemStore) ArchivedWeeks() []ArchivedWeek {
 			End: start.AddDate(0, 0, 6).Format("2006-01-02"), Tasks: cp[l],
 		})
 	}
+	return out
+}
+
+// Search acha cards (ativos + arquivados) por título/descrição/comentário.
+func (s *MemStore) Search(q string) []Task {
+	q = strings.ToLower(strings.TrimSpace(q))
+	if q == "" {
+		return []Task{}
+	}
+	match := func(t Task) bool {
+		if strings.Contains(strings.ToLower(t.Title), q) || strings.Contains(strings.ToLower(t.Description), q) {
+			return true
+		}
+		for _, c := range t.Comments {
+			if strings.Contains(strings.ToLower(c.Text), q) {
+				return true
+			}
+		}
+		return false
+	}
+	var out []Task
+	s.mu.RLock()
+	for _, t := range s.byID {
+		if match(t) {
+			out = append(out, t)
+		}
+	}
+	for _, ts := range s.archive {
+		for _, t := range ts {
+			if match(t) {
+				t.Archived = true
+				out = append(out, t)
+			}
+		}
+	}
+	s.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
 	return out
 }
 

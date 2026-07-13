@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -491,6 +492,40 @@ func flatten(m map[string][]Task) []Task {
 		out = append(out, ts...)
 	}
 	return out
+}
+
+// Search acha cards (ativos + arquivados) por título/descrição/comentário (ILIKE).
+func (s *PostgresStore) Search(q string) []Task {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return []Task{}
+	}
+	ctx, cancel := s.ctx()
+	defer cancel()
+	like := "%" + q + "%"
+	rows, err := s.pool.Query(ctx, `SELECT `+taskCols+`, archived_week FROM cutuque.board_tasks t
+		WHERE t.title ILIKE $1 OR t.description ILIKE $1
+		   OR EXISTS (SELECT 1 FROM cutuque.board_comments c WHERE c.task_id = t.id AND c.body ILIKE $1)
+		ORDER BY updated_at DESC`, like)
+	if err != nil {
+		log.Printf("board pg: Search: %v", err)
+		return []Task{}
+	}
+	defer rows.Close()
+	var out []Task
+	for rows.Next() {
+		var t Task
+		var wk *string
+		if err := rows.Scan(&t.ID, &t.Title, &t.Column, &t.Group, &t.Session, &t.Type, &t.Role,
+			&t.Description, &t.Encalhada, &t.CreatedAt, &t.UpdatedAt, &t.StartedAt, &t.ReviewedAt, &t.EndedAt, &wk); err != nil {
+			continue
+		}
+		if wk != nil {
+			t.Archived = true
+		}
+		out = append(out, t)
+	}
+	return s.attach(ctx, out)
 }
 
 // --- pub/sub (em memória, por processo) ---

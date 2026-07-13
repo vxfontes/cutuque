@@ -115,6 +115,43 @@ func TestSetEncalhada(t *testing.T) {
 	}
 }
 
+func TestSearch(t *testing.T) {
+	s := New()
+	a := s.Add(NewTask{Title: "corrigir login OAuth", Group: "g", Session: "s", Description: "refresh token"})
+	s.Add(NewTask{Title: "outra coisa", Group: "g", Session: "s"})
+	c := s.Add(NewTask{Title: "card com comentario", Group: "g", Session: "s"})
+	s.AddComment(c.ID, "marcus", "isso tem a palavra OAuth no comentario")
+	// arquiva um card concluído que casa
+	done := s.Add(NewTask{Title: "feito OAuth antigo", Group: "g", Session: "s"})
+	col := "concluido"
+	s.Update(done.ID, &col, nil, nil, nil, "")
+	s.CloseWeek(time.Now())
+
+	res := s.Search("oauth")
+	ids := map[string]bool{}
+	for _, r := range res {
+		ids[r.ID] = true
+	}
+	if !ids[a.ID] {
+		t.Fatalf("deveria achar por título")
+	}
+	if !ids[c.ID] {
+		t.Fatalf("deveria achar por comentário")
+	}
+	if !ids[done.ID] {
+		t.Fatalf("deveria achar no arquivo")
+	}
+	// o arquivado vem com Archived=true
+	for _, r := range res {
+		if r.ID == done.ID && !r.Archived {
+			t.Fatalf("card arquivado deveria ter Archived=true")
+		}
+	}
+	if len(s.Search("")) != 0 {
+		t.Fatalf("busca vazia deveria retornar nada")
+	}
+}
+
 func TestActivityLog(t *testing.T) {
 	s := New()
 	a := s.Add(NewTask{Title: "x", Group: "g", Session: "s", Role: "marcus"})

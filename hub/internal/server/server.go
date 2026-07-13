@@ -165,6 +165,7 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		// cards. Os agentes usam o CLI sem token e não conseguem deletar.
 		mux.Handle("DELETE /board/tasks/{id}", requireAuth(cfg.Token, BoardDeleteHandler(rc.board)))
 		mux.Handle("POST /board/tasks/{id}/comments", BoardCommentHandler(rc.board))
+		mux.Handle("GET /board/search", BoardSearchHandler(rc.board))
 		mux.Handle("GET /board/archive", BoardArchiveHandler(rc.board))
 		// Fechar a semana é destrutivo (arquiva os concluídos): exige token, como o
 		// DELETE. Só a mantenedora (dashboard/app) fecha manualmente; o closer automático

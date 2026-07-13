@@ -9,6 +9,8 @@ const USAGE = `uso:
   cutuque task add "<título>" --agent <role> [--desc "<descrição>"]
   cutuque task list [--all | --group <nome> | --session]
   cutuque task show <id>                              # detalhe do card + TODOS os comentários
+  cutuque task search <termo>                         # busca título+descrição+comentários (ativos E arquivados)
+  cutuque task find [--role <r>] [--column <c>] [--type <t>]   # filtra o board ativo
   cutuque task mentions --agent <você>               # comentários que te mencionam (@você)
   cutuque task move <id> <a_fazer|em_progresso|feito|em_revisao|concluido>
   cutuque task comment <id> "<texto>" --agent <role>
@@ -63,6 +65,10 @@ async function main() {
       const [id] = pos;
       if (!id) throw new Error('uso: cutuque task show <id>');
       await commands.show(cli, id);
+    } else if (action === 'search') {
+      await commands.search(cli, { flags, args: pos });
+    } else if (action === 'find') {
+      await commands.find(cli, { flags });
     } else if (action === 'mentions') {
       await commands.mentions(cli, { flags });
     } else if (action === 'week') {

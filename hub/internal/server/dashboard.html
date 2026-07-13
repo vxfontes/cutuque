@@ -154,6 +154,19 @@
     background-color: color-mix(in srgb, var(--running) 12%, var(--panel2));
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%232d7ff9' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
   }
+  .board-search {
+    flex: 1 1 240px; min-width: 180px; max-width: 360px;
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 9px;
+    padding: 7px 12px; font: inherit; font-size: 12.5px;
+  }
+  .board-search::placeholder { color: var(--faint); }
+  .board-search:focus-visible { outline: none; border-color: var(--running); box-shadow: 0 0 0 3px color-mix(in srgb, var(--running) 22%, transparent); }
+  /* Resultados de busca (substituem as colunas enquanto há termo) */
+  .search-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; padding-top: 4px; }
+  .search-empty { color: var(--muted); padding: 40px 8px; text-align: center; grid-column: 1/-1; }
+  .search-head { grid-column: 1/-1; color: var(--muted); font-size: 12.5px; margin-bottom: 2px; }
+  #boardView.searching .board-cols { display: none; }
+  .task-arch { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 0 5px; }
   .board-main { padding: 14px 24px 60px; }
   .board-cols { display: flex; gap: 14px; align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
   .board-col {
@@ -356,12 +369,14 @@
   </div>
   <section id="boardView">
     <div class="board-toolbar">
+      <input type="search" id="boardSearch" class="board-search" placeholder="Buscar título, descrição, comentários…" autocomplete="off" />
       <select id="filterGroup" class="board-filter" title="Filtrar por ambiente"></select>
       <select id="filterType" class="board-filter" title="Filtrar por tipo de IA"></select>
       <select id="filterSession" class="board-filter" title="Filtrar por sessão"></select>
       <button type="button" class="board-btn" id="arquivoBtn" title="Ver arquivo semanal"></button>
     </div>
     <div class="board-main">
+      <div class="search-results" id="searchResults" hidden></div>
       <div class="board-cols" id="boardCols">
         <div class="board-col col-encalhadas" id="colEncalhadas" data-col="encalhadas">
           <svg class="enc-badge" viewBox="0 0 52 50" aria-hidden="true">
@@ -797,6 +812,7 @@
   let openCardId = null;
   let openReadOnly = false;         // arquivados: só leitura (sem mover/apagar/comentar)
   const archivedById = new Map();   // cards arquivados (não estão no mapa `tasks`)
+  const searchById = new Map();     // resultados de busca (podem ser ativos ou arquivados)
   const COL_LABEL = { a_fazer: 'A fazer', em_progresso: 'Em progresso', feito: 'Feito', em_revisao: 'Em revisão', concluido: 'Concluído' };
   const fmtDT = (iso) => { if (!iso) return '—'; try { return new Date(iso).toLocaleString('pt-BR'); } catch { return '—'; } };
 
@@ -858,7 +874,7 @@
     });
   }
   function openCard(id, readOnly = false) {
-    const t = tasks.get(id) || archivedById.get(id);
+    const t = tasks.get(id) || archivedById.get(id) || searchById.get(id);
     if (!t) return;
     // se veio do arquivo (não está no board ativo), é só leitura
     const ro = readOnly || !tasks.has(id);
@@ -958,6 +974,37 @@
   $arquivoBack.addEventListener('click', () => { document.body.dataset.view = 'board'; });
   // clicar num card na página Arquivo também abre o modal de detalhe
   document.getElementById('arqWrap').addEventListener('click', (e) => { const c = e.target.closest('.task-card'); if (c) openCard(c.dataset.id); });
+
+  // ---- Busca (título + descrição + comentários; ativos E arquivados) ----
+  const $boardSearch = document.getElementById('boardSearch');
+  const $searchResults = document.getElementById('searchResults');
+  const $boardView = document.getElementById('boardView');
+  let searchTimer = null;
+  async function runSearch(q) {
+    q = q.trim();
+    searchById.clear();
+    if (!q) { $boardView.classList.remove('searching'); $searchResults.hidden = true; $searchResults.innerHTML = ''; return; }
+    $boardView.classList.add('searching');
+    $searchResults.hidden = false;
+    $searchResults.innerHTML = `<div class="search-head">Buscando "${esc(q)}"…</div>`;
+    try {
+      const res = await fetch('/board/search?q=' + encodeURIComponent(q), { headers: { Authorization: 'Bearer ' + TOKEN } });
+      const hits = (await res.json()).tasks || [];
+      hits.forEach((t) => searchById.set(t.id, t));
+      if (!hits.length) { $searchResults.innerHTML = `<div class="search-empty">Nada encontrado pra "${esc(q)}".</div>`; return; }
+      $searchResults.innerHTML = `<div class="search-head">${hits.length} resultado(s) pra "${esc(q)}"</div>` +
+        hits.map((t) => {
+          let html = cardHtml(t);
+          if (t.archived) html = html.replace('<div class="task-tags">', '<div class="task-tags"><span class="task-arch">arquivado</span>');
+          return html;
+        }).join('');
+    } catch (e) { $searchResults.innerHTML = `<div class="search-empty">Falha na busca.</div>`; }
+  }
+  $boardSearch.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => runSearch($boardSearch.value), 250);
+  });
+  $searchResults.addEventListener('click', (e) => { const c = e.target.closest('.task-card'); if (c) openCard(c.dataset.id); });
 
   // periodic "ago" refresh
   setInterval(() => { render(); renderBoard(); }, 5000);

@@ -116,6 +116,18 @@ func BoardCommentHandler(st board.Store) http.HandlerFunc {
 	}
 }
 
+// BoardSearchHandler busca cards por título/descrição/comentário (ativos e
+// arquivados). GET /board/search?q=<termo>.
+func BoardSearchHandler(st board.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tasks := st.Search(r.URL.Query().Get("q"))
+		if tasks == nil {
+			tasks = []board.Task{}
+		}
+		writeJSONResp(w, http.StatusOK, map[string]any{"tasks": tasks})
+	}
+}
+
 // BoardArchiveHandler responde o arquivo (concluídos por semana, mais recente 1º).
 func BoardArchiveHandler(st board.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
