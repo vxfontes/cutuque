@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -18,12 +19,7 @@ var Columns = []string{"a_fazer", "em_progresso", "feito", "em_revisao", "conclu
 
 // ValidColumn diz se c é uma coluna conhecida.
 func ValidColumn(c string) bool {
-	for _, x := range Columns {
-		if x == c {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(Columns, c)
 }
 
 // Task é um card do quadro.
@@ -195,6 +191,10 @@ func (s *Store) Unsubscribe(sub *Sub) {
 	s.mu.Unlock()
 }
 
+// broadcast entrega best-effort e sem ordenação garantida (igual ao registry):
+// envio não-bloqueante, e como roda fora de s.mu a ordem entre eventos de ids
+// diferentes/iguais não é garantida. Consumidores são idempotentes por id e
+// recuperam o estado completo no snapshot ao (re)conectar.
 func (s *Store) broadcast(t Task) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -206,6 +206,8 @@ func (s *Store) broadcast(t Task) {
 	}
 }
 
+// broadcastRemoved segue a mesma semântica best-effort de broadcast (ver
+// comentário acima).
 func (s *Store) broadcastRemoved(id string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
