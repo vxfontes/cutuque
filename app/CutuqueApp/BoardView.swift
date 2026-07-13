@@ -3,54 +3,76 @@ import SwiftUI
 // MARK: - ViewModel
 
 /// Estado do Cutuque Board no app: carrega os cards do hub e executa as ações
-/// (mover, marcar encalhada, apagar). Sem WebSocket — carrega no aparecer e
-/// no pull-to-refresh, além de re-carregar após cada ação.
+/// (mover, marcar encalhada, comentar, apagar). Sem WebSocket — carrega no
+/// aparecer e no pull-to-refresh, e re-carrega após cada ação.
 @MainActor
 final class BoardModel: ObservableObject {
     @Published var tasks: [BoardTask] = []
     @Published var isLoading = false
     @Published var errorText: String?
 
+    // Filtros (E), espelham o dashboard web.
+    @Published var filterGroup = "all"
+    @Published var filterType = "all"
+    @Published var filterSession = "all"
+
     private let api = APIClient()
 
     func load() async {
         isLoading = true
         defer { isLoading = false }
-        do {
-            tasks = try await api.boardTasks()
-            errorText = nil
-        } catch {
-            errorText = "Não consegui carregar o board."
-        }
+        do { tasks = try await api.boardTasks(); errorText = nil }
+        catch { errorText = "Não consegui carregar o board." }
     }
 
     func move(_ task: BoardTask, to column: BoardColumn) async {
         do { try await api.moveBoardTask(id: task.id, column: column.rawValue); await load() }
         catch { errorText = "Falha ao mover o card." }
     }
-
     func markEncalhada(_ task: BoardTask) async {
         do { try await api.setBoardEncalhada(id: task.id, true); await load() }
         catch { errorText = "Falha ao marcar como encalhada." }
     }
-
+    func comment(_ task: BoardTask, text: String) async {
+        do { try await api.addBoardComment(id: task.id, author: "você", text: text); await load() }
+        catch { errorText = "Falha ao comentar." }
+    }
     func delete(_ task: BoardTask) async {
         do { try await api.deleteBoardTask(id: task.id); await load() }
         catch { errorText = "Falha ao apagar o card." }
     }
 
-    // Agrupamentos (espelham o dashboard web).
+    // Valores distintos para os filtros.
+    var groups: [String] { distinct(\.group) }
+    var types: [String] { tasks.compactMap { $0.type }.filter { !$0.isEmpty }.uniqued().sorted() }
+    var sessions: [String] { distinct(\.session) }
+    private func distinct(_ kp: KeyPath<BoardTask, String>) -> [String] {
+        tasks.map { $0[keyPath: kp] }.filter { !$0.isEmpty }.uniqued().sorted()
+    }
+
+    private func passesFilters(_ t: BoardTask) -> Bool {
+        (filterGroup == "all" || t.group == filterGroup) &&
+        (filterType == "all" || (t.type ?? "") == filterType) &&
+        (filterSession == "all" || t.session == filterSession)
+    }
+
+    // Agrupamentos (já filtrados).
     var encalhadas: [BoardTask] {
-        tasks.filter { $0.isEncalhada }
+        tasks.filter { $0.isEncalhada && passesFilters($0) }
             .sorted { ($0.createdAt ?? .distantPast) < ($1.createdAt ?? .distantPast) }
     }
     func inColumn(_ column: BoardColumn) -> [BoardTask] {
-        tasks.filter { $0.column == column.rawValue && !($0.isEncalhada && column == .aFazer) }
+        tasks.filter { $0.column == column.rawValue && !($0.isEncalhada && column == .aFazer) && passesFilters($0) }
             .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
     }
+    var hasActiveFilter: Bool { filterGroup != "all" || filterType != "all" || filterSession != "all" }
 }
 
-// MARK: - Board (lista por colunas, com scroll nativo)
+private extension Array where Element: Hashable {
+    func uniqued() -> [Element] { var s = Set<Element>(); return filter { s.insert($0).inserted } }
+}
+
+// MARK: - Board estilo Trello (colunas horizontais com swipe)
 
 struct BoardView: View {
     @StateObject private var model = BoardModel()
@@ -59,49 +81,24 @@ struct BoardView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 22) {
-                    if !model.encalhadas.isEmpty {
-                        BoardSectionView(title: "Encalhadas", count: model.encalhadas.count, alert: true) {
-                            ForEach(model.encalhadas) { task in
-                                BoardCardRow(task: task).onTapGesture { selected = task }
-                            }
-                        }
-                    }
-                    ForEach(BoardColumn.allCases) { column in
-                        let items = model.inColumn(column)
-                        BoardSectionView(title: column.label, count: items.count, alert: false) {
-                            if items.isEmpty {
-                                Text("—").font(.footnote).foregroundStyle(.tertiary)
-                                    .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 8)
-                            } else {
-                                ForEach(items) { task in
-                                    BoardCardRow(task: task).onTapGesture { selected = task }
-                                }
-                            }
-                        }
-                    }
+            VStack(spacing: 0) {
+                FilterBar(model: model)
+                Divider()
+                if model.isLoading && model.tasks.isEmpty {
+                    Spacer(); ProgressView(); Spacer()
+                } else if model.tasks.isEmpty, let err = model.errorText {
+                    Spacer(); ContentUnavailableView(err, systemImage: "wifi.exclamationmark"); Spacer()
+                } else {
+                    boardScroller
                 }
-                .padding()
             }
             .navigationTitle("Cutuque Board")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Fechar") { dismiss() }
-                }
+                ToolbarItem(placement: .topBarLeading) { Button("Fechar") { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { Task { await model.load() } } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .accessibilityLabel("Recarregar")
-                }
-            }
-            .refreshable { await model.load() }
-            .overlay {
-                if model.isLoading && model.tasks.isEmpty { ProgressView() }
-                else if model.tasks.isEmpty, let err = model.errorText {
-                    ContentUnavailableView(err, systemImage: "wifi.exclamationmark")
+                    Button { Task { await model.load() } } label: { Image(systemName: "arrow.clockwise") }
+                        .accessibilityLabel("Recarregar")
                 }
             }
             .sheet(item: $selected) { task in
@@ -110,82 +107,183 @@ struct BoardView: View {
         }
         .task { await model.load() }
     }
-}
 
-// MARK: - Seção (coluna) + card
-
-/// Uma "coluna" do board renderizada como seção vertical (idiomático no iPhone).
-private struct BoardSectionView<Content: View>: View {
-    let title: String
-    let count: Int
-    let alert: Bool
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                if alert { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red) }
-                Text(title.uppercased())
-                    .font(.caption).fontWeight(.bold).kerning(0.5)
-                    .foregroundStyle(alert ? Color.red : .secondary)
-                Spacer()
-                Text("\(count)").font(.caption).fontWeight(.semibold)
-                    .foregroundStyle(alert ? AnyShapeStyle(.red) : AnyShapeStyle(.tertiary))
+    // Colunas lado a lado, cada uma ~85% da largura, com paginação (swipe estilo Trello).
+    private var boardScroller: some View {
+        GeometryReader { geo in
+            let colWidth = geo.size.width * 0.86
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 12) {
+                    if !model.encalhadas.isEmpty {
+                        BoardColumnCard(title: "Encalhadas", count: model.encalhadas.count,
+                                        alert: true, tasks: model.encalhadas, width: colWidth) { selected = $0 }
+                    }
+                    ForEach(BoardColumn.allCases) { column in
+                        let items = model.inColumn(column)
+                        BoardColumnCard(title: column.label, count: items.count,
+                                        alert: false, tasks: items, width: colWidth) { selected = $0 }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 12)
+                .scrollTargetLayout()
             }
-            content
-        }
-        .padding(alert ? 12 : 0)
-        .background {
-            if alert {
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(Color.red.opacity(0.06))
-                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.red.opacity(0.45), lineWidth: 1))
-            }
+            .scrollTargetBehavior(.viewAligned)
+            .refreshable { await model.load() }
         }
     }
 }
 
-/// Card de uma tarefa. Barra lateral na cor do tipo (ou vermelha se encalhada).
-/// Encalhados ficam neutros — só a TAG do tipo mantém a cor (igual ao web).
+// MARK: - Barra de filtros
+
+private struct FilterBar: View {
+    @ObservedObject var model: BoardModel
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                FilterMenu(label: "Ambiente", selection: $model.filterGroup, options: model.groups)
+                FilterMenu(label: "Tipo", selection: $model.filterType, options: model.types)
+                FilterMenu(label: "Sessão", selection: $model.filterSession, options: model.sessions)
+                if model.hasActiveFilter {
+                    Button {
+                        model.filterGroup = "all"; model.filterType = "all"; model.filterSession = "all"
+                    } label: {
+                        Label("Limpar", systemImage: "xmark.circle.fill").font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 8)
+        }
+    }
+}
+
+private struct FilterMenu: View {
+    let label: String
+    @Binding var selection: String
+    let options: [String]
+
+    var body: some View {
+        Menu {
+            Button { selection = "all" } label: {
+                if selection == "all" { Label("Todos", systemImage: "checkmark") } else { Text("Todos") }
+            }
+            ForEach(options, id: \.self) { opt in
+                Button { selection = opt } label: {
+                    if selection == opt { Label(opt, systemImage: "checkmark") } else { Text(opt) }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(selection == "all" ? label : "\(label): \(selection)")
+                    .font(.caption).fontWeight(.medium).lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+            }
+            .padding(.horizontal, 11).padding(.vertical, 6)
+            .foregroundStyle(selection == "all" ? Color.secondary : Color.accentColor)
+            .background(
+                Capsule().fill(selection == "all" ? Color(.secondarySystemBackground)
+                               : Color.accentColor.opacity(0.14))
+            )
+            .overlay(Capsule().stroke(selection == "all" ? Color(.separator).opacity(0.5)
+                                      : Color.accentColor.opacity(0.5), lineWidth: 1))
+        }
+    }
+}
+
+// MARK: - Coluna (estilo Trello)
+
+private struct BoardColumnCard: View {
+    let title: String
+    let count: Int
+    let alert: Bool
+    let tasks: [BoardTask]
+    let width: CGFloat
+    let onTap: (BoardTask) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                if alert { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red) }
+                Text(title.uppercased()).font(.caption).fontWeight(.bold).kerning(0.5)
+                    .foregroundStyle(alert ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                Spacer()
+                Text("\(count)").font(.caption).fontWeight(.semibold)
+                    .foregroundStyle(alert ? AnyShapeStyle(.red) : AnyShapeStyle(.tertiary))
+            }
+            .padding(.horizontal, 12).padding(.vertical, 10)
+
+            Divider()
+
+            ScrollView(showsIndicators: false) {
+                LazyVStack(spacing: 8) {
+                    if tasks.isEmpty {
+                        Text("—").font(.footnote).foregroundStyle(.tertiary)
+                            .frame(maxWidth: .infinity).padding(.vertical, 20)
+                    } else {
+                        ForEach(tasks) { task in
+                            BoardCardRow(task: task).onTapGesture { onTap(task) }
+                        }
+                    }
+                }
+                .padding(10)
+            }
+        }
+        .frame(width: width)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(alert ? Color.red.opacity(0.06) : Color(.secondarySystemBackground).opacity(0.5))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(alert ? Color.red.opacity(0.45) : Color(.separator).opacity(0.4), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+// MARK: - Card (sem barra lateral; degradê neutro, só a tag colorida)
+
 struct BoardCardRow: View {
     let task: BoardTask
 
     var body: some View {
         let typeColor = AgentTypeColor.color(for: task.type)
-        let accent = task.isEncalhada ? Color.red : typeColor
-        HStack(spacing: 0) {
-            Rectangle().fill(accent).frame(width: 3)
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: 6) {
-                    if task.isEncalhada {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red).font(.caption)
-                    }
-                    Text(task.title).font(.subheadline).fontWeight(.semibold)
-                        .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 6) {
+                if task.isEncalhada {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red).font(.caption)
                 }
-                HStack(spacing: 6) {
-                    if let type = task.type, !type.isEmpty {
-                        TagChip(text: type.uppercased(), color: typeColor, filled: true)
-                    }
-                    TagChip(text: task.group, color: .secondary, filled: false)
-                    TagChip(text: task.session, color: .secondary, filled: false)
-                }
-                HStack(spacing: 12) {
-                    if let updated = task.updatedAt {
-                        Label(Self.rel.localizedString(for: updated, relativeTo: Date()), systemImage: "clock")
-                    }
-                    if task.commentCount > 0 {
-                        Label("\(task.commentCount)", systemImage: "bubble.left")
-                    }
-                }
-                .font(.caption2).foregroundStyle(.secondary)
-                .labelStyle(.titleAndIcon)
+                Text(task.title).font(.subheadline).fontWeight(.semibold)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(10)
-            Spacer(minLength: 0)
+            HStack(spacing: 6) {
+                if let type = task.type, !type.isEmpty {
+                    TagChip(text: type.uppercased(), color: typeColor, filled: true)
+                }
+                TagChip(text: task.group, color: .secondary, filled: false)
+                TagChip(text: task.session, color: .secondary, filled: false)
+            }
+            HStack(spacing: 12) {
+                if let updated = task.updatedAt {
+                    Label(Self.rel.localizedString(for: updated, relativeTo: Date()), systemImage: "clock")
+                }
+                if task.commentCount > 0 { Label("\(task.commentCount)", systemImage: "bubble.left") }
+            }
+            .font(.caption2).foregroundStyle(.secondary).labelStyle(.titleAndIcon)
         }
-        .background(Color(.secondarySystemBackground))
+        .padding(11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            // Encalhado: fundo chapado (sem degradê). Demais: degradê neutro.
+            if task.isEncalhada {
+                Color(.secondarySystemBackground)
+            } else {
+                LinearGradient(colors: [Color(.tertiarySystemBackground), Color(.secondarySystemBackground)],
+                               startPoint: .top, endPoint: .bottom)
+            }
+        }
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(
             task.isEncalhada ? Color.red.opacity(0.5) : Color(.separator).opacity(0.5), lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -217,13 +315,15 @@ struct TagChip: View {
     }
 }
 
-// MARK: - Detalhe do card (com mover / marcar encalhada / apagar)
+// MARK: - Detalhe do card (mover / encalhada / comentar / apagar)
 
 struct BoardTaskDetailView: View {
     let task: BoardTask
     @ObservedObject var model: BoardModel
     @Environment(\.dismiss) private var dismiss
     @State private var showDeleteConfirm = false
+    @State private var newComment = ""
+    @FocusState private var commentFocused: Bool
 
     private var live: BoardTask { model.tasks.first { $0.id == task.id } ?? task }
 
@@ -238,9 +338,7 @@ struct BoardTaskDetailView: View {
                         TagChip(text: live.group, color: .secondary, filled: false)
                         TagChip(text: live.session, color: .secondary, filled: false)
                     }
-                    if let role = live.role, !role.isEmpty {
-                        LabeledContent("Quem", value: role)
-                    }
+                    if let role = live.role, !role.isEmpty { LabeledContent("Quem", value: role) }
                     LabeledContent("Coluna", value: BoardColumn(rawValue: live.column)?.label ?? live.column)
                     if let desc = live.description, !desc.isEmpty {
                         Text(desc).font(.callout).foregroundStyle(.secondary)
@@ -250,9 +348,7 @@ struct BoardTaskDetailView: View {
                 Section("Mover para") {
                     ForEach(BoardColumn.allCases) { column in
                         let isCurrent = live.column == column.rawValue && !live.isEncalhada
-                        Button {
-                            Task { await model.move(live, to: column); dismiss() }
-                        } label: {
+                        Button { Task { await model.move(live, to: column); dismiss() } } label: {
                             HStack {
                                 Text(column.label)
                                 Spacer()
@@ -261,13 +357,10 @@ struct BoardTaskDetailView: View {
                         }
                         .disabled(isCurrent)
                     }
-                    Button {
-                        Task { await model.markEncalhada(live); dismiss() }
-                    } label: {
+                    Button { Task { await model.markEncalhada(live); dismiss() } } label: {
                         Label("Marcar como encalhada", systemImage: "exclamationmark.triangle")
                     }
-                    .tint(.red)
-                    .disabled(live.isEncalhada)
+                    .tint(.red).disabled(live.isEncalhada)
                 }
 
                 Section("Linha do tempo") {
@@ -288,6 +381,19 @@ struct BoardTaskDetailView: View {
                     } else {
                         Text("Nenhum comentário ainda.").font(.callout).foregroundStyle(.secondary)
                     }
+                    HStack {
+                        TextField("Adicionar comentário…", text: $newComment, axis: .vertical)
+                            .focused($commentFocused)
+                        Button {
+                            let text = newComment.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !text.isEmpty else { return }
+                            newComment = ""; commentFocused = false
+                            Task { await model.comment(live, text: text) }
+                        } label: {
+                            Image(systemName: "paperplane.fill")
+                        }
+                        .disabled(newComment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
                 }
 
                 Section {
@@ -298,14 +404,10 @@ struct BoardTaskDetailView: View {
             }
             .navigationTitle(live.title)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("Fechar") { dismiss() } }
-            }
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Fechar") { dismiss() } } }
             .alert("Apagar card?", isPresented: $showDeleteConfirm) {
                 Button("Cancelar", role: .cancel) {}
-                Button("Apagar", role: .destructive) {
-                    Task { await model.delete(live); dismiss() }
-                }
+                Button("Apagar", role: .destructive) { Task { await model.delete(live); dismiss() } }
             } message: {
                 Text("\"\(live.title)\" será apagado. Esta ação não pode ser desfeita.")
             }

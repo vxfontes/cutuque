@@ -218,13 +218,10 @@
   .cf-delete { background: var(--error); color: #fff; border-color: var(--error); }
   .cf-delete:hover { filter: brightness(1.08); }
   .task-card {
-    position: relative; overflow: hidden;
-    --tc: var(--faint); /* cor do tipo de IA; default cinza p/ sem tipo */
-    background: linear-gradient(180deg, color-mix(in srgb, var(--tc) 8%, var(--panel)) 0%, var(--panel2) 100%);
-    border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 10px 14px; cursor: grab; box-shadow: var(--shadow);
+    --tc: var(--faint); /* cor do tipo de IA (só a tag usa); default cinza */
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 100%);
+    border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; cursor: grab; box-shadow: var(--shadow);
   }
-  /* barra de destaque à esquerda, na cor do tipo */
-  .task-card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--tc); }
   .task-card[data-type="claude"]   { --tc: #2d7ff9; } /* azul */
   .task-card[data-type="codex"]    { --tc: #22c55e; } /* verde */
   .task-card[data-type="opencode"] { --tc: #a855f7; } /* roxo */
@@ -260,10 +257,9 @@
     filter: drop-shadow(0 3px 5px color-mix(in srgb, var(--error) 45%, transparent));
   }
   .col-encalhadas.has-enc .enc-badge { display: block; }
-  /* Cards encalhados: neutros pra não poluir — barra de alerta vermelha e degradê
-     neutro (SEM a cor do tipo). Só a tag do tipo mantém a cor (claude/codex/opencode). */
-  .task-card.encalhada { background: linear-gradient(180deg, color-mix(in srgb, var(--error) 4%, var(--panel)) 0%, var(--panel2) 100%); }
-  .task-card.encalhada::before { background: var(--error); }
+  /* Cards encalhados: fundo CHAPADO (sem degradê). O alerta vem da borda vermelha
+     + ícone no título + a própria coluna. Só a tag mantém a cor do tipo. */
+  .task-card.encalhada { background: var(--panel); }
   /* Página Arquivo (acessada por botão): hierarquia mês > semana */
   .arq-head { display: flex; align-items: center; gap: 12px; padding: 18px 24px 0; }
   .arq-head h2 { margin: 0; font-size: 17px; }

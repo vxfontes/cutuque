@@ -142,6 +142,21 @@ struct APIClient {
         try await send(request)
     }
 
+    /// Adiciona um comentário a um card. `POST /board/tasks/{id}/comments` (aberto).
+    func addBoardComment(id: String, author: String, text: String) async throws {
+        let url = baseURL.appendingPathComponent("board").appendingPathComponent("tasks").appendingPathComponent(id).appendingPathComponent("comments")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["author": author, "text": text])
+        // 201 Created — trata como sucesso (o send só aceita 200/204).
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw CutuqueError.unexpected(status: (response as? HTTPURLResponse)?.statusCode ?? -1)
+        }
+    }
+
     /// Apaga um card do quadro. `DELETE /board/tasks/{id}` — EXIGE token (só a
     /// mantenedora, via app/dashboard). Agentes (CLI, sem token) recebem 401.
     func deleteBoardTask(id: String) async throws {
