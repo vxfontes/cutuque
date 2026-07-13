@@ -154,6 +154,7 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		mux.Handle("POST /board/tasks", requireAuth(cfg.Token, BoardCreateHandler(rc.board)))
 		mux.Handle("PATCH /board/tasks/{id}", requireAuth(cfg.Token, BoardPatchHandler(rc.board)))
 		mux.Handle("DELETE /board/tasks/{id}", requireAuth(cfg.Token, BoardDeleteHandler(rc.board)))
+		mux.Handle("POST /board/tasks/{id}/comments", requireAuth(cfg.Token, BoardCommentHandler(rc.board)))
 	}
 
 	return mux

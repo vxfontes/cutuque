@@ -128,6 +128,31 @@
   .board-col-body { padding: 10px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex: 1; min-height: 80px; }
   .board-col-body.dragover { background: color-mix(in srgb, var(--running) 10%, transparent); outline: 1px dashed var(--running); outline-offset: -4px; }
   .col-empty { text-align: center; color: var(--faint); font-size: 12px; padding: 18px 4px; }
+  .task-card { cursor: pointer; }
+
+  /* Modal de detalhe do card */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); backdrop-filter: blur(3px); z-index: 20; display: flex; align-items: flex-start; justify-content: center; padding: 6vh 16px; overflow-y: auto; }
+  .modal-overlay[hidden] { display: none; }
+  .modal { position: relative; width: 100%; max-width: 560px; background: var(--panel); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow); padding: 22px 22px 18px; }
+  .modal-close { position: absolute; top: 12px; right: 14px; background: transparent; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
+  .modal-close:hover { color: var(--text); }
+  .modal h2 { margin: 0 26px 4px 0; font-size: 18px; }
+  .modal .m-tags { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 4px; }
+  .modal .m-desc { color: var(--muted); font-size: 13.5px; white-space: pre-wrap; margin: 10px 0; }
+  .modal .m-desc.empty { color: var(--faint); font-style: italic; }
+  .m-section { margin-top: 16px; }
+  .m-section h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); margin: 0 0 8px; }
+  .m-timeline { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .m-timeline .k { color: var(--faint); }
+  .m-comments { display: flex; flex-direction: column; gap: 8px; }
+  .m-comment { background: var(--panel2); border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; }
+  .m-comment .who { font-weight: 600; font-size: 12px; }
+  .m-comment .when { color: var(--faint); font-size: 11px; margin-left: 6px; }
+  .m-comment .txt { font-size: 13px; margin-top: 3px; white-space: pre-wrap; }
+  .m-comments-empty { color: var(--faint); font-size: 12.5px; font-style: italic; }
+  .m-add { display: flex; gap: 8px; margin-top: 10px; }
+  .m-add input { flex: 1; background: var(--panel2); border: 1px solid var(--border); border-radius: 9px; color: var(--text); padding: 8px 10px; font: inherit; font-size: 13px; }
+  .m-add button { background: var(--running); border: none; color: #fff; border-radius: 9px; padding: 0 14px; font-weight: 600; cursor: pointer; }
   .task-card {
     background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 100%);
     border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; cursor: grab; box-shadow: var(--shadow);
@@ -189,6 +214,13 @@
       </div>
     </div>
   </section>
+
+  <div id="cardModal" class="modal-overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true">
+      <button class="modal-close" id="cardModalClose" aria-label="Fechar">✕</button>
+      <div id="cardModalBody"></div>
+    </div>
+  </div>
 
 <script>
 (() => {
@@ -419,6 +451,61 @@
     });
   });
 
+  // ---- Modal de detalhe do card (estilo Trello) ----
+  const $cardModal = document.getElementById('cardModal');
+  const $cardModalBody = document.getElementById('cardModalBody');
+  let openCardId = null;
+  const COL_LABEL = { a_fazer: 'A fazer', em_progresso: 'Em progresso', feito: 'Feito', em_revisao: 'Em revisão', concluido: 'Concluído' };
+  const fmtDT = (iso) => { if (!iso) return '—'; try { return new Date(iso).toLocaleString('pt-BR'); } catch { return '—'; } };
+
+  function renderCardModal(t) {
+    const tags = [];
+    if (t.type) tags.push(`<span class="tag tag-type">${esc(t.type)}</span>`);
+    if (t.group) tags.push(`<span class="tag">${esc(t.group)}</span>`);
+    if (t.session) tags.push(`<span class="tag">${esc(t.session)}</span>`);
+    const comments = t.comments || [];
+    $cardModalBody.innerHTML = `
+      <h2>${esc(t.title)}</h2>
+      <div class="m-tags">${tags.join('')}</div>
+      <div style="font-size:12.5px;color:var(--muted)">Coluna: <b>${COL_LABEL[t.column] || esc(t.column)}</b>${t.role ? ` · Quem: <b>${esc(t.role)}</b>` : ''}</div>
+      <div class="m-desc ${t.description ? '' : 'empty'}">${t.description ? esc(t.description) : 'sem descrição'}</div>
+      <div class="m-section"><h3>Linha do tempo</h3>
+        <div class="m-timeline">
+          <span class="k">Criado</span><span>${fmtDT(t.created_at)}</span>
+          <span class="k">Início</span><span>${fmtDT(t.started_at)}</span>
+          <span class="k">Revisão</span><span>${fmtDT(t.reviewed_at)}</span>
+          <span class="k">Fim</span><span>${fmtDT(t.ended_at)}</span>
+        </div>
+      </div>
+      <div class="m-section"><h3>Comentários (${comments.length})</h3>
+        <div class="m-comments">
+          ${comments.length ? comments.map((c) => `<div class="m-comment"><span class="who">${esc(c.author)}</span><span class="when">${c.created_at ? ago(c.created_at) : ''}</span><div class="txt">${esc(c.text)}</div></div>`).join('') : '<div class="m-comments-empty">Nenhum comentário ainda.</div>'}
+        </div>
+        <form class="m-add" id="mAddForm"><input id="mAddInput" placeholder="Adicionar comentário…" autocomplete="off"><button type="submit">Enviar</button></form>
+      </div>`;
+    document.getElementById('mAddForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const v = document.getElementById('mAddInput').value.trim();
+      if (v && openCardId) addComment(openCardId, v);
+    });
+  }
+  function openCard(id) { const t = tasks.get(id); if (!t) return; openCardId = id; renderCardModal(t); $cardModal.hidden = false; }
+  function closeCard() { openCardId = null; $cardModal.hidden = true; }
+  async function addComment(id, text) {
+    try {
+      const res = await fetch('/board/tasks/' + encodeURIComponent(id) + '/comments', {
+        method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ author: 'você', text }),
+      });
+      if (!res.ok) console.error('comment falhou:', res.status);
+      const inp = document.getElementById('mAddInput'); if (inp) inp.value = '';
+    } catch (e) { console.error('comment erro:', e.message); }
+  }
+  $boardCols.addEventListener('click', (e) => { const card = e.target.closest('.task-card'); if (card) openCard(card.dataset.id); });
+  document.getElementById('cardModalClose').addEventListener('click', closeCard);
+  $cardModal.addEventListener('click', (e) => { if (e.target === $cardModal) closeCard(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$cardModal.hidden) closeCard(); });
+
   $tabs.addEventListener('click', (e) => {
     const btn = e.target.closest('.tab'); if (!btn) return;
     document.body.dataset.view = btn.dataset.view;
@@ -443,8 +530,8 @@
       else if (m.type === 'session_updated' && m.session) { sessions.set(m.session.id, m.session); render(); }
       else if (m.type === 'session_removed') { sessions.delete(m.session_id); render(); }
       else if (m.type === 'board_snapshot') { tasks.clear(); (m.tasks || []).forEach((t) => tasks.set(t.id, t)); renderBoard(); }
-      else if (m.type === 'board_updated' && m.task) { tasks.set(m.task.id, m.task); renderBoard(); }
-      else if (m.type === 'board_removed') { tasks.delete(m.id); renderBoard(); }
+      else if (m.type === 'board_updated' && m.task) { tasks.set(m.task.id, m.task); renderBoard(); if (openCardId === m.task.id) renderCardModal(m.task); }
+      else if (m.type === 'board_removed') { tasks.delete(m.id); renderBoard(); if (openCardId === m.id) closeCard(); }
     };
   }
   render();

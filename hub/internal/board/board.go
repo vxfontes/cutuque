@@ -32,12 +32,31 @@ type Task struct {
 	// Type é o tipo do agente que criou o card (claude|codex|opencode|""), a 3ª
 	// tag de identificação/filtro (além de group e session).
 	Type string `json:"type,omitempty"`
-	// StartedAt/EndedAt são derivados internamente: StartedAt na 1ª vez que o
-	// card entra em em_progresso; EndedAt quando entra em concluido. Nulos até lá.
-	StartedAt *time.Time `json:"started_at,omitempty"`
-	EndedAt   *time.Time `json:"ended_at,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	// Role é quem está fazendo (sub-agente/orquestrador: luka, ludmilla, marcus…).
+	Role string `json:"role,omitempty"`
+	// Description é o texto longo do que está sendo feito (detalhe do card).
+	Description string `json:"description,omitempty"`
+	// Comments são as observações que os agentes (e a usuária) vão adicionando.
+	Comments []Comment `json:"comments,omitempty"`
+	// StartedAt/ReviewedAt/EndedAt são derivados internamente na 1ª entrada em
+	// em_progresso / em_revisao / concluido. Nulos até lá.
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	ReviewedAt *time.Time `json:"reviewed_at,omitempty"`
+	EndedAt    *time.Time `json:"ended_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+// Comment é uma observação num card: autor (role/quem) + texto + quando.
+type Comment struct {
+	Author    string    `json:"author"`
+	Text      string    `json:"text"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// NewTask são os campos para criar um card (evita explosão de parâmetros posicionais).
+type NewTask struct {
+	Title, Group, Session, Type, Role, Description string
 }
 
 const subBuffer = 32
@@ -131,9 +150,13 @@ func (s *Store) Get(id string) (Task, bool) {
 	return t, ok
 }
 
-func (s *Store) Add(title, group, session, agentType string) Task {
+func (s *Store) Add(n NewTask) Task {
 	now := time.Now()
-	t := Task{ID: newID(), Title: title, Column: "a_fazer", Group: group, Session: session, Type: agentType, CreatedAt: now, UpdatedAt: now}
+	t := Task{
+		ID: newID(), Title: n.Title, Column: "a_fazer",
+		Group: n.Group, Session: n.Session, Type: n.Type, Role: n.Role, Description: n.Description,
+		CreatedAt: now, UpdatedAt: now,
+	}
 	s.mu.Lock()
 	s.byID[t.ID] = t
 	s.mu.Unlock()
@@ -144,7 +167,7 @@ func (s *Store) Add(title, group, session, agentType string) Task {
 
 // Update altera coluna e/ou título (ponteiros nil = não mexe). Retorna a task
 // atualizada e ok=false se o id não existir ou a coluna for inválida.
-func (s *Store) Update(id string, column, title *string) (Task, bool) {
+func (s *Store) Update(id string, column, title, description, role *string) (Task, bool) {
 	if column != nil && !ValidColumn(*column) {
 		return Task{}, false
 	}
@@ -157,9 +180,12 @@ func (s *Store) Update(id string, column, title *string) (Task, bool) {
 	now := time.Now()
 	if column != nil {
 		t.Column = *column
-		// Datas derivadas: início na 1ª entrada em em_progresso; fim ao concluir.
+		// Datas derivadas na 1ª entrada em cada estágio.
 		if *column == "em_progresso" && t.StartedAt == nil {
 			t.StartedAt = &now
+		}
+		if *column == "em_revisao" && t.ReviewedAt == nil {
+			t.ReviewedAt = &now
 		}
 		if *column == "concluido" && t.EndedAt == nil {
 			t.EndedAt = &now
@@ -168,6 +194,31 @@ func (s *Store) Update(id string, column, title *string) (Task, bool) {
 	if title != nil {
 		t.Title = *title
 	}
+	if description != nil {
+		t.Description = *description
+	}
+	if role != nil {
+		t.Role = *role
+	}
+	t.UpdatedAt = now
+	s.byID[id] = t
+	s.mu.Unlock()
+	s.persist()
+	s.broadcast(t)
+	return t, true
+}
+
+// AddComment adiciona uma observação ao card. Retorna a task atualizada e
+// ok=false se o id não existir.
+func (s *Store) AddComment(id, author, text string) (Task, bool) {
+	s.mu.Lock()
+	t, ok := s.byID[id]
+	if !ok {
+		s.mu.Unlock()
+		return Task{}, false
+	}
+	now := time.Now()
+	t.Comments = append(t.Comments, Comment{Author: author, Text: text, CreatedAt: now})
 	t.UpdatedAt = now
 	s.byID[id] = t
 	s.mu.Unlock()

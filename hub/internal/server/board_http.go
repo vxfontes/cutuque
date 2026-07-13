@@ -26,26 +26,33 @@ func BoardListHandler(st *board.Store) http.HandlerFunc {
 func BoardCreateHandler(st *board.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Title   string `json:"title"`
-			Group   string `json:"group"`
-			Session string `json:"session"`
-			Type    string `json:"type"`
+			Title       string `json:"title"`
+			Group       string `json:"group"`
+			Session     string `json:"session"`
+			Type        string `json:"type"`
+			Role        string `json:"role"`
+			Description string `json:"description"`
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in) != nil || in.Title == "" {
 			writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "bad_request"})
 			return
 		}
-		writeJSONResp(w, http.StatusCreated, st.Add(in.Title, in.Group, in.Session, in.Type))
+		writeJSONResp(w, http.StatusCreated, st.Add(board.NewTask{
+			Title: in.Title, Group: in.Group, Session: in.Session,
+			Type: in.Type, Role: in.Role, Description: in.Description,
+		}))
 	}
 }
 
-// BoardPatchHandler move/edita uma tarefa.
+// BoardPatchHandler move/edita uma tarefa (coluna, título, descrição, role).
 func BoardPatchHandler(st *board.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		var in struct {
-			Column *string `json:"column"`
-			Title  *string `json:"title"`
+			Column      *string `json:"column"`
+			Title       *string `json:"title"`
+			Description *string `json:"description"`
+			Role        *string `json:"role"`
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in) != nil {
 			writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "bad_request"})
@@ -55,12 +62,37 @@ func BoardPatchHandler(st *board.Store) http.HandlerFunc {
 			writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "invalid_column"})
 			return
 		}
-		t, ok := st.Update(id, in.Column, in.Title)
+		t, ok := st.Update(id, in.Column, in.Title, in.Description, in.Role)
 		if !ok {
 			writeJSONResp(w, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
 		writeJSONResp(w, http.StatusOK, t)
+	}
+}
+
+// BoardCommentHandler adiciona uma observação a um card.
+func BoardCommentHandler(st *board.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		var in struct {
+			Author string `json:"author"`
+			Text   string `json:"text"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in) != nil || in.Text == "" {
+			writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+			return
+		}
+		author := in.Author
+		if author == "" {
+			author = "?"
+		}
+		t, ok := st.AddComment(id, author, in.Text)
+		if !ok {
+			writeJSONResp(w, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		}
+		writeJSONResp(w, http.StatusCreated, t)
 	}
 }
 

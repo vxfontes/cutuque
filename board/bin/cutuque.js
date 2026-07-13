@@ -6,32 +6,60 @@ import { createHubClient } from '../src/hubClient.js';
 import { commands } from '../src/commands.js';
 
 const USAGE = `uso:
-  cutuque task add "<título>"
+  cutuque task add "<título>" --agent <role> [--desc "<descrição>"]
   cutuque task list
-  cutuque task move <id> <a_fazer|em_progresso|feito|em_revisao|concluido>`;
+  cutuque task move <id> <a_fazer|em_progresso|feito|em_revisao|concluido>
+  cutuque task comment <id> "<texto>" --agent <role>
+  cutuque task desc <id> "<descrição>"
+
+--agent <role> = quem está fazendo (ex: marcus, luka, ludmilla). Obrigatório em add e comment.`;
+
+// Separa flags (--k v) dos argumentos posicionais.
+function parseArgs(argv) {
+  const flags = {};
+  const pos = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i].startsWith('--')) { flags[argv[i].slice(2)] = argv[i + 1] ?? ''; i++; }
+    else pos.push(argv[i]);
+  }
+  return { flags, pos };
+}
 
 async function main() {
   const [, , area, action, ...rest] = process.argv;
-  if (area !== 'task') { console.log(USAGE); process.exit(rest.length ? 1 : 0); }
+  if (area !== 'task' || !action) { console.log(USAGE); process.exit(area ? 1 : 0); }
 
+  const { flags, pos } = parseArgs(rest);
   const cfg = resolveConfig(process.env);
   const cli = {
-    identity: { ...tmuxIdentity(process.env), type: detectAgent(process.env) },
+    identity: { ...tmuxIdentity(process.env), type: detectAgent(process.env), role: (flags.agent || '').trim() },
     client: createHubClient(cfg),
     out: (s) => console.log(s),
   };
 
   try {
     if (action === 'add') {
-      const title = rest.join(' ').trim();
+      const title = pos.join(' ').trim();
       if (!title) throw new Error('faltou o título');
-      await commands.add(cli, title);
+      if (!cli.identity.role) throw new Error('--agent <role> é obrigatório no add');
+      await commands.add(cli, title, { desc: flags.desc || '' });
     } else if (action === 'list') {
       await commands.list(cli);
     } else if (action === 'move') {
-      const [id, column] = rest;
+      const [id, column] = pos;
       if (!id || !column) throw new Error('uso: cutuque task move <id> <coluna>');
       await commands.move(cli, id, column);
+    } else if (action === 'comment') {
+      const [id, ...textParts] = pos;
+      const text = textParts.join(' ').trim();
+      if (!id || !text) throw new Error('uso: cutuque task comment <id> "<texto>" --agent <role>');
+      if (!cli.identity.role) throw new Error('--agent <role> é obrigatório no comment');
+      await commands.comment(cli, id, text);
+    } else if (action === 'desc') {
+      const [id, ...textParts] = pos;
+      const text = textParts.join(' ').trim();
+      if (!id || !text) throw new Error('uso: cutuque task desc <id> "<descrição>"');
+      await commands.desc(cli, id, text);
     } else {
       console.log(USAGE); process.exit(1);
     }
