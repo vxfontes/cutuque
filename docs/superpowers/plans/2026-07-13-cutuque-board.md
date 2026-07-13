@@ -513,11 +513,9 @@ import (
 	"github.com/vxfontes/cutuque/hub/internal/board"
 )
 
-func writeJSON(w http.ResponseWriter, code int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
-}
+// NOTA: reusa o helper JÁ EXISTENTE `writeJSONResp(w, status, v)` (settings.go).
+// NÃO declarar `writeJSON` aqui — o pacote server já tem um `writeJSON` com
+// outra assinatura (ws.go), o que causaria erro de redeclaração.
 
 // BoardListHandler responde a lista de tarefas.
 func BoardListHandler(st *board.Store) http.HandlerFunc {
@@ -526,7 +524,7 @@ func BoardListHandler(st *board.Store) http.HandlerFunc {
 		if tasks == nil {
 			tasks = []board.Task{}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"tasks": tasks})
+		writeJSONResp(w, http.StatusOK, map[string]any{"tasks": tasks})
 	}
 }
 
@@ -535,10 +533,10 @@ func BoardCreateHandler(st *board.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in struct{ Title, Group, Session string }
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in) != nil || in.Title == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+			writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "bad_request"})
 			return
 		}
-		writeJSON(w, http.StatusCreated, st.Add(in.Title, in.Group, in.Session))
+		writeJSONResp(w, http.StatusCreated, st.Add(in.Title, in.Group, in.Session))
 	}
 }
 
@@ -551,19 +549,19 @@ func BoardPatchHandler(st *board.Store) http.HandlerFunc {
 			Title  *string `json:"title"`
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in) != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+			writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "bad_request"})
 			return
 		}
 		if in.Column != nil && !board.ValidColumn(*in.Column) {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_column"})
+			writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "invalid_column"})
 			return
 		}
 		t, ok := st.Update(id, in.Column, in.Title)
 		if !ok {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
+			writeJSONResp(w, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
-		writeJSON(w, http.StatusOK, t)
+		writeJSONResp(w, http.StatusOK, t)
 	}
 }
 
@@ -571,7 +569,7 @@ func BoardPatchHandler(st *board.Store) http.HandlerFunc {
 func BoardDeleteHandler(st *board.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !st.Remove(r.PathValue("id")) {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
+			writeJSONResp(w, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -579,7 +577,7 @@ func BoardDeleteHandler(st *board.Store) http.HandlerFunc {
 }
 ```
 
-> **Nota:** se já existir um `writeJSON` no pacote `server`, NÃO redeclare — remova o helper local e use o existente. Verifique com `grep -rn "func writeJSON" hub/internal/server/`.
+> **Nota (verificado):** o pacote `server` já tem `writeJSONResp(w, status, v)` (settings.go) — reusar. NÃO criar `writeJSON` (colide com o de ws.go).
 
 - [ ] **Step 4: Registrar rotas em `hub/internal/server/server.go`**
 
