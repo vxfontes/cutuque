@@ -80,6 +80,9 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 	mux.Handle("GET /dashboard", DashboardHandler(cfg.Token))
 	// Protocolo do board para os agentes (aberto) — lido via Tailscale.
 	mux.Handle("GET /board-protocol", BoardProtocolHandler())
+	// CLI cutuque servida via Tailscale: /cutuque (o executável) e /install (curl | sh).
+	mux.Handle("GET /cutuque", BoardCLIHandler())
+	mux.Handle("GET /install", BoardInstallHandler())
 
 	// Protegidas por token.
 	mux.Handle("GET /sessions", requireAuth(cfg.Token, SessionsHandler(reg)))

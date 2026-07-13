@@ -71,8 +71,8 @@ refletir a realidade.
 
 > **Cutuque Board (obrigatório).** Você participa de um Kanban compartilhado dos
 > agentes via a CLI `cutuque`.
-> **Setup:** se o comando `cutuque` não existir, instale uma vez com
-> `cd ~/Desktop/coding/personal/cutuque/board && npm link`. **Não precisa configurar
+> **Setup:** se o comando `cutuque` não existir, instale via Tailscale (uma vez):
+> `curl -fsSL http://192.0.2.10:8787/install | sh`. **Não precisa configurar
 > nada** — a CLI já aponta pro hub no Tailscale e o board é aberto (sem token).
 > **Antes de começar qualquer tarefa:** `cutuque task list` (veja o que já existe
 > na sua sessão e onde está).
@@ -90,15 +90,21 @@ refletir a realidade.
 > observações com `--agent <role-dele>`. A tarefa só vai pra `concluido` quando
 > de fato concluída/revisada.
 
-## Instalação (uma vez por máquina)
+## Instalação (via Tailscale, uma vez por máquina)
 
-Se o comando `cutuque` **não existir** no seu shell, instale a CLI a partir do repo:
+Se o comando `cutuque` **não existir**, instale pelo hub — **não precisa do repo**:
 
 ```bash
-cd ~/Desktop/coding/personal/cutuque/board && npm link
+curl -fsSL http://192.0.2.10:8787/install | sh
 ```
 
-Basta uma vez por máquina — todos os agentes dela passam a ter o `cutuque` no PATH.
+Ou baixe o executável direto:
+
+```bash
+curl -fsSL http://192.0.2.10:8787/cutuque -o /usr/local/bin/cutuque && chmod +x /usr/local/bin/cutuque
+```
+
+Requer Node no PATH. Basta uma vez por máquina (o `cutuque` fica no PATH).
 
 ## Configuração
 
