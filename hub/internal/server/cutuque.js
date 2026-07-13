@@ -162,6 +162,34 @@ const commands = {
       for (const t of items) cli.out(cardLine(t));
     }
   },
+  // show: detalhe completo de um card (descrição, linha do tempo e TODOS os
+  // comentários) — para o agente opinar com base no histórico. Procura no board
+  // ativo e, se não achar, no arquivo (semanas passadas).
+  async show(cli, id) {
+    const all = await cli.client.listTasks();
+    let t = all.find((x) => x.id === id);
+    if (!t) {
+      const weeks = await cli.client.archive();
+      for (const w of weeks) {
+        const f = (w.tasks || []).find((x) => x.id === id);
+        if (f) { t = f; break; }
+      }
+    }
+    if (!t) throw new Error(`card não encontrado: ${id}`);
+    const dt = (x) => (x ? new Date(x).toLocaleString('pt-BR') : '—');
+    const meta = [`Coluna: ${LABEL[t.column] || t.column}`];
+    if (t.type) meta.push(`Tipo: ${t.type}`);
+    if (t.role) meta.push(`Quem: ${t.role}`);
+    cli.out(`${t.id}  ${t.title}`);
+    cli.out(meta.join(' · '));
+    cli.out(`Ambiente: ${t.group}/${t.session}${t.encalhada ? ' · ENCALHADA' : ''}`);
+    if (t.description) cli.out(`\nDescrição:\n${t.description}`);
+    cli.out(`\nDatas: criado ${dt(t.created_at)} · início ${dt(t.started_at)} · revisão ${dt(t.reviewed_at)} · fim ${dt(t.ended_at)}`);
+    const cs = t.comments || [];
+    cli.out(`\nComentários (${cs.length}):`);
+    if (!cs.length) cli.out('  (nenhum)');
+    for (const c of cs) cli.out(`  - ${c.author}${c.created_at ? ` (${dt(c.created_at)})` : ''}: ${c.text}`);
+  },
   // week: acessa os concluídos ARQUIVADOS por semana. Sem label -> lista as semanas;
   // com label (ex: 2026-W28) -> mostra os cards daquela semana no escopo.
   async week(cli, { flags = {}, args = [] } = {}) {
@@ -201,6 +229,7 @@ const commands = {
 const USAGE = `uso:
   cutuque task add "<título>" --agent <role> [--desc "<descrição>"]
   cutuque task list [--all | --group <nome> | --session]
+  cutuque task show <id>                              # detalhe do card + TODOS os comentários
   cutuque task move <id> <a_fazer|em_progresso|feito|em_revisao|concluido>
   cutuque task comment <id> "<texto>" --agent <role>
   cutuque task desc <id> "<descrição>"
@@ -250,6 +279,10 @@ async function main() {
       await commands.add(cli, title, { desc: flags.desc || '' });
     } else if (action === 'list') {
       await commands.list(cli, { flags });
+    } else if (action === 'show') {
+      const [id] = pos;
+      if (!id) throw new Error('uso: cutuque task show <id>');
+      await commands.show(cli, id);
     } else if (action === 'week') {
       await commands.week(cli, { flags, args: pos });
     } else if (action === 'close-week') {

@@ -119,6 +119,38 @@ test('close-week reporta arquivados e encalhados', async () => {
   assert.ok(cli._out.join('\n').includes('1 encalhado'));
 });
 
+test('show traz descricao + todos os comentarios', async () => {
+  const cli = fakeCli([
+    { id: 'a', title: 'tarefa X', column: 'em_progresso', group: 'interconexao', session: 'cutuque',
+      type: 'claude', role: 'marcus', description: 'fazer o X direito',
+      comments: [{ author: 'marcus', text: 'comecei' }, { author: 'você', text: 'cuidado com o edge case' }] },
+  ]);
+  await commands.show(cli, 'a');
+  const out = cli._out.join('\n');
+  assert.ok(out.includes('tarefa X'));
+  assert.ok(out.includes('fazer o X direito'));       // descrição
+  assert.ok(out.includes('Comentários (2)'));
+  assert.ok(out.includes('marcei') === false);        // sanity
+  assert.ok(out.includes('comecei') && out.includes('cuidado com o edge case')); // texto dos comentários
+});
+
+test('show procura no arquivo quando nao esta no board ativo', async () => {
+  const cli = fakeCli([], [
+    { label: '2026-W28', start: '2026-07-06', end: '2026-07-12', tasks: [
+      { id: 'z', title: 'arquivada', column: 'concluido', group: 'interconexao', session: 'cutuque',
+        comments: [{ author: 'brad', text: 'ficou bom' }] },
+    ] },
+  ]);
+  await commands.show(cli, 'z');
+  const out = cli._out.join('\n');
+  assert.ok(out.includes('arquivada') && out.includes('ficou bom'));
+});
+
+test('show lanca erro se id nao existe', async () => {
+  const cli = fakeCli([]);
+  await assert.rejects(() => commands.show(cli, 'naoexiste'));
+});
+
 test('move chama o client', async () => {
   const cli = fakeCli();
   await commands.move(cli, 'a', 'em_progresso');
