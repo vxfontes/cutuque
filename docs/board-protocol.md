@@ -23,19 +23,24 @@ você nunca precisa passar tags.
 
 ```bash
 cutuque task list                                  # board ATUAL do seu ambiente (grupo), inclui encalhados
-cutuque task show <id>                             # DETALHE do card: descrição, linha do tempo e TODOS os comentários
+cutuque task show <id>                             # DETALHE: descrição, linha do tempo, log de ATIVIDADE e TODOS os comentários
 cutuque task add "<título>" --agent <role> [--desc "<descrição>"]   # cria (entra em "A fazer")
-cutuque task move <id> <coluna>                    # move uma atividade
+cutuque task move <id> <coluna> [--agent <role>]   # move; passe --agent pra seu nome ir no log de atividade
 cutuque task comment <id> "<texto>" --agent <role> # adiciona uma observação no card
 cutuque task desc <id> "<descrição>"               # define/atualiza a descrição do card
 cutuque task week [<label>]                        # semanas arquivadas (sem label lista; com label ex 2026-W28 mostra os cards)
-cutuque task close-week                            # fecha a semana manualmente (normalmente é automático)
 ```
+
+> **`close-week` é da mantenedora, não sua.** O fechamento da semana acontece
+> **automático** (domingo 23:59) — você não precisa fazer nada. O disparo manual
+> exige token (dashboard/app da mantenedora); a CLI dos agentes recebe 401 de propósito,
+> pra ninguém arquivar a semana sem querer.
 
 **`show` antes de opinar/continuar:** o `list` só mostra a contagem de comentários; para ler
 o histórico (o que já foi dito, decisões, ressalvas) e opinar com base nele, use
-`cutuque task show <id>` — ele traz a descrição, a linha do tempo e **todos os comentários**.
-Funciona também para cards já arquivados (semanas passadas).
+`cutuque task show <id>` — ele traz a descrição, a linha do tempo, o **log de atividade**
+(quem criou/moveu/encalhou e quando) e **todos os comentários**. Funciona também para cards
+já arquivados (semanas passadas).
 
 - **`--agent <role>` é OBRIGATÓRIO em `add` e `comment`** — é quem está fazendo
   (o sub-agente/orquestrador: `luka`, `ludmilla`, `marcus`, …). Vira o autor do

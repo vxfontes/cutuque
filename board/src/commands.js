@@ -88,6 +88,11 @@ export const commands = {
     cli.out(`Ambiente: ${t.group}/${t.session}${t.encalhada ? ' · ENCALHADA' : ''}`);
     if (t.description) cli.out(`\nDescrição:\n${t.description}`);
     cli.out(`\nDatas: criado ${dt(t.created_at)} · início ${dt(t.started_at)} · revisão ${dt(t.reviewed_at)} · fim ${dt(t.ended_at)}`);
+    const acts = t.activity || [];
+    if (acts.length) {
+      cli.out(`\nAtividade:`);
+      for (const a of acts) cli.out(`  - ${a.actor} ${a.action}${a.at ? ` (${dt(a.at)})` : ''}`);
+    }
     const cs = t.comments || [];
     cli.out(`\nComentários (${cs.length}):`);
     if (!cs.length) cli.out('  (nenhum)');
@@ -123,7 +128,8 @@ export const commands = {
   },
   async move(cli, id, column) {
     if (!COLS.includes(column)) throw new Error(`coluna inválida: ${column} (use: ${COLS.join(', ')})`);
-    await cli.client.moveTask(id, column);
+    const actor = cli.identity.role || cli.identity.type || 'agente';
+    await cli.client.moveTask(id, column, actor);
     cli.out(`✓ ${id} → ${LABEL[column]}`);
   },
 };

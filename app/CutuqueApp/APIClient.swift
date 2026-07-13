@@ -122,14 +122,31 @@ struct APIClient {
 
     private struct BoardEnvelope: Decodable { let tasks: [BoardTask] }
 
-    /// Move um card de coluna. `PATCH /board/tasks/{id}` (aberto).
+    /// Semanas arquivadas (concluídos fechados por semana). `GET /board/archive`.
+    func boardArchive() async throws -> [ArchivedWeek] {
+        var request = URLRequest(url: baseURL.appendingPathComponent("board").appendingPathComponent("archive"))
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder.cutuque.decode(ArchiveEnvelope.self, from: data).weeks
+    }
+
+    private struct ArchiveEnvelope: Decodable { let weeks: [ArchivedWeek] }
+
+    /// Move um card de coluna. `PATCH /board/tasks/{id}` (aberto). `actor` alimenta o
+    /// log de atividade (no app, a ação é da mantenedora → "você").
     func moveBoardTask(id: String, column: String) async throws {
-        try await patchBoard(id: id, body: ["column": column])
+        try await patchBoard(id: id, body: ["column": column, "actor": "você"])
     }
 
     /// Marca/desmarca um card como encalhado. Marcar volta o card pra "A fazer".
     func setBoardEncalhada(id: String, _ value: Bool) async throws {
-        try await patchBoard(id: id, body: value ? ["column": "a_fazer", "encalhada": true] : ["encalhada": false])
+        let body: [String: Any] = value
+            ? ["column": "a_fazer", "encalhada": true, "actor": "você"]
+            : ["encalhada": false, "actor": "você"]
+        try await patchBoard(id: id, body: body)
     }
 
     private func patchBoard(id: String, body: [String: Any]) async throws {
@@ -155,6 +172,15 @@ struct APIClient {
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             throw CutuqueError.unexpected(status: (response as? HTTPURLResponse)?.statusCode ?? -1)
         }
+    }
+
+    /// Fecha a semana manualmente (arquiva concluídos + marca encalhados).
+    /// `POST /board/close` — EXIGE token (só a mantenedora, via app/dashboard).
+    func closeWeek() async throws {
+        var request = URLRequest(url: baseURL.appendingPathComponent("board").appendingPathComponent("close"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        try await send(request)
     }
 
     /// Apaga um card do quadro. `DELETE /board/tasks/{id}` — EXIGE token (só a

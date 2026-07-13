@@ -193,6 +193,9 @@
   .m-section h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); margin: 0 0 8px; }
   .m-timeline { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .m-timeline .k { color: var(--faint); }
+  .m-activity { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--muted); }
+  .m-act .who { font-weight: 600; color: var(--text); }
+  .m-act .when { color: var(--faint); font-size: 11px; margin-left: 6px; }
   .m-comments { display: flex; flex-direction: column; gap: 8px; }
   .m-comment { background: var(--panel2); border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; }
   .m-comment .who { font-weight: 600; font-size: 12px; }
@@ -272,6 +275,8 @@
   /* Página Arquivo (acessada por botão): hierarquia mês > semana */
   .arq-head { display: flex; align-items: center; gap: 12px; padding: 18px 24px 0; }
   .arq-head h2 { margin: 0; font-size: 17px; }
+  .close-week-btn { margin-left: auto; color: var(--needs_you); border-color: color-mix(in srgb, var(--needs_you) 40%, var(--border)); }
+  .close-week-btn:hover { color: var(--needs_you); border-color: var(--needs_you); }
   .arq-empty { color: var(--muted); padding: 60px 24px; text-align: center; }
   .arq-wrap { padding: 18px 24px 60px; max-width: 940px; margin: 0 auto; }
   .arq-month { margin-bottom: 26px; }
@@ -399,6 +404,7 @@
     <div class="arq-head">
       <button type="button" class="board-btn" id="arquivoBack"></button>
       <h2>Arquivo semanal</h2>
+      <button type="button" class="board-btn close-week-btn" id="closeWeekBtn"></button>
     </div>
     <div class="arq-wrap" id="arqWrap"><div class="arq-empty">Carregando arquivo…</div></div>
   </section>
@@ -412,11 +418,11 @@
 
   <div id="confirmModal" class="modal-overlay" hidden>
     <div class="confirm" role="dialog" aria-modal="true">
-      <h3>Apagar card?</h3>
+      <h3 id="confirmTitle">Confirmar?</h3>
       <p id="confirmText">Esta ação não pode ser desfeita.</p>
       <div class="confirm-actions">
         <button type="button" class="cf-cancel" id="confirmCancel">Cancelar</button>
-        <button type="button" class="cf-delete" id="confirmDelete">Apagar</button>
+        <button type="button" class="cf-delete" id="confirmOk">Confirmar</button>
       </div>
     </div>
   </div>
@@ -448,6 +454,7 @@
     chev: svg('<path d="M9 6l6 6-6 6"/>'),
     trash: svg('<path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/>'),
     inbox: svg('<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>'),
+    calCheck: svg('<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M9 16l2 2 4-4"/>'),
   };
   const colEmpty = (label) => `<div class="col-empty">${ICONS.inbox}<span>${label}</span></div>`;
 
@@ -745,9 +752,9 @@
       if (!res.ok) { console.error('patchTask falhou:', res.status); renderBoard(); }
     } catch (e) { console.error('patchTask erro de rede:', e.message); renderBoard(); }
   }
-  const moveTask = (id, col) => patchTask(id, { column: col });
+  const moveTask = (id, col) => patchTask(id, { column: col, actor: 'você' });
   // Marcar como encalhada = volta pra "A fazer" e sinaliza como esquecida.
-  const markEncalhada = (id) => patchTask(id, { column: 'a_fazer', encalhada: true });
+  const markEncalhada = (id) => patchTask(id, { column: 'a_fazer', encalhada: true, actor: 'você' });
 
   [[$fGroup, 'group'], [$fType, 'type'], [$fSession, 'session']].forEach(([sel, key]) => {
     sel.addEventListener('change', () => { boardFilters[key] = sel.value; renderBoard(); });
@@ -816,6 +823,11 @@
           <span class="k">Fim</span><span>${fmtDT(t.ended_at)}</span>
         </div>
       </div>
+      ${(t.activity && t.activity.length) ? `<div class="m-section"><h3>Atividade</h3>
+        <div class="m-activity">
+          ${t.activity.slice().reverse().map((a) => `<div class="m-act"><span class="who">${esc(a.actor)}</span> ${esc(a.action)}<span class="when">${a.at ? ago(a.at) : ''}</span></div>`).join('')}
+        </div>
+      </div>` : ''}
       <div class="m-section"><h3>Comentários (${comments.length})</h3>
         <div class="m-comments">
           ${comments.length ? comments.map((c) => `<div class="m-comment"><span class="who">${esc(c.author)}</span><span class="when">${c.created_at ? ago(c.created_at) : ''}</span><div class="txt">${esc(c.text)}</div></div>`).join('') : '<div class="m-comments-empty">Nenhum comentário ainda.</div>'}
@@ -866,32 +878,61 @@
   document.getElementById('cardModalClose').addEventListener('click', closeCard);
   $cardModal.addEventListener('click', (e) => { if (e.target === $cardModal) closeCard(); });
 
-  // ---- Apagar card (só a mantenedora: DELETE exige token, injetado nesta página) ----
+  // ---- Modal de confirmação genérico (apagar card, fechar semana…) ----
   const $confirmModal = document.getElementById('confirmModal');
-  let pendingDeleteId = null;
-  function askDelete(id, title) {
-    pendingDeleteId = id;
-    document.getElementById('confirmText').textContent = `"${title}" será apagado. Esta ação não pode ser desfeita.`;
+  let confirmCb = null;
+  function askConfirm({ title, message, confirmLabel, onConfirm }) {
+    document.getElementById('confirmTitle').textContent = title;
+    document.getElementById('confirmText').textContent = message;
+    document.getElementById('confirmOk').textContent = confirmLabel || 'Confirmar';
+    confirmCb = onConfirm;
     $confirmModal.hidden = false;
   }
-  function closeConfirm() { pendingDeleteId = null; $confirmModal.hidden = true; }
+  function closeConfirm() { confirmCb = null; $confirmModal.hidden = true; }
+  document.getElementById('confirmCancel').addEventListener('click', closeConfirm);
+  document.getElementById('confirmOk').addEventListener('click', () => {
+    const cb = confirmCb; closeConfirm(); if (cb) cb();
+  });
+  $confirmModal.addEventListener('click', (e) => { if (e.target === $confirmModal) closeConfirm(); });
+
+  // Apagar card (só a mantenedora: DELETE exige token, injetado nesta página).
+  function askDelete(id, title) {
+    askConfirm({
+      title: 'Apagar card?',
+      message: `"${title}" será apagado. Esta ação não pode ser desfeita.`,
+      confirmLabel: 'Apagar',
+      onConfirm: () => deleteTask(id),
+    });
+  }
   async function deleteTask(id) {
     try {
       const res = await fetch('/board/tasks/' + encodeURIComponent(id), {
         method: 'DELETE', headers: { Authorization: 'Bearer ' + TOKEN },
       });
       if (!res.ok) { console.error('delete falhou:', res.status); return; }
-      // sucesso: o board_removed chega via WS e re-renderiza; fecha os modais.
       tasks.delete(id); renderBoard();
       if (openCardId === id) closeCard();
     } catch (e) { console.error('delete erro:', e.message); }
   }
-  document.getElementById('confirmCancel').addEventListener('click', closeConfirm);
-  document.getElementById('confirmDelete').addEventListener('click', () => {
-    const id = pendingDeleteId; closeConfirm();
-    if (id) deleteTask(id);
-  });
-  $confirmModal.addEventListener('click', (e) => { if (e.target === $confirmModal) closeConfirm(); });
+
+  // Fechar a semana manualmente (arquiva concluídos + marca encalhados). Token exigido.
+  async function closeWeek() {
+    try {
+      const res = await fetch('/board/close', { method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN } });
+      if (!res.ok) { alert('Falha ao fechar a semana (' + res.status + ').'); return; }
+      const r = await res.json();
+      renderArquivo();
+      alert(`Semana fechada: ${r.archived} arquivado(s), ${r.stalled} encalhado(s).`);
+    } catch (e) { console.error('close-week erro:', e.message); }
+  }
+  const $closeWeekBtn = document.getElementById('closeWeekBtn');
+  $closeWeekBtn.innerHTML = `${ICONS.calCheck} Fechar semana`;
+  $closeWeekBtn.addEventListener('click', () => askConfirm({
+    title: 'Fechar a semana agora?',
+    message: 'Os cards concluídos serão arquivados e saem do board; to-dos antigos não iniciados viram encalhados. Normalmente isso acontece sozinho no domingo 23:59.',
+    confirmLabel: 'Fechar semana',
+    onConfirm: closeWeek,
+  }));
 
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;

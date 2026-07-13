@@ -18,14 +18,14 @@ func TestAddListUpdateRemove(t *testing.T) {
 		t.Fatalf("List: esperava 1, veio %d", len(got))
 	}
 	col := "em_progresso"
-	u, ok := s.Update(a.ID, &col, nil, nil, nil)
+	u, ok := s.Update(a.ID, &col, nil, nil, nil, "")
 	if !ok || u.Column != "em_progresso" {
 		t.Fatalf("Update coluna falhou: ok=%v %+v", ok, u)
 	}
 	if !u.UpdatedAt.After(a.UpdatedAt) && !u.UpdatedAt.Equal(a.UpdatedAt) {
 		t.Fatalf("UpdatedAt não avançou")
 	}
-	if _, ok := s.Update("inexistente", &col, nil, nil, nil); ok {
+	if _, ok := s.Update("inexistente", &col, nil, nil, nil, ""); ok {
 		t.Fatalf("Update de id inexistente deveria falhar")
 	}
 	if !s.Remove(a.ID) {
@@ -69,21 +69,21 @@ func TestTimelineCommentsDescRole(t *testing.T) {
 		t.Fatalf("Add não gravou role/description: %+v", a)
 	}
 	prog, rev, done := "em_progresso", "em_revisao", "concluido"
-	u, _ := s.Update(a.ID, &prog, nil, nil, nil)
+	u, _ := s.Update(a.ID, &prog, nil, nil, nil, "")
 	if u.StartedAt == nil {
 		t.Fatalf("StartedAt deveria ser setado em em_progresso")
 	}
-	u, _ = s.Update(a.ID, &rev, nil, nil, nil)
+	u, _ = s.Update(a.ID, &rev, nil, nil, nil, "")
 	if u.ReviewedAt == nil {
 		t.Fatalf("ReviewedAt deveria ser setado em em_revisao")
 	}
-	u, _ = s.Update(a.ID, &done, nil, nil, nil)
+	u, _ = s.Update(a.ID, &done, nil, nil, nil, "")
 	if u.EndedAt == nil {
 		t.Fatalf("EndedAt deveria ser setado em concluido")
 	}
 	// description/role via Update
 	nd, nr := "nova desc", "ludmilla"
-	u, _ = s.Update(a.ID, nil, nil, &nd, &nr)
+	u, _ = s.Update(a.ID, nil, nil, &nd, &nr, "")
 	if u.Description != "nova desc" || u.Role != "ludmilla" {
 		t.Fatalf("Update desc/role falhou: %+v", u)
 	}
@@ -100,18 +100,44 @@ func TestTimelineCommentsDescRole(t *testing.T) {
 func TestSetEncalhada(t *testing.T) {
 	s := New()
 	a := s.Add(NewTask{Title: "marcar manual", Group: "g", Session: "s"})
-	u, ok := s.SetEncalhada(a.ID, true)
+	u, ok := s.SetEncalhada(a.ID, true, "")
 	if !ok || !u.Encalhada {
 		t.Fatalf("SetEncalhada(true) falhou: ok=%v %+v", ok, u)
 	}
 	// mover limpa a marca
 	col := "em_progresso"
-	u, _ = s.Update(a.ID, &col, nil, nil, nil)
+	u, _ = s.Update(a.ID, &col, nil, nil, nil, "")
 	if u.Encalhada {
 		t.Fatalf("mover deveria limpar encalhada")
 	}
-	if _, ok := s.SetEncalhada("inexistente", true); ok {
+	if _, ok := s.SetEncalhada("inexistente", true, ""); ok {
 		t.Fatalf("SetEncalhada em id inexistente deveria falhar")
+	}
+}
+
+func TestActivityLog(t *testing.T) {
+	s := New()
+	a := s.Add(NewTask{Title: "x", Group: "g", Session: "s", Role: "marcus"})
+	if len(a.Activity) != 1 || a.Activity[0].Actor != "marcus" || a.Activity[0].Action != "criou o card" {
+		t.Fatalf("Add deveria logar 'criou o card' por marcus: %+v", a.Activity)
+	}
+	col := "em_progresso"
+	u, _ := s.Update(a.ID, &col, nil, nil, nil, "lauren")
+	last := u.Activity[len(u.Activity)-1]
+	if last.Actor != "lauren" || last.Action != "moveu para Em progresso" {
+		t.Fatalf("move deveria logar 'lauren moveu para Em progresso': %+v", u.Activity)
+	}
+	// mover pra mesma coluna não gera nova entrada
+	n := len(u.Activity)
+	u2, _ := s.Update(a.ID, &col, nil, nil, nil, "lauren")
+	if len(u2.Activity) != n {
+		t.Fatalf("mover pra mesma coluna não deveria logar: %d -> %d", n, len(u2.Activity))
+	}
+	// actor vazio vira "?"
+	done := "concluido"
+	u3, _ := s.Update(a.ID, &done, nil, nil, nil, "")
+	if u3.Activity[len(u3.Activity)-1].Actor != "?" {
+		t.Fatalf("actor vazio deveria virar '?': %+v", u3.Activity)
 	}
 }
 
@@ -119,12 +145,12 @@ func TestCloseWeekArchivesAndStalls(t *testing.T) {
 	s := New()
 	done := s.Add(NewTask{Title: "feito", Group: "g", Session: "x"})
 	col := "concluido"
-	s.Update(done.ID, &col, nil, nil, nil)
+	s.Update(done.ID, &col, nil, nil, nil, "")
 	oldTodo := s.Add(NewTask{Title: "antigo", Group: "g", Session: "x"})
 	recentTodo := s.Add(NewTask{Title: "novo", Group: "g", Session: "x"})
 	prog := s.Add(NewTask{Title: "rodando", Group: "g", Session: "x"})
 	p := "em_progresso"
-	s.Update(prog.ID, &p, nil, nil, nil)
+	s.Update(prog.ID, &p, nil, nil, nil, "")
 
 	// backdate o oldTodo para antes desta semana (white-box)
 	s.mu.Lock()
@@ -154,7 +180,7 @@ func TestCloseWeekArchivesAndStalls(t *testing.T) {
 		t.Fatalf("arquivo inesperado: %+v", weeks)
 	}
 	// mover a encalhada para em_progresso limpa a marca
-	s.Update(oldTodo.ID, &p, nil, nil, nil)
+	s.Update(oldTodo.ID, &p, nil, nil, nil, "")
 	if g, _ := s.Get(oldTodo.ID); g.Encalhada {
 		t.Fatalf("mover deveria limpar encalhada")
 	}

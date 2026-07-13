@@ -63,6 +63,7 @@ func BoardPatchHandler(st *board.Store) http.HandlerFunc {
 			Description *string `json:"description"`
 			Role        *string `json:"role"`
 			Encalhada   *bool   `json:"encalhada"`
+			Actor       string  `json:"actor"` // quem fez a ação (log de atividade)
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in) != nil {
 			writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "bad_request"})
@@ -75,12 +76,12 @@ func BoardPatchHandler(st *board.Store) http.HandlerFunc {
 		var t board.Task
 		ok := false
 		if in.Column != nil || in.Title != nil || in.Description != nil || in.Role != nil {
-			t, ok = st.Update(id, in.Column, in.Title, in.Description, in.Role)
+			t, ok = st.Update(id, in.Column, in.Title, in.Description, in.Role, in.Actor)
 		}
 		// Encalhada é aplicada por último (o Update limpa a marca ao mover; um
 		// pedido explícito de encalhada=true tem que sobrepor isso).
 		if in.Encalhada != nil {
-			t, ok = st.SetEncalhada(id, *in.Encalhada)
+			t, ok = st.SetEncalhada(id, *in.Encalhada, in.Actor)
 		}
 		if !ok {
 			writeJSONResp(w, http.StatusNotFound, map[string]string{"error": "not_found"})

@@ -43,6 +43,8 @@ type Task struct {
 	Description string `json:"description,omitempty"`
 	// Comments são as observações que os agentes (e a usuária) vão adicionando.
 	Comments []Comment `json:"comments,omitempty"`
+	// Activity é o histórico de ações no card (criou, moveu, encalhou…).
+	Activity []Activity `json:"activity,omitempty"`
 	// StartedAt/ReviewedAt/EndedAt são derivados internamente na 1ª entrada em
 	// em_progresso / em_revisao / concluido. Nulos até lá.
 	StartedAt  *time.Time `json:"started_at,omitempty"`
@@ -57,6 +59,28 @@ type Comment struct {
 	Author    string    `json:"author"`
 	Text      string    `json:"text"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// Activity é uma entrada do histórico do card: quem fez o quê e quando (ex.:
+// "marcus moveu para Em progresso"). Alimenta o log de atividade no detalhe.
+type Activity struct {
+	Actor  string    `json:"actor"`
+	Action string    `json:"action"`
+	At     time.Time `json:"at"`
+}
+
+// colLabelPT mapeia a coluna para o rótulo pt-BR usado no log de atividade.
+var colLabelPT = map[string]string{
+	"a_fazer": "A fazer", "em_progresso": "Em progresso", "feito": "Feito",
+	"em_revisao": "Em revisão", "concluido": "Concluído",
+}
+
+// actorOr devolve o ator ou "?" quando vazio (cliente antigo sem actor).
+func actorOr(a string) string {
+	if a == "" {
+		return "?"
+	}
+	return a
 }
 
 // NewTask são os campos para criar um card (evita explosão de parâmetros posicionais).
@@ -294,9 +318,14 @@ func nextSundayClose(now time.Time) time.Time {
 
 func (s *Store) Add(n NewTask) Task {
 	now := time.Now()
+	actor := n.Role
+	if actor == "" {
+		actor = n.Type
+	}
 	t := Task{
 		ID: newID(), Title: n.Title, Column: "a_fazer",
 		Group: n.Group, Session: n.Session, Type: n.Type, Role: n.Role, Description: n.Description,
+		Activity:  []Activity{{Actor: actorOr(actor), Action: "criou o card", At: now}},
 		CreatedAt: now, UpdatedAt: now,
 	}
 	s.mu.Lock()
@@ -307,9 +336,10 @@ func (s *Store) Add(n NewTask) Task {
 	return t
 }
 
-// Update altera coluna e/ou título (ponteiros nil = não mexe). Retorna a task
-// atualizada e ok=false se o id não existir ou a coluna for inválida.
-func (s *Store) Update(id string, column, title, description, role *string) (Task, bool) {
+// Update altera coluna e/ou título (ponteiros nil = não mexe). `actor` é quem fez a
+// ação (para o log de atividade em mudanças de coluna). Retorna a task atualizada e
+// ok=false se o id não existir ou a coluna for inválida.
+func (s *Store) Update(id string, column, title, description, role *string, actor string) (Task, bool) {
 	if column != nil && !ValidColumn(*column) {
 		return Task{}, false
 	}
@@ -321,6 +351,13 @@ func (s *Store) Update(id string, column, title, description, role *string) (Tas
 	}
 	now := time.Now()
 	if column != nil {
+		if *column != t.Column {
+			label := colLabelPT[*column]
+			if label == "" {
+				label = *column
+			}
+			t.Activity = append(t.Activity, Activity{Actor: actorOr(actor), Action: "moveu para " + label, At: now})
+		}
 		t.Column = *column
 		// Qualquer movimentação explícita limpa a marca de encalhada — alguém tocou
 		// no card (seja iniciando o trabalho ou "revivendo" de volta pra A fazer).
@@ -356,15 +393,23 @@ func (s *Store) Update(id string, column, title, description, role *string) (Tas
 // SetEncalhada marca/desmarca um card como encalhado manualmente (arrastar para a
 // coluna Encalhadas no dashboard). Retorna a task atualizada e ok=false se o id
 // não existir.
-func (s *Store) SetEncalhada(id string, v bool) (Task, bool) {
+func (s *Store) SetEncalhada(id string, v bool, actor string) (Task, bool) {
 	s.mu.Lock()
 	t, ok := s.byID[id]
 	if !ok {
 		s.mu.Unlock()
 		return Task{}, false
 	}
+	now := time.Now()
+	if v != t.Encalhada {
+		action := "reativou o card"
+		if v {
+			action = "marcou como encalhada"
+		}
+		t.Activity = append(t.Activity, Activity{Actor: actorOr(actor), Action: action, At: now})
+	}
 	t.Encalhada = v
-	t.UpdatedAt = time.Now()
+	t.UpdatedAt = now
 	s.byID[id] = t
 	s.mu.Unlock()
 	s.persist()

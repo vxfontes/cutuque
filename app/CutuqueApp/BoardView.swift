@@ -41,6 +41,10 @@ final class BoardModel: ObservableObject {
         do { try await api.deleteBoardTask(id: task.id); await load() }
         catch { errorText = "Falha ao apagar o card." }
     }
+    func closeWeek() async {
+        do { try await api.closeWeek(); await load() }
+        catch { errorText = "Falha ao fechar a semana." }
+    }
 
     // Valores distintos para os filtros.
     var groups: [String] { distinct(\.group) }
@@ -77,6 +81,8 @@ private extension Array where Element: Hashable {
 struct BoardView: View {
     @StateObject private var model = BoardModel()
     @State private var selected: BoardTask?
+    @State private var showCloseWeekConfirm = false
+    @State private var showArchive = false
 
     var body: some View {
         NavigationStack {
@@ -98,12 +104,45 @@ struct BoardView: View {
                     Button { Task { await model.load() } } label: { Image(systemName: "arrow.clockwise") }
                         .accessibilityLabel("Recarregar")
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button {
+                            showArchive = true
+                        } label: {
+                            Label("Arquivo semanal", systemImage: "archivebox")
+                        }
+                        Button {
+                            showCloseWeekConfirm = true
+                        } label: {
+                            Label("Fechar semana", systemImage: "calendar.badge.checkmark")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .accessibilityLabel("Mais ações")
+                }
+            }
+            .alert("Fechar a semana agora?", isPresented: $showCloseWeekConfirm) {
+                Button("Cancelar", role: .cancel) {}
+                Button("Fechar semana", role: .destructive) { Task { await model.closeWeek() } }
+            } message: {
+                Text("Os concluídos serão arquivados e saem do board; to-dos antigos não iniciados viram encalhados. Normalmente acontece sozinho no domingo 23:59.")
             }
             .sheet(item: $selected) { task in
                 BoardTaskDetailView(task: task, model: model)
             }
+            .sheet(isPresented: $showArchive) {
+                ArchiveView()
+            }
         }
-        .task { await model.load() }
+        // Board "ao vivo": recarrega ao aparecer e a cada 12s, refletindo o que os
+        // agentes fazem sem precisar de refresh manual.
+        .task {
+            while !Task.isCancelled {
+                await model.load()
+                try? await Task.sleep(for: .seconds(12))
+            }
+        }
     }
 
     // Colunas lado a lado, cada uma ~85% da largura, com paginação (swipe estilo Trello).
@@ -328,6 +367,7 @@ struct TagChip: View {
 struct BoardTaskDetailView: View {
     let task: BoardTask
     @ObservedObject var model: BoardModel
+    var readOnly: Bool = false   // cards arquivados: só leitura (sem mover/apagar/comentar)
     @Environment(\.dismiss) private var dismiss
     @State private var showDeleteConfirm = false
     @State private var newComment = ""
@@ -353,22 +393,24 @@ struct BoardTaskDetailView: View {
                     }
                 }
 
-                Section("Mover para") {
-                    ForEach(BoardColumn.allCases) { column in
-                        let isCurrent = live.column == column.rawValue && !live.isEncalhada
-                        Button { Task { await model.move(live, to: column); dismiss() } } label: {
-                            HStack {
-                                Text(column.label)
-                                Spacer()
-                                if isCurrent { Image(systemName: "checkmark").foregroundStyle(.tint) }
+                if !readOnly {
+                    Section("Mover para") {
+                        ForEach(BoardColumn.allCases) { column in
+                            let isCurrent = live.column == column.rawValue && !live.isEncalhada
+                            Button { Task { await model.move(live, to: column); dismiss() } } label: {
+                                HStack {
+                                    Text(column.label)
+                                    Spacer()
+                                    if isCurrent { Image(systemName: "checkmark").foregroundStyle(.tint) }
+                                }
                             }
+                            .disabled(isCurrent)
                         }
-                        .disabled(isCurrent)
+                        Button { Task { await model.markEncalhada(live); dismiss() } } label: {
+                            Label("Marcar como encalhada", systemImage: "exclamationmark.triangle")
+                        }
+                        .tint(.red).disabled(live.isEncalhada)
                     }
-                    Button { Task { await model.markEncalhada(live); dismiss() } } label: {
-                        Label("Marcar como encalhada", systemImage: "exclamationmark.triangle")
-                    }
-                    .tint(.red).disabled(live.isEncalhada)
                 }
 
                 Section("Linha do tempo") {
@@ -376,6 +418,22 @@ struct BoardTaskDetailView: View {
                     timelineRow("Início", live.startedAt)
                     timelineRow("Revisão", live.reviewedAt)
                     timelineRow("Fim", live.endedAt)
+                }
+
+                if let acts = live.activity, !acts.isEmpty {
+                    Section("Atividade") {
+                        ForEach(acts.reversed()) { a in
+                            HStack(alignment: .firstTextBaseline) {
+                                Text(a.actor).fontWeight(.semibold) + Text(" \(a.action)").foregroundColor(.secondary)
+                                Spacer()
+                                if let at = a.at {
+                                    Text(BoardCardRow.rel.localizedString(for: at, relativeTo: Date()))
+                                        .font(.caption).foregroundStyle(.tertiary)
+                                }
+                            }
+                            .font(.callout)
+                        }
+                    }
                 }
 
                 Section("Comentários (\(live.commentCount))") {
@@ -389,24 +447,28 @@ struct BoardTaskDetailView: View {
                     } else {
                         Text("Nenhum comentário ainda.").font(.callout).foregroundStyle(.secondary)
                     }
-                    HStack {
-                        TextField("Adicionar comentário…", text: $newComment, axis: .vertical)
-                            .focused($commentFocused)
-                        Button {
-                            let text = newComment.trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard !text.isEmpty else { return }
-                            newComment = ""; commentFocused = false
-                            Task { await model.comment(live, text: text) }
-                        } label: {
-                            Image(systemName: "paperplane.fill")
+                    if !readOnly {
+                        HStack {
+                            TextField("Adicionar comentário…", text: $newComment, axis: .vertical)
+                                .focused($commentFocused)
+                            Button {
+                                let text = newComment.trimmingCharacters(in: .whitespacesAndNewlines)
+                                guard !text.isEmpty else { return }
+                                newComment = ""; commentFocused = false
+                                Task { await model.comment(live, text: text) }
+                            } label: {
+                                Image(systemName: "paperplane.fill")
+                            }
+                            .disabled(newComment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
-                        .disabled(newComment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
 
-                Section {
-                    Button(role: .destructive) { showDeleteConfirm = true } label: {
-                        Label("Apagar card", systemImage: "trash")
+                if !readOnly {
+                    Section {
+                        Button(role: .destructive) { showDeleteConfirm = true } label: {
+                            Label("Apagar card", systemImage: "trash")
+                        }
                     }
                 }
             }
@@ -434,4 +496,102 @@ struct BoardTaskDetailView: View {
         f.timeStyle = .short
         return f
     }()
+}
+
+// MARK: - Arquivo semanal (mês > semana, pt-BR)
+
+struct ArchiveView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var weeks: [ArchivedWeek] = []
+    @State private var loading = true
+    @State private var selected: BoardTask?
+    @StateObject private var roModel = BoardModel()   // vazio, só p/ o detalhe read-only
+    private let api = APIClient()
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if loading {
+                    ProgressView()
+                } else if weeks.isEmpty {
+                    ContentUnavailableView("Nada arquivado ainda", systemImage: "archivebox",
+                        description: Text("Os concluídos vêm pra cá no fechamento da semana."))
+                } else {
+                    List {
+                        ForEach(months, id: \.key) { m in
+                            Section(m.label) {
+                                ForEach(m.weeks) { wk in
+                                    DisclosureGroup {
+                                        ForEach(wk.tasks) { t in
+                                            Button { selected = t } label: { BoardCardRow(task: t) }
+                                                .buttonStyle(.plain)
+                                        }
+                                    } label: {
+                                        HStack {
+                                            Text(Self.range(wk)).font(.subheadline).fontWeight(.medium)
+                                            Spacer()
+                                            Text("\(wk.tasks.count)").font(.caption).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Arquivo semanal")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Fechar") { dismiss() } } }
+            .sheet(item: $selected) { t in
+                BoardTaskDetailView(task: t, model: roModel, readOnly: true)
+            }
+        }
+        .task {
+            loading = true
+            weeks = (try? await api.boardArchive()) ?? []
+            loading = false
+        }
+    }
+
+    private struct Month { let key: String; let label: String; let weeks: [ArchivedWeek] }
+    private var months: [Month] {
+        var order: [String] = []
+        var map: [String: [ArchivedWeek]] = [:]
+        for wk in weeks {
+            let k = Self.monthKey(wk.start)
+            if map[k] == nil { order.append(k) }
+            map[k, default: []].append(wk)
+        }
+        return order.map { Month(key: $0, label: Self.monthLabel(map[$0]!.first!.start), weeks: map[$0]!) }
+    }
+
+    // ---- datas pt-BR (mês = quinta-feira da semana ISO) ----
+    private static func parse(_ s: String) -> Date {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"
+        return f.date(from: s) ?? Date(timeIntervalSince1970: 0)
+    }
+    private static func thursday(_ start: String) -> Date {
+        Calendar.current.date(byAdding: .day, value: 3, to: parse(start)) ?? parse(start)
+    }
+    private static func monthKey(_ start: String) -> String {
+        let c = Calendar.current.dateComponents([.year, .month], from: thursday(start))
+        return "\(c.year ?? 0)-\(c.month ?? 0)"
+    }
+    private static func monthLabel(_ start: String) -> String {
+        let f = DateFormatter(); f.locale = Locale(identifier: "pt_BR"); f.dateFormat = "LLLL 'de' yyyy"
+        let s = f.string(from: thursday(start))
+        return s.prefix(1).uppercased() + s.dropFirst()
+    }
+    private static func range(_ wk: ArchivedWeek) -> String {
+        let s = parse(wk.start), e = parse(wk.end)
+        let day = DateFormatter(); day.locale = Locale(identifier: "pt_BR"); day.dateFormat = "d"
+        let mon = DateFormatter(); mon.locale = Locale(identifier: "pt_BR"); mon.dateFormat = "MMM"
+        let sMon = mon.string(from: s).replacingOccurrences(of: ".", with: "")
+        let eMon = mon.string(from: e).replacingOccurrences(of: ".", with: "")
+        let cal = Calendar.current
+        if cal.component(.month, from: s) == cal.component(.month, from: e) {
+            return "\(day.string(from: s)) – \(day.string(from: e)) de \(eMon)"
+        }
+        return "\(day.string(from: s)) de \(sMon) – \(day.string(from: e)) de \(eMon)"
+    }
 }

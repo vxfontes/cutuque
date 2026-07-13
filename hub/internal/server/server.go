@@ -166,7 +166,10 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		mux.Handle("DELETE /board/tasks/{id}", requireAuth(cfg.Token, BoardDeleteHandler(rc.board)))
 		mux.Handle("POST /board/tasks/{id}/comments", BoardCommentHandler(rc.board))
 		mux.Handle("GET /board/archive", BoardArchiveHandler(rc.board))
-		mux.Handle("POST /board/close", BoardCloseHandler(rc.board))
+		// Fechar a semana é destrutivo (arquiva os concluídos): exige token, como o
+		// DELETE. Só a mantenedora (dashboard/app) fecha manualmente; o closer automático
+		// (domingo 23:59) roda server-side, sem passar por aqui.
+		mux.Handle("POST /board/close", requireAuth(cfg.Token, BoardCloseHandler(rc.board)))
 	}
 
 	return mux

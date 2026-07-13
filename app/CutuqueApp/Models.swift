@@ -339,6 +339,7 @@ struct BoardTask: Identifiable, Decodable, Equatable {
     var encalhada: Bool?
     var description: String?
     var comments: [BoardComment]?
+    var activity: [BoardActivity]?
     var startedAt: Date?
     var reviewedAt: Date?
     var endedAt: Date?
@@ -355,6 +356,23 @@ struct BoardComment: Decodable, Equatable, Identifiable {
     let text: String
     let createdAt: Date?
     var id: String { "\(author)-\(createdAt?.timeIntervalSince1970 ?? 0)-\(text.hashValue)" }
+}
+
+/// Uma entrada do log de atividade (quem fez o quê e quando).
+struct BoardActivity: Decodable, Equatable, Identifiable {
+    let actor: String
+    let action: String
+    let at: Date?
+    var id: String { "\(actor)-\(at?.timeIntervalSince1970 ?? 0)-\(action.hashValue)" }
+}
+
+/// Uma semana do arquivo (concluídos fechados na semana).
+struct ArchivedWeek: Identifiable, Decodable, Equatable {
+    let label: String            // ex.: "2026-W28"
+    let start: String            // "2026-07-06"
+    let end: String              // "2026-07-12"
+    let tasks: [BoardTask]
+    var id: String { label }
 }
 
 /// Colunas do quadro, na ordem do fluxo (igual ao hub).
