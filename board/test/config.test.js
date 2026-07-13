@@ -12,3 +12,7 @@ test('respeita env', () => {
   assert.equal(c.hubBaseUrl, 'http://h:9');
   assert.equal(c.token, 'tk');
 });
+
+test('CUTUQUE_HUB sem esquema (host:porta) ganha http://', () => {
+  assert.equal(resolveConfig({ CUTUQUE_HUB: '192.0.2.10:8787' }).hubBaseUrl, 'http://192.0.2.10:8787');
+});
