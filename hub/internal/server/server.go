@@ -78,6 +78,8 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 	// Command Center web (estático, mesma origem -> WS não é cross-origin).
 	// O token do hub é injetado na página, então não precisa passar ?token=.
 	mux.Handle("GET /dashboard", DashboardHandler(cfg.Token))
+	// Protocolo do board para os agentes (aberto) — lido via Tailscale.
+	mux.Handle("GET /board-protocol", BoardProtocolHandler())
 
 	// Protegidas por token.
 	mux.Handle("GET /sessions", requireAuth(cfg.Token, SessionsHandler(reg)))

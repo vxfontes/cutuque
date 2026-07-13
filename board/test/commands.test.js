@@ -8,7 +8,7 @@ function fakeCli(tasks = []) {
   const moved = [];
   return {
     _out: out, _created: created, _moved: moved,
-    identity: { group: 'interconexao', session: 'cutuque' },
+    identity: { group: 'interconexao', session: 'cutuque', type: 'claude' },
     out: (s) => out.push(s),
     client: {
       listTasks: async () => tasks,
@@ -24,6 +24,7 @@ test('add cria com as tags da identidade e imprime id', async () => {
   assert.equal(cli._created[0].title, 'rodar testes');
   assert.equal(cli._created[0].group, 'interconexao');
   assert.equal(cli._created[0].session, 'cutuque');
+  assert.equal(cli._created[0].type, 'claude');
   assert.ok(cli._out.join('\n').includes('new1'));
 });
 

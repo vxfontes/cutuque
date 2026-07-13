@@ -3,7 +3,12 @@ const LABEL = { a_fazer: 'A fazer', em_progresso: 'Em progresso', feito: 'Feito'
 
 export const commands = {
   async add(cli, title) {
-    const t = await cli.client.createTask({ title, group: cli.identity.group, session: cli.identity.session });
+    const t = await cli.client.createTask({
+      title,
+      group: cli.identity.group,
+      session: cli.identity.session,
+      type: cli.identity.type || '',
+    });
     cli.out(`✓ criado ${t.id} em "A fazer": ${title}`);
   },
   async list(cli) {

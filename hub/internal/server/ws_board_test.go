@@ -49,7 +49,7 @@ func readUntilType(t *testing.T, ctx context.Context, c *websocket.Conn, wantTyp
 func TestBoardWSSnapshotThenUpdate(t *testing.T) {
 	cfg, reg := testDeps()
 	store := board.New()
-	pre := store.Add("primeira tarefa", "g1", "s1")
+	pre := store.Add("primeira tarefa", "g1", "s1", "")
 
 	srv := httptest.NewServer(Router(cfg, reg, nil, WithBoard(store)))
 	defer srv.Close()
@@ -72,7 +72,7 @@ func TestBoardWSSnapshotThenUpdate(t *testing.T) {
 	}
 
 	// Task criada depois de conectado deve ser broadcastada como board_updated.
-	nova := store.Add("nova", "g", "s")
+	nova := store.Add("nova", "g", "s", "")
 
 	var upd boardUpdatedMessage
 	readUntilType(t, ctx, c, "board_updated", &upd, 5)
