@@ -98,9 +98,26 @@ type Sub struct {
 	removedCh chan string
 }
 
-// Store guarda as tarefas em memória de forma thread-safe, com persistência
+// Store é a fonte da verdade do quadro. Duas implementações: MemStore (memória +
+// JSON, para dev/testes) e PostgresStore (durável/consultável, para produção). Os
+// handlers e o WS dependem só desta interface.
+type Store interface {
+	List() []Task
+	Get(id string) (Task, bool)
+	Add(n NewTask) Task
+	Update(id string, column, title, description, role *string, actor string) (Task, bool)
+	SetEncalhada(id string, v bool, actor string) (Task, bool)
+	AddComment(id, author, text string) (Task, bool)
+	Remove(id string) bool
+	CloseWeek(now time.Time) (archived, stalled int)
+	ArchivedWeeks() []ArchivedWeek
+	Subscribe() *Sub
+	Unsubscribe(sub *Sub)
+}
+
+// MemStore guarda as tarefas em memória de forma thread-safe, com persistência
 // JSON opcional (path != "").
-type Store struct {
+type MemStore struct {
 	mu        sync.RWMutex
 	byID      map[string]Task
 	subs      map[*Sub]struct{}
@@ -111,11 +128,11 @@ type Store struct {
 	persistMu sync.Mutex
 }
 
-func New() *Store {
-	return &Store{byID: make(map[string]Task), subs: make(map[*Sub]struct{}), archive: make(map[string][]Task)}
+func New() *MemStore {
+	return &MemStore{byID: make(map[string]Task), subs: make(map[*Sub]struct{}), archive: make(map[string][]Task)}
 }
 
-func NewAt(path string) *Store {
+func NewAt(path string) *MemStore {
 	s := New()
 	s.path = path
 	s.load()
@@ -134,7 +151,7 @@ type diskState struct {
 	Archive map[string][]Task `json:"archive,omitempty"`
 }
 
-func (s *Store) load() {
+func (s *MemStore) load() {
 	if s.path == "" {
 		return
 	}
@@ -161,7 +178,7 @@ func (s *Store) load() {
 	s.mu.Unlock()
 }
 
-func (s *Store) persist() {
+func (s *MemStore) persist() {
 	if s.path == "" {
 		return
 	}
@@ -184,7 +201,7 @@ func (s *Store) persist() {
 	}
 }
 
-func (s *Store) List() []Task {
+func (s *MemStore) List() []Task {
 	s.mu.RLock()
 	out := make([]Task, 0, len(s.byID))
 	for _, t := range s.byID {
@@ -195,7 +212,7 @@ func (s *Store) List() []Task {
 	return out
 }
 
-func (s *Store) Get(id string) (Task, bool) {
+func (s *MemStore) Get(id string) (Task, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	t, ok := s.byID[id]
@@ -231,7 +248,7 @@ func isoWeekStartDate(year, week int) time.Time {
 
 // CloseWeek arquiva os cards concluídos na semana de `now` e marca como encalhada
 // os a_fazer que já existiam antes do início dessa semana. Retorna as contagens.
-func (s *Store) CloseWeek(now time.Time) (archived, stalled int) {
+func (s *MemStore) CloseWeek(now time.Time) (archived, stalled int) {
 	label := weekLabel(now)
 	weekStart := startOfISOWeek(now)
 	var removed []string
@@ -273,7 +290,7 @@ type ArchivedWeek struct {
 }
 
 // ArchivedWeeks devolve o arquivo agrupado por semana, mais recente primeiro.
-func (s *Store) ArchivedWeeks() []ArchivedWeek {
+func (s *MemStore) ArchivedWeeks() []ArchivedWeek {
 	s.mu.RLock()
 	labels := make([]string, 0, len(s.archive))
 	cp := make(map[string][]Task, len(s.archive))
@@ -297,7 +314,7 @@ func (s *Store) ArchivedWeeks() []ArchivedWeek {
 }
 
 // StartWeeklyCloser dispara CloseWeek automaticamente todo domingo 23:59 na loc.
-func StartWeeklyCloser(s *Store, loc *time.Location) {
+func StartWeeklyCloser(s Store, loc *time.Location) {
 	go func() {
 		for {
 			time.Sleep(time.Until(nextSundayClose(time.Now().In(loc))))
@@ -316,7 +333,7 @@ func nextSundayClose(now time.Time) time.Time {
 	return cand
 }
 
-func (s *Store) Add(n NewTask) Task {
+func (s *MemStore) Add(n NewTask) Task {
 	now := time.Now()
 	actor := n.Role
 	if actor == "" {
@@ -339,7 +356,7 @@ func (s *Store) Add(n NewTask) Task {
 // Update altera coluna e/ou título (ponteiros nil = não mexe). `actor` é quem fez a
 // ação (para o log de atividade em mudanças de coluna). Retorna a task atualizada e
 // ok=false se o id não existir ou a coluna for inválida.
-func (s *Store) Update(id string, column, title, description, role *string, actor string) (Task, bool) {
+func (s *MemStore) Update(id string, column, title, description, role *string, actor string) (Task, bool) {
 	if column != nil && !ValidColumn(*column) {
 		return Task{}, false
 	}
@@ -393,7 +410,7 @@ func (s *Store) Update(id string, column, title, description, role *string, acto
 // SetEncalhada marca/desmarca um card como encalhado manualmente (arrastar para a
 // coluna Encalhadas no dashboard). Retorna a task atualizada e ok=false se o id
 // não existir.
-func (s *Store) SetEncalhada(id string, v bool, actor string) (Task, bool) {
+func (s *MemStore) SetEncalhada(id string, v bool, actor string) (Task, bool) {
 	s.mu.Lock()
 	t, ok := s.byID[id]
 	if !ok {
@@ -419,7 +436,7 @@ func (s *Store) SetEncalhada(id string, v bool, actor string) (Task, bool) {
 
 // AddComment adiciona uma observação ao card. Retorna a task atualizada e
 // ok=false se o id não existir.
-func (s *Store) AddComment(id, author, text string) (Task, bool) {
+func (s *MemStore) AddComment(id, author, text string) (Task, bool) {
 	s.mu.Lock()
 	t, ok := s.byID[id]
 	if !ok {
@@ -436,7 +453,7 @@ func (s *Store) AddComment(id, author, text string) (Task, bool) {
 	return t, true
 }
 
-func (s *Store) Remove(id string) bool {
+func (s *MemStore) Remove(id string) bool {
 	s.mu.Lock()
 	_, ok := s.byID[id]
 	if ok {
@@ -450,7 +467,7 @@ func (s *Store) Remove(id string) bool {
 	return ok
 }
 
-func (s *Store) Subscribe() *Sub {
+func (s *MemStore) Subscribe() *Sub {
 	ch := make(chan Task, subBuffer)
 	rm := make(chan string, subBuffer)
 	sub := &Sub{C: ch, ch: ch, Removed: rm, removedCh: rm}
@@ -460,7 +477,7 @@ func (s *Store) Subscribe() *Sub {
 	return sub
 }
 
-func (s *Store) Unsubscribe(sub *Sub) {
+func (s *MemStore) Unsubscribe(sub *Sub) {
 	s.mu.Lock()
 	delete(s.subs, sub)
 	s.mu.Unlock()
@@ -470,7 +487,7 @@ func (s *Store) Unsubscribe(sub *Sub) {
 // envio não-bloqueante, e como roda fora de s.mu a ordem entre eventos de ids
 // diferentes/iguais não é garantida. Consumidores são idempotentes por id e
 // recuperam o estado completo no snapshot ao (re)conectar.
-func (s *Store) broadcast(t Task) {
+func (s *MemStore) broadcast(t Task) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for sub := range s.subs {
@@ -483,7 +500,7 @@ func (s *Store) broadcast(t Task) {
 
 // broadcastRemoved segue a mesma semântica best-effort de broadcast (ver
 // comentário acima).
-func (s *Store) broadcastRemoved(id string) {
+func (s *MemStore) broadcastRemoved(id string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for sub := range s.subs {

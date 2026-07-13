@@ -72,7 +72,7 @@ type boardRemovedMessage struct {
 // Se bd não for nil, também transmite o estado do quadro Kanban (Cutuque
 // Board): um snapshot inicial e uma mensagem por mudança no store. Se bd for
 // nil, o handler funciona exatamente como antes (aditivo/seguro).
-func WSHandler(reg *registry.Registry, bd *board.Store) http.HandlerFunc {
+func WSHandler(reg *registry.Registry, bd board.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, nil)
 		if err != nil {

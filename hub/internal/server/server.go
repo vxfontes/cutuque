@@ -19,7 +19,7 @@ type routerConfig struct {
 	renudge    RenudgeController
 	foreground ForegroundController
 	history    HistoryReader
-	board      *board.Store
+	board      board.Store
 }
 
 // RouterOption configura dependências opcionais do Router.
@@ -54,7 +54,7 @@ func WithHistory(h HistoryReader) RouterOption {
 // WithBoard habilita as rotas /board* (quadro Kanban), apoiadas no store dado.
 // Sem esta opção as rotas não são registradas (ex.: testes que não exercem
 // board).
-func WithBoard(st *board.Store) RouterOption {
+func WithBoard(st board.Store) RouterOption {
 	return func(rc *routerConfig) { rc.board = st }
 }
 

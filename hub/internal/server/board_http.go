@@ -21,7 +21,7 @@ func boardLoc() *time.Location {
 // outra assinatura (ws.go), o que causaria erro de redeclaração.
 
 // BoardListHandler responde a lista de tarefas.
-func BoardListHandler(st *board.Store) http.HandlerFunc {
+func BoardListHandler(st board.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tasks := st.List()
 		if tasks == nil {
@@ -32,7 +32,7 @@ func BoardListHandler(st *board.Store) http.HandlerFunc {
 }
 
 // BoardCreateHandler cria uma tarefa (coluna inicial a_fazer).
-func BoardCreateHandler(st *board.Store) http.HandlerFunc {
+func BoardCreateHandler(st board.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Title       string `json:"title"`
@@ -54,7 +54,7 @@ func BoardCreateHandler(st *board.Store) http.HandlerFunc {
 }
 
 // BoardPatchHandler move/edita uma tarefa (coluna, título, descrição, role).
-func BoardPatchHandler(st *board.Store) http.HandlerFunc {
+func BoardPatchHandler(st board.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		var in struct {
@@ -92,7 +92,7 @@ func BoardPatchHandler(st *board.Store) http.HandlerFunc {
 }
 
 // BoardCommentHandler adiciona uma observação a um card.
-func BoardCommentHandler(st *board.Store) http.HandlerFunc {
+func BoardCommentHandler(st board.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		var in struct {
@@ -117,7 +117,7 @@ func BoardCommentHandler(st *board.Store) http.HandlerFunc {
 }
 
 // BoardArchiveHandler responde o arquivo (concluídos por semana, mais recente 1º).
-func BoardArchiveHandler(st *board.Store) http.HandlerFunc {
+func BoardArchiveHandler(st board.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		weeks := st.ArchivedWeeks()
 		if weeks == nil {
@@ -128,7 +128,7 @@ func BoardArchiveHandler(st *board.Store) http.HandlerFunc {
 }
 
 // BoardCloseHandler fecha a semana manualmente (arquiva concluídos + marca encalhadas).
-func BoardCloseHandler(st *board.Store) http.HandlerFunc {
+func BoardCloseHandler(st board.Store) http.HandlerFunc {
 	loc := boardLoc()
 	return func(w http.ResponseWriter, r *http.Request) {
 		archived, stalled := st.CloseWeek(time.Now().In(loc))
@@ -137,7 +137,7 @@ func BoardCloseHandler(st *board.Store) http.HandlerFunc {
 }
 
 // BoardDeleteHandler remove uma tarefa.
-func BoardDeleteHandler(st *board.Store) http.HandlerFunc {
+func BoardDeleteHandler(st board.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !st.Remove(r.PathValue("id")) {
 			writeJSONResp(w, http.StatusNotFound, map[string]string{"error": "not_found"})

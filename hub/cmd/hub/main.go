@@ -51,14 +51,38 @@ func main() {
 	// env var própria para o board, apenas reaproveita o volume já montado
 	// para CUTUQUE_SESSIONS_PATH. Sem a env var, o board segue só em memória
 	// (dev), igual ao registry.
-	boardStore := board.New()
+	var boardStore board.Store = board.New()
+	boardPath := ""
 	if p := os.Getenv("CUTUQUE_SESSIONS_PATH"); p != "" {
 		reg = registry.NewAt(p)
 		logger.Info("sessões persistidas em disco", "path", p, "carregadas", len(reg.List()))
+		boardPath = filepath.Join(filepath.Dir(p), "board.json")
+	}
 
-		boardPath := filepath.Join(filepath.Dir(p), "board.json")
+	// Board: Postgres é a fonte da verdade (durável/consultável) quando há
+	// CUTUQUE_DATABASE_URL; senão cai no JSON/memória (dev). No 1º boot com DB
+	// vazio, importa o board.json existente (o arquivo fica de backup).
+	dbURL := os.Getenv("CUTUQUE_DATABASE_URL")
+	if dbURL != "" {
+		if pg, err := board.OpenPostgres(context.Background(), dbURL); err != nil {
+			logger.Warn("board Postgres indisponível; caindo no JSON", "err", err)
+			if boardPath != "" {
+				boardStore = board.NewAt(boardPath)
+			}
+		} else {
+			if n, cerr := pg.Count(); cerr == nil && n == 0 && boardPath != "" {
+				if imp, ierr := pg.ImportFromJSON(boardPath); ierr != nil {
+					logger.Warn("board: import do board.json falhou", "err", ierr)
+				} else if imp > 0 {
+					logger.Info("board: board.json importado pro Postgres", "cards", imp)
+				}
+			}
+			boardStore = pg
+			logger.Info("board no Postgres (schema cutuque)", "tarefas", len(boardStore.List()))
+		}
+	} else if boardPath != "" {
 		boardStore = board.NewAt(boardPath)
-		logger.Info("board persistido em disco", "path", boardPath, "tarefas", len(boardStore.List()))
+		logger.Info("board persistido em disco (JSON)", "path", boardPath, "tarefas", len(boardStore.List()))
 	}
 
 	// Fechamento semanal automático (domingo 23:59 America/Sao_Paulo): arquiva os
@@ -75,8 +99,8 @@ func main() {
 	// histórico. Sem a env var (ou se o connect falhar), degrada gracioso: só JSON.
 	var eng *engine.Engine
 	var hist *history.PostgresStore
-	if url := os.Getenv("CUTUQUE_DATABASE_URL"); url != "" {
-		st, err := history.Open(context.Background(), url)
+	if dbURL != "" {
+		st, err := history.Open(context.Background(), dbURL)
 		if err != nil {
 			logger.Warn("histórico Postgres indisponível; seguindo só com JSON", "err", err)
 			eng = engine.New(reg)
