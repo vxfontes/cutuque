@@ -29,8 +29,15 @@ type Task struct {
 	Column    string    `json:"column"`
 	Group     string    `json:"group"`
 	Session   string    `json:"session"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	// Type é o tipo do agente que criou o card (claude|codex|opencode|""), a 3ª
+	// tag de identificação/filtro (além de group e session).
+	Type string `json:"type,omitempty"`
+	// StartedAt/EndedAt são derivados internamente: StartedAt na 1ª vez que o
+	// card entra em em_progresso; EndedAt quando entra em concluido. Nulos até lá.
+	StartedAt *time.Time `json:"started_at,omitempty"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 const subBuffer = 32
@@ -124,9 +131,9 @@ func (s *Store) Get(id string) (Task, bool) {
 	return t, ok
 }
 
-func (s *Store) Add(title, group, session string) Task {
+func (s *Store) Add(title, group, session, agentType string) Task {
 	now := time.Now()
-	t := Task{ID: newID(), Title: title, Column: "a_fazer", Group: group, Session: session, CreatedAt: now, UpdatedAt: now}
+	t := Task{ID: newID(), Title: title, Column: "a_fazer", Group: group, Session: session, Type: agentType, CreatedAt: now, UpdatedAt: now}
 	s.mu.Lock()
 	s.byID[t.ID] = t
 	s.mu.Unlock()
@@ -147,13 +154,21 @@ func (s *Store) Update(id string, column, title *string) (Task, bool) {
 		s.mu.Unlock()
 		return Task{}, false
 	}
+	now := time.Now()
 	if column != nil {
 		t.Column = *column
+		// Datas derivadas: início na 1ª entrada em em_progresso; fim ao concluir.
+		if *column == "em_progresso" && t.StartedAt == nil {
+			t.StartedAt = &now
+		}
+		if *column == "concluido" && t.EndedAt == nil {
+			t.EndedAt = &now
+		}
 	}
 	if title != nil {
 		t.Title = *title
 	}
-	t.UpdatedAt = time.Now()
+	t.UpdatedAt = now
 	s.byID[id] = t
 	s.mu.Unlock()
 	s.persist()

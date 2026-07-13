@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { resolveConfig } from '../src/config.js';
 import { tmuxIdentity } from '../src/tmuxIdentity.js';
+import { detectAgent } from '../src/agentType.js';
 import { createHubClient } from '../src/hubClient.js';
 import { commands } from '../src/commands.js';
 
@@ -15,7 +16,7 @@ async function main() {
 
   const cfg = resolveConfig(process.env);
   const cli = {
-    identity: tmuxIdentity(process.env),
+    identity: { ...tmuxIdentity(process.env), type: detectAgent(process.env) },
     client: createHubClient(cfg),
     out: (s) => console.log(s),
   };

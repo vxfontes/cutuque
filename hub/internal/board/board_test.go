@@ -9,7 +9,7 @@ import (
 
 func TestAddListUpdateRemove(t *testing.T) {
 	s := New()
-	a := s.Add("rodar testes", "interconexao", "cutuque")
+	a := s.Add("rodar testes", "interconexao", "cutuque", "claude")
 	if a.ID == "" || a.Column != "a_fazer" {
 		t.Fatalf("Add: id vazio ou coluna inicial errada: %+v", a)
 	}
@@ -50,7 +50,7 @@ func TestPersistLoad(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "board.json")
 	s1 := NewAt(p)
-	task := s1.Add("persistir", "g", "s")
+	task := s1.Add("persistir", "g", "s", "")
 	if _, err := os.Stat(p); err != nil {
 		t.Fatalf("arquivo não foi escrito: %v", err)
 	}

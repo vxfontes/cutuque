@@ -136,6 +136,8 @@
   .task-card.dragging { opacity: .4; }
   .task-title { font-weight: 600; font-size: 13px; word-break: break-word; margin-bottom: 6px; }
   .task-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 11px; color: var(--muted); }
+  .tag-type { text-transform: uppercase; letter-spacing: .04em; font-weight: 600; color: #c9b8ff; background: color-mix(in srgb, #8b5cf6 16%, transparent); border-color: color-mix(in srgb, #8b5cf6 35%, transparent); }
+  .task-dates { margin-top: 6px; font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
 
   @media (max-width: 640px) {
     .board-toolbar { padding: 12px 14px 0; }
@@ -320,12 +322,20 @@
   // --- Board (Kanban) ---
   function cardHtml(t) {
     const tags = [t.group, t.session].filter(Boolean);
+    const typeTag = t.type ? `<span class="tag tag-type">${esc(t.type)}</span>` : '';
+    // Datas derivadas (visualização interna, discreta): início/fim relativos.
+    const dates = [];
+    if (t.started_at) dates.push(`▶ ${ago(t.started_at)}`);
+    if (t.ended_at) dates.push(`■ ${ago(t.ended_at)}`);
+    const datesHtml = dates.length ? `<div class="task-dates">${dates.join(' · ')}</div>` : '';
     return `<div class="task-card" draggable="true" data-id="${esc(t.id)}">
       <div class="task-title">${esc(t.title)}</div>
       <div class="task-meta">
+        ${typeTag}
         ${tags.map((tg) => `<span class="tag">${esc(tg)}</span>`).join('')}
         ${t.updated_at ? `<span class="ago">${ago(t.updated_at)}</span>` : ''}
       </div>
+      ${datesHtml}
     </div>`;
   }
 
@@ -334,11 +344,16 @@
 
     // filtro por grupo/sessão, derivado das tags presentes
     const tagSet = new Set();
-    all.forEach((t) => { if (t.group) tagSet.add('g:' + t.group); if (t.session) tagSet.add('s:' + t.session); });
+    all.forEach((t) => {
+      if (t.group) tagSet.add('g:' + t.group);
+      if (t.type) tagSet.add('t:' + t.type);
+      if (t.session) tagSet.add('s:' + t.session);
+    });
     const tagList = [...tagSet].sort();
+    const LABELS = { 'g:': 'Grupo: ', 't:': 'Tipo: ', 's:': 'Sessão: ' };
     const cur = $boardFilter.value || 'all';
     $boardFilter.innerHTML = ['<option value="all">Todos</option>']
-      .concat(tagList.map((tg) => `<option value="${esc(tg)}">${tg.startsWith('g:') ? 'Grupo: ' : 'Sessão: '}${esc(tg.slice(2))}</option>`))
+      .concat(tagList.map((tg) => `<option value="${esc(tg)}">${LABELS[tg.slice(0, 2)]}${esc(tg.slice(2))}</option>`))
       .join('');
     $boardFilter.value = (tagList.includes(cur) || cur === 'all') ? cur : 'all';
     boardFilter = $boardFilter.value;
@@ -346,7 +361,7 @@
     let list = all;
     if (boardFilter !== 'all') {
       const kind = boardFilter.slice(0, 2), val = boardFilter.slice(2);
-      list = list.filter((t) => (kind === 'g:' ? t.group === val : t.session === val));
+      list = list.filter((t) => (kind === 'g:' ? t.group === val : kind === 't:' ? t.type === val : t.session === val));
     }
 
     BOARD_COLUMNS.forEach(([col]) => {

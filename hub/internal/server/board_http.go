@@ -29,12 +29,13 @@ func BoardCreateHandler(st *board.Store) http.HandlerFunc {
 			Title   string `json:"title"`
 			Group   string `json:"group"`
 			Session string `json:"session"`
+			Type    string `json:"type"`
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in) != nil || in.Title == "" {
 			writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "bad_request"})
 			return
 		}
-		writeJSONResp(w, http.StatusCreated, st.Add(in.Title, in.Group, in.Session))
+		writeJSONResp(w, http.StatusCreated, st.Add(in.Title, in.Group, in.Session, in.Type))
 	}
 }
 

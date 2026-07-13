@@ -36,7 +36,7 @@ func TestBoardCreateAndList(t *testing.T) {
 
 func TestBoardPatchMoveAndDelete(t *testing.T) {
 	st := board.New()
-	task := st.Add("x", "g", "s")
+	task := st.Add("x", "g", "s", "")
 
 	// PATCH move
 	req := httptest.NewRequest(http.MethodPatch, "/board/tasks/"+task.ID, bytes.NewBufferString(`{"column":"feito"}`))
