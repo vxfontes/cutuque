@@ -13,6 +13,21 @@ import (
 //go:embed dashboard.html
 var dashboardHTML []byte
 
+// dashboardIcon é o ícone do app (mesmo PNG do iOS), servido em
+// GET /dashboard-icon.png para o web usar como logo/favicon — padroniza a marca.
+//
+//go:embed dashboard-icon.png
+var dashboardIcon []byte
+
+// DashboardIconHandler serve o ícone do app (PNG) para o dashboard web.
+func DashboardIconHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write(dashboardIcon)
+	}
+}
+
 // tokenPlaceholder é substituído pelo token real do hub ao servir a página, para
 // o dashboard conectar no WS sem exigir ?token= na URL (é o hub do próprio dono).
 var tokenPlaceholder = []byte("__CUTUQUE_TOKEN__")

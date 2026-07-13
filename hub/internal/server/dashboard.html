@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/png" href="/dashboard-icon.png" />
+<link rel="apple-touch-icon" href="/dashboard-icon.png" />
 <title>Cutuque — Command Center</title>
 <style>
   :root {
@@ -42,7 +44,7 @@
   .theme-toggle:hover { color: var(--text); border-color: var(--faint); }
   .theme-toggle .ic { width: 16px; height: 16px; vertical-align: 0; }
   .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; letter-spacing: .2px; }
-  .brand .logo { width: 12px; height: 12px; border-radius: 50%; background: conic-gradient(from 0deg, var(--running), var(--needs_you), var(--done), var(--running)); box-shadow: 0 0 12px rgba(45,127,249,.6); }
+  .brand .logo { width: 24px; height: 24px; border-radius: 6px; object-fit: cover; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
   .brand small { color: var(--faint); font-weight: 500; font-size: 12px; letter-spacing: .5px; text-transform: uppercase; }
   .counts { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
   .pill {
@@ -166,7 +168,12 @@
   .board-col-head .count { font-variant-numeric: tabular-nums; color: var(--faint); }
   .board-col-body { padding: 10px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex: 1; min-height: 80px; }
   .board-col-body.dragover { background: color-mix(in srgb, var(--running) 10%, transparent); outline: 1px dashed var(--running); outline-offset: -4px; }
-  .col-empty { text-align: center; color: var(--faint); font-size: 12px; padding: 18px 4px; }
+  .col-empty {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px;
+    color: var(--faint); font-size: 12px; padding: 26px 10px; margin: 4px 2px;
+    border: 1.5px dashed color-mix(in srgb, var(--border) 85%, transparent); border-radius: 10px;
+  }
+  .col-empty .ic { width: 22px; height: 22px; opacity: .55; }
   .task-card { cursor: pointer; }
 
   /* Modal de detalhe do card */
@@ -235,6 +242,8 @@
   .task-stats .ic { width: 11px; height: 11px; }
   .task-stats .stat, .task-stats .task-comments { display: inline-flex; align-items: center; gap: 4px; }
   .tag-type { text-transform: uppercase; letter-spacing: .04em; font-weight: 600; color: var(--tc); background: color-mix(in srgb, var(--tc) 16%, transparent); border-color: color-mix(in srgb, var(--tc) 40%, transparent); }
+  /* tag de ambiente (grupo): cor sortida por nome (--gc via inline style) */
+  .tag-group { font-weight: 600; color: var(--gc); background: color-mix(in srgb, var(--gc) 15%, transparent); border-color: color-mix(in srgb, var(--gc) 38%, transparent); }
   .task-comments { color: var(--muted); }
   .task-stalled { font-size: 10.5px; color: var(--warn-text); background: color-mix(in srgb, var(--warn-text) 14%, transparent); border: 1px solid color-mix(in srgb, var(--warn-text) 30%, transparent); border-radius: 6px; padding: 0 5px; display: inline-flex; align-items: center; gap: 4px; }
   /* Encalhada: to-do antigo esquecido — sombra vermelha + alerta (ícone injetado no título) */
@@ -326,7 +335,7 @@
 </head>
 <body data-view="board">
   <header>
-    <div class="brand"><span class="logo"></span> Cutuque <small>Command Center</small></div>
+    <div class="brand"><img class="logo" src="/dashboard-icon.png" alt="Cutuque" /> Cutuque <small>Command Center</small></div>
     <nav class="tabs" id="tabs">
       <button type="button" class="tab" data-view="sessions">Sessões</button>
       <button type="button" class="tab active" data-view="board">Board</button>
@@ -438,7 +447,9 @@
     back: svg('<path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/>'),
     chev: svg('<path d="M9 6l6 6-6 6"/>'),
     trash: svg('<path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/>'),
+    inbox: svg('<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>'),
   };
+  const colEmpty = (label) => `<div class="col-empty">${ICONS.inbox}<span>${label}</span></div>`;
 
   // Tema light/dark com seletor (persistido). Default: preferência do sistema.
   const $themeToggle = document.getElementById('themeToggle');
@@ -488,6 +499,20 @@
 
   const sessions = new Map();
   let filter = 'all';
+
+  // Cor da tag de ambiente (grupo): paleta sortida, determinística por nome.
+  // Evita azul/verde/roxo (reservados p/ tipo claude/codex/opencode).
+  // Tons quentes/rosados/teal/marrom — claramente distintos de azul/verde/roxo (tipos).
+  const GROUP_PALETTE = [
+    '#f5a623', '#f97316', '#ea580c', '#ec4899', '#db2777', '#f43f5e', '#e11d48',
+    '#be123c', '#eab308', '#ca8a04', '#14b8a6', '#0d9488', '#fb7185', '#b45309',
+  ];
+  function groupColor(name) {
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+    return GROUP_PALETTE[h % GROUP_PALETTE.length];
+  }
+  const groupTag = (g) => `<span class="tag tag-group" style="--gc:${groupColor(g)}">${esc(g)}</span>`;
 
   // --- Board (Kanban) ---
   const BOARD_COLUMNS = [
@@ -582,8 +607,8 @@
 
   // --- Board (Kanban) ---
   function cardHtml(t) {
-    const tags = [t.group, t.session].filter(Boolean);
     const typeTag = t.type ? `<span class="tag tag-type">${esc(t.type)}</span>` : '';
+    const idTags = (t.group ? groupTag(t.group) : '') + (t.session ? `<span class="tag">${esc(t.session)}</span>` : '');
     const nComments = (t.comments || []).length;
     const ACTIVE = ['em_progresso', 'feito', 'em_revisao'];
     // Linha única de stats (abaixo das tags): ago + comentários + datas + selo.
@@ -598,7 +623,7 @@
     }
     return `<div class="task-card" draggable="true" data-id="${esc(t.id)}" data-type="${esc(t.type || '')}">
       <div class="task-title">${esc(t.title)}</div>
-      <div class="task-tags">${typeTag}${tags.map((tg) => `<span class="tag">${esc(tg)}</span>`).join('')}</div>
+      <div class="task-tags">${typeTag}${idTags}</div>
       ${stats.length ? `<div class="task-stats">${stats.join('')}</div>` : ''}
     </div>`;
   }
@@ -646,7 +671,7 @@
       const items = list.filter((t) => t.column === col && !(col === 'a_fazer' && t.encalhada))
         .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
       document.getElementById('count-' + col).textContent = items.length;
-      body.innerHTML = items.length ? items.map(cardHtml).join('') : `<div class="col-empty">—</div>`;
+      body.innerHTML = items.length ? items.map(cardHtml).join('') : colEmpty('nada por aqui');
     });
   }
 
@@ -768,7 +793,7 @@
   function renderCardModal(t, readOnly) {
     const tags = [];
     if (t.type) tags.push(`<span class="tag tag-type">${esc(t.type)}</span>`);
-    if (t.group) tags.push(`<span class="tag">${esc(t.group)}</span>`);
+    if (t.group) tags.push(groupTag(t.group));
     if (t.session) tags.push(`<span class="tag">${esc(t.session)}</span>`);
     const comments = t.comments || [];
     const colInfo = readOnly ? 'Arquivado' : (COL_LABEL[t.column] || esc(t.column));

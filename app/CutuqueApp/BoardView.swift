@@ -219,8 +219,18 @@ private struct BoardColumnCard: View {
             ScrollView(showsIndicators: false) {
                 LazyVStack(spacing: 8) {
                     if tasks.isEmpty {
-                        Text("—").font(.footnote).foregroundStyle(.tertiary)
-                            .frame(maxWidth: .infinity).padding(.vertical, 20)
+                        VStack(spacing: 7) {
+                            Image(systemName: "tray").font(.title3).foregroundStyle(.tertiary)
+                            Text("nada por aqui").font(.footnote).foregroundStyle(.tertiary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 26)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [5]))
+                                .foregroundStyle(Color(.separator).opacity(0.5))
+                        )
+                        .padding(.top, 4)
                     } else {
                         ForEach(tasks) { task in
                             BoardCardRow(task: task).onTapGesture { onTap(task) }
@@ -262,7 +272,7 @@ struct BoardCardRow: View {
                 if let type = task.type, !type.isEmpty {
                     TagChip(text: type.uppercased(), color: typeColor, filled: true)
                 }
-                TagChip(text: task.group, color: .secondary, filled: false)
+                TagChip(text: task.group, color: GroupColor.color(for: task.group), filled: true)
                 TagChip(text: task.session, color: .secondary, filled: false)
             }
             HStack(spacing: 12) {
@@ -335,7 +345,7 @@ struct BoardTaskDetailView: View {
                         if let type = live.type, !type.isEmpty {
                             TagChip(text: type.uppercased(), color: AgentTypeColor.color(for: type), filled: true)
                         }
-                        TagChip(text: live.group, color: .secondary, filled: false)
+                        TagChip(text: live.group, color: GroupColor.color(for: live.group), filled: true)
                         TagChip(text: live.session, color: .secondary, filled: false)
                     }
                     if let role = live.role, !role.isEmpty { LabeledContent("Quem", value: role) }

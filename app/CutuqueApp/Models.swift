@@ -390,6 +390,36 @@ enum AgentTypeColor {
     }
 }
 
+/// Cor da tag de ambiente (grupo): paleta sortida, determinística por nome (mesma
+/// do dashboard web). Tons quentes/rosados/teal/marrom — distintos de azul/verde/roxo.
+enum GroupColor {
+    static let palette: [Color] = [
+        "#f5a623", "#f97316", "#ea580c", "#ec4899", "#db2777", "#f43f5e", "#e11d48",
+        "#be123c", "#eab308", "#ca8a04", "#14b8a6", "#0d9488", "#fb7185", "#b45309",
+    ].map { Color(hex: $0) }
+
+    static func color(for name: String) -> Color {
+        guard !name.isEmpty else { return .secondary }
+        var h: UInt32 = 0
+        for u in name.unicodeScalars { h = h &* 31 &+ u.value }
+        return palette[Int(h % UInt32(palette.count))]
+    }
+}
+
+extension Color {
+    /// Cria uma Color a partir de "#RRGGBB".
+    init(hex: String) {
+        let s = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+        var v: UInt64 = 0
+        Scanner(string: s).scanHexInt64(&v)
+        self.init(
+            red: Double((v >> 16) & 0xFF) / 255,
+            green: Double((v >> 8) & 0xFF) / 255,
+            blue: Double(v & 0xFF) / 255
+        )
+    }
+}
+
 // MARK: - Decoder compartilhado
 
 extension JSONDecoder {

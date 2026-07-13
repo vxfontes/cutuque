@@ -78,6 +78,8 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 	// Command Center web (estático, mesma origem -> WS não é cross-origin).
 	// O token do hub é injetado na página, então não precisa passar ?token=.
 	mux.Handle("GET /dashboard", DashboardHandler(cfg.Token))
+	// Ícone do app (logo/favicon do web) — padroniza a marca com o iOS.
+	mux.Handle("GET /dashboard-icon.png", DashboardIconHandler())
 	// Protocolo do board para os agentes (aberto) — lido via Tailscale.
 	mux.Handle("GET /board-protocol", BoardProtocolHandler())
 	// CLI cutuque servida via Tailscale: /cutuque (o executável) e /install (curl | sh).
