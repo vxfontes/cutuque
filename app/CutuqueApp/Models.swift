@@ -325,6 +325,71 @@ enum WSMessage: Decodable {
     }
 }
 
+// MARK: - Cutuque Board (Kanban dos agentes)
+
+/// Um card do quadro Kanban. Espelha o `board.Task` do hub.
+struct BoardTask: Identifiable, Decodable, Equatable {
+    let id: String
+    var title: String
+    var column: String
+    var group: String
+    var session: String
+    var type: String?
+    var role: String?
+    var encalhada: Bool?
+    var description: String?
+    var comments: [BoardComment]?
+    var startedAt: Date?
+    var reviewedAt: Date?
+    var endedAt: Date?
+    var createdAt: Date?
+    var updatedAt: Date?
+
+    var isEncalhada: Bool { encalhada ?? false }
+    var commentCount: Int { comments?.count ?? 0 }
+}
+
+/// Uma observação num card.
+struct BoardComment: Decodable, Equatable, Identifiable {
+    let author: String
+    let text: String
+    let createdAt: Date?
+    var id: String { "\(author)-\(createdAt?.timeIntervalSince1970 ?? 0)-\(text.hashValue)" }
+}
+
+/// Colunas do quadro, na ordem do fluxo (igual ao hub).
+enum BoardColumn: String, CaseIterable, Identifiable {
+    case aFazer = "a_fazer"
+    case emProgresso = "em_progresso"
+    case feito
+    case emRevisao = "em_revisao"
+    case concluido
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .aFazer:      return "A fazer"
+        case .emProgresso: return "Em progresso"
+        case .feito:       return "Feito"
+        case .emRevisao:   return "Em revisão"
+        case .concluido:   return "Concluído"
+        }
+    }
+}
+
+/// Cor por tipo de IA (igual ao dashboard web): Claude azul, Codex verde,
+/// OpenCode roxo; cinza para tipo desconhecido.
+enum AgentTypeColor {
+    static func color(for type: String?) -> Color {
+        switch (type ?? "").lowercased() {
+        case "claude":   return Color(red: 0.18, green: 0.50, blue: 0.98) // azul
+        case "codex":    return Color(red: 0.13, green: 0.77, blue: 0.37) // verde
+        case "opencode": return Color(red: 0.66, green: 0.33, blue: 0.97) // roxo
+        default:         return .secondary
+        }
+    }
+}
+
 // MARK: - Decoder compartilhado
 
 extension JSONDecoder {

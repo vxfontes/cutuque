@@ -107,6 +107,51 @@ struct APIClient {
         try await send(request)
     }
 
+    // MARK: - Cutuque Board (Kanban dos agentes)
+
+    /// Lista os cards do quadro. `GET /board` (aberto; mandar o Bearer não atrapalha).
+    func boardTasks() async throws -> [BoardTask] {
+        var request = URLRequest(url: baseURL.appendingPathComponent("board"))
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder.cutuque.decode(BoardEnvelope.self, from: data).tasks
+    }
+
+    private struct BoardEnvelope: Decodable { let tasks: [BoardTask] }
+
+    /// Move um card de coluna. `PATCH /board/tasks/{id}` (aberto).
+    func moveBoardTask(id: String, column: String) async throws {
+        try await patchBoard(id: id, body: ["column": column])
+    }
+
+    /// Marca/desmarca um card como encalhado. Marcar volta o card pra "A fazer".
+    func setBoardEncalhada(id: String, _ value: Bool) async throws {
+        try await patchBoard(id: id, body: value ? ["column": "a_fazer", "encalhada": true] : ["encalhada": false])
+    }
+
+    private func patchBoard(id: String, body: [String: Any]) async throws {
+        let url = baseURL.appendingPathComponent("board").appendingPathComponent("tasks").appendingPathComponent(id)
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        try await send(request)
+    }
+
+    /// Apaga um card do quadro. `DELETE /board/tasks/{id}` — EXIGE token (só a
+    /// mantenedora, via app/dashboard). Agentes (CLI, sem token) recebem 401.
+    func deleteBoardTask(id: String) async throws {
+        let url = baseURL.appendingPathComponent("board").appendingPathComponent("tasks").appendingPathComponent(id)
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        try await send(request)
+    }
+
     /// Busca o histórico de output de uma sessão (últimos ~200 chunks), já
     /// classificado por `kind` (user/assistant/tool/tool_result) para o
     /// transcrito estilo chat. Se o endpoint ainda não existir (adapter em
@@ -616,7 +661,7 @@ struct APIClient {
         let (_, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         switch http.statusCode {
-        case 200:  return
+        case 200, 204:  return   // 204 No Content (ex.: DELETE do board) também é sucesso
         case 404:  throw CutuqueError.notFound
         case 409:  throw CutuqueError.staleState
         default:   throw CutuqueError.unexpected(status: http.statusCode)

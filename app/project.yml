@@ -24,8 +24,8 @@ targets:
       properties:
         UILaunchScreen: {}
         CFBundleDisplayName: Cutuque
-        CFBundleShortVersionString: "1.4.0"
-        CFBundleVersion: "4"
+        CFBundleShortVersionString: "1.5.0"
+        CFBundleVersion: "5"
         # Live Activities (Dynamic Island / tela de bloqueio) para sessões rodando.
         NSSupportsLiveActivities: true
         # Declara criptografia isenta (ex.: TLS/HTTPS e APIs do sistema) para
@@ -70,8 +70,8 @@ targets:
       properties:
         CFBundleDisplayName: Cutuque
         CFBundleIconName: AppIcon
-        CFBundleShortVersionString: "1.4.0"
-        CFBundleVersion: "4"
+        CFBundleShortVersionString: "1.5.0"
+        CFBundleVersion: "5"
         ITSAppUsesNonExemptEncryption: false
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.vxfontes.cutuque
@@ -90,8 +90,8 @@ targets:
       path: CutuqueWidgets/Info.plist
       properties:
         CFBundleDisplayName: Cutuque
-        CFBundleShortVersionString: "1.4.0"
-        CFBundleVersion: "4"
+        CFBundleShortVersionString: "1.5.0"
+        CFBundleVersion: "5"
         ITSAppUsesNonExemptEncryption: false
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
