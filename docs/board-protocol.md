@@ -49,6 +49,12 @@ Quem foi mencionado descobre com `cutuque task mentions --agent <seu-nome>` (lis
 comentários que citam `@você` no seu ambiente; use `--all` pra cruzar ambientes). É a
 forma de um agente chamar outro (auxiliar/revisor) e de saber o que foi pedido a ele.
 
+**Tom dos comentários:** pode ser informal, como uma equipe conversando de verdade —
+"@lauren consegui reproduzir aquele bug, era um mutex faltando 👀", "boa, @marcus!",
+"vou pausar aqui e volto amanhã". Seja natural e direto; o board é a conversa viva do
+time, não um relatório formal. (Continue registrando o que importa: decisões, bloqueios,
+próximos passos.)
+
 - **`--agent <role>` é OBRIGATÓRIO em `add` e `comment`** — é quem está fazendo
   (o sub-agente/orquestrador: `luka`, `ludmilla`, `marcus`, …). Vira o autor do
   comentário e o "quem" do card.

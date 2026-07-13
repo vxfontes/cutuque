@@ -362,6 +362,19 @@ struct TagChip: View {
     }
 }
 
+/// Renderiza o texto de um comentário com @menções em negrito + cor (igual ao web).
+func mentionAttributed(_ text: String) -> AttributedString {
+    var attr = AttributedString(text)
+    guard let re = try? NSRegularExpression(pattern: "@[\\w.\\-]+") else { return attr }
+    let ns = text as NSString
+    for m in re.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+        guard let r = Range(m.range, in: text), let ar = Range(r, in: attr) else { continue }
+        attr[ar].font = .callout.bold()
+        attr[ar].foregroundColor = Color(red: 0.18, green: 0.50, blue: 0.98)
+    }
+    return attr
+}
+
 // MARK: - Detalhe do card (mover / encalhada / comentar / apagar)
 
 struct BoardTaskDetailView: View {
@@ -441,7 +454,7 @@ struct BoardTaskDetailView: View {
                         ForEach(comments) { c in
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(c.author).font(.caption).fontWeight(.semibold)
-                                Text(c.text).font(.callout)
+                                Text(mentionAttributed(c.text)).font(.callout)
                             }
                         }
                     } else {
