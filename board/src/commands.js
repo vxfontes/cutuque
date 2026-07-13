@@ -1,0 +1,25 @@
+const COLS = ['a_fazer', 'em_progresso', 'feito', 'em_revisao', 'concluido'];
+const LABEL = { a_fazer: 'A fazer', em_progresso: 'Em progresso', feito: 'Feito', em_revisao: 'Em revisão', concluido: 'Concluído' };
+
+export const commands = {
+  async add(cli, title) {
+    const t = await cli.client.createTask({ title, group: cli.identity.group, session: cli.identity.session });
+    cli.out(`✓ criado ${t.id} em "A fazer": ${title}`);
+  },
+  async list(cli) {
+    const all = await cli.client.listTasks();
+    const mine = all.filter((t) => t.group === cli.identity.group && t.session === cli.identity.session);
+    cli.out(`Board de ${cli.identity.group}/${cli.identity.session} (${mine.length}):`);
+    for (const col of COLS) {
+      const items = mine.filter((t) => t.column === col);
+      if (!items.length) continue;
+      cli.out(`\n${LABEL[col]}:`);
+      for (const t of items) cli.out(`  ${t.id}  ${t.title}`);
+    }
+  },
+  async move(cli, id, column) {
+    if (!COLS.includes(column)) throw new Error(`coluna inválida: ${column} (use: ${COLS.join(', ')})`);
+    await cli.client.moveTask(id, column);
+    cli.out(`✓ ${id} → ${LABEL[column]}`);
+  },
+};
