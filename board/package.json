@@ -1,0 +1,8 @@
+{
+  "name": "cutuque-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "cutuque": "bin/cutuque.js" },
+  "scripts": { "test": "node --test" }
+}
