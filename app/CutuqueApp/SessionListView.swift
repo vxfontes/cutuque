@@ -265,7 +265,6 @@ struct SessionListView: View {
     @State private var showingSettings = false
     @State private var showingStatus = false
     @State private var showingHistory = false
-    @State private var showingBoard = false
     // Sessão em processo de renomear (nil = alerta fechado) + texto do apelido.
     @State private var renameTarget: Session?
     @State private var renameText = ""
@@ -472,14 +471,6 @@ struct SessionListView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        showingBoard = true
-                    } label: {
-                        Image(systemName: "rectangle.split.3x1")
-                    }
-                    .accessibilityLabel("Cutuque Board")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
                         showingHistory = true
                     } label: {
                         Image(systemName: "clock.arrow.circlepath")
@@ -516,9 +507,6 @@ struct SessionListView: View {
             }
             .sheet(isPresented: $showingHistory) {
                 HistoryView()
-            }
-            .sheet(isPresented: $showingBoard) {
-                BoardView()
             }
             .sheet(item: $selectedLive) { entry in
                 NavigationStack {

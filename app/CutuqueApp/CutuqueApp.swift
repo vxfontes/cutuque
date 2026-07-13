@@ -15,8 +15,8 @@ struct CutuqueApp: App {
 
     var body: some Scene {
         WindowGroup {
-            // Lista de sessões é a tela raiz (ela própria hospeda a NavigationStack).
-            SessionListView()
+            // Raiz = TabView com bottom bar (Sessões / Board).
+            RootTabView()
             .environmentObject(router)
             .tint((AppAccent(rawValue: accentRaw) ?? .blue).color)
             .preferredColorScheme((AppColorScheme(rawValue: colorSchemeRaw) ?? .system).scheme)
@@ -34,6 +34,27 @@ struct CutuqueApp: App {
         }
         .onChange(of: scenePhase) { _, phase in
             ForegroundReporter.shared.update(phase)
+        }
+    }
+}
+
+/// Raiz do app: TabView com bottom bar alternando Sessões e Board.
+struct RootTabView: View {
+    @EnvironmentObject private var router: Router
+    @State private var tab = 0
+
+    var body: some View {
+        TabView(selection: $tab) {
+            SessionListView()
+                .tabItem { Label("Sessões", systemImage: "list.bullet.rectangle") }
+                .tag(0)
+            BoardView()
+                .tabItem { Label("Board", systemImage: "rectangle.split.3x1") }
+                .tag(1)
+        }
+        // Deep-link de sessão (push / Live Activity) volta pra aba Sessões.
+        .onChange(of: router.pendingSessionID) { _, id in
+            if id != nil { tab = 0 }
         }
     }
 }

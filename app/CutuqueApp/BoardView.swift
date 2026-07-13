@@ -76,7 +76,6 @@ private extension Array where Element: Hashable {
 
 struct BoardView: View {
     @StateObject private var model = BoardModel()
-    @Environment(\.dismiss) private var dismiss
     @State private var selected: BoardTask?
 
     var body: some View {
@@ -95,7 +94,6 @@ struct BoardView: View {
             .navigationTitle("Cutuque Board")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Fechar") { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { Task { await model.load() } } label: { Image(systemName: "arrow.clockwise") }
                         .accessibilityLabel("Recarregar")
