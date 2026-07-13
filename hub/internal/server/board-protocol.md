@@ -71,8 +71,9 @@ refletir a realidade.
 
 > **Cutuque Board (obrigatório).** Você participa de um Kanban compartilhado dos
 > agentes via a CLI `cutuque`.
-> **Config (uma vez):** `export CUTUQUE_HUB=192.0.2.10:8787` — sempre o hub no
-> Tailscale; **não** use localhost; **não** precisa de token.
+> **Setup:** se o comando `cutuque` não existir, instale uma vez com
+> `cd ~/Desktop/coding/personal/cutuque/board && npm link`. **Não precisa configurar
+> nada** — a CLI já aponta pro hub no Tailscale e o board é aberto (sem token).
 > **Antes de começar qualquer tarefa:** `cutuque task list` (veja o que já existe
 > na sua sessão e onde está).
 > **Registre o que vai fazer:** `cutuque task add "<atividade>" --agent <seu-role> [--desc "<detalhe>"]`.
@@ -83,17 +84,25 @@ refletir a realidade.
 > `--agent <role>` (quem está fazendo: luka, marcus, ludmilla…) é **OBRIGATÓRIO** em
 > `add` e `comment`. Grupo/sessão do tmux e o tipo (claude/codex/opencode) são
 > detectados automaticamente. Mantenha o quadro sempre atualizado.
+> **Se você DELEGAR a um subagente:** crie o card da tarefa no board ANTES de
+> delegar (`cutuque task add "…" --agent <você>`), passe o `<id>` do card ao
+> subagente e instrua-o a mover o card conforme progride e a comentar as
+> observações com `--agent <role-dele>`. A tarefa só vai pra `concluido` quando
+> de fato concluída/revisada.
 
-## Configuração (IMPORTANTE)
+## Instalação (uma vez por máquina)
 
-⚠️ **Use SEMPRE o hub no Tailscale — `192.0.2.10:8787`.** Não existe
-`localhost`/`127.0.0.1:8787` pra você (aquilo é só o dev local da mantenedora).
-Antes de usar a CLI, exporte no seu shell/tmux:
+Se o comando `cutuque` **não existir** no seu shell, instale a CLI a partir do repo:
 
 ```bash
-export CUTUQUE_HUB=192.0.2.10:8787
+cd ~/Desktop/coding/personal/cutuque/board && npm link
 ```
 
-**Não precisa de token** — o board é aberto na rede interna (Tailscale, não
-exposto). Sem `CUTUQUE_HUB` a CLI cai no default de dev (`127.0.0.1`) e **não
-acha o hub**.
+Basta uma vez por máquina — todos os agentes dela passam a ter o `cutuque` no PATH.
+
+## Configuração
+
+**Nada a configurar.** A CLI já aponta para o hub no **Tailscale**
+(`192.0.2.10:8787`) por padrão, e o board é **aberto** (sem token). Não
+exporte `CUTUQUE_HUB` — o default já está certo. (Só a mantenedora, em dev
+local, usa `export CUTUQUE_HUB=127.0.0.1:8787`.)

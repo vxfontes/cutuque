@@ -4,7 +4,7 @@ import { resolveConfig } from '../src/config.js';
 
 test('defaults de dev', () => {
   const c = resolveConfig({});
-  assert.equal(c.hubBaseUrl, 'http://127.0.0.1:8787');
+  assert.equal(c.hubBaseUrl, 'http://192.0.2.10:8787');
   assert.equal(c.token, 'dev-token');
 });
 test('respeita env', () => {
