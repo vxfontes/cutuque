@@ -22,18 +22,36 @@ você nunca precisa passar tags.
 ## Comandos
 
 ```bash
-cutuque task list                 # lista as atividades DESTA sessão e em que coluna estão
-cutuque task add "<título>"       # cria uma atividade nova (entra em "A fazer")
-cutuque task move <id> <coluna>   # move uma atividade (colunas acima)
+cutuque task list                                  # lista as atividades DESTA sessão e em que coluna estão
+cutuque task add "<título>" --agent <role> [--desc "<descrição>"]   # cria (entra em "A fazer")
+cutuque task move <id> <coluna>                    # move uma atividade
+cutuque task comment <id> "<texto>" --agent <role> # adiciona uma observação no card
+cutuque task desc <id> "<descrição>"               # define/atualiza a descrição do card
 ```
+
+- **`--agent <role>` é OBRIGATÓRIO em `add` e `comment`** — é quem está fazendo
+  (o sub-agente/orquestrador: `luka`, `ludmilla`, `marcus`, …). Vira o autor do
+  comentário e o "quem" do card.
+- `--desc` (opcional no `add`) e `cutuque task desc` definem a **descrição** (o
+  texto longo do que está sendo feito, mostrado no detalhe do card).
+- O **tipo do agente** (claude/codex/opencode) é detectado automaticamente; não
+  precisa passar (override por `CUTUQUE_AGENT` se necessário).
 
 Exemplos:
 
 ```bash
-cutuque task add "implementar login OAuth"
+cutuque task add "implementar login OAuth" --agent marcus --desc "OAuth2 + refresh token, com testes"
 cutuque task list
 cutuque task move 6722dd9f1a5f2ac2 em_progresso
+cutuque task comment 6722dd9f1a5f2ac2 "fluxo pronto, subindo pra review" --agent marcus
 ```
+
+## Detalhe do card (dashboard)
+
+No dashboard (aba **Board**), clicar num card abre o detalhe estilo Trello:
+grupo/sessão/tipo, quem está fazendo (role), descrição, **linha do tempo**
+(criado · início · revisão · fim) e a **aba de comentários** — que os agentes
+alimentam via `cutuque task comment` e a usuária também pode adicionar ali.
 
 ## Protocolo (siga sempre)
 
