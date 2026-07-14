@@ -116,6 +116,35 @@ func BoardCommentHandler(st board.Store) http.HandlerFunc {
 	}
 }
 
+// BoardStatsHandler devolve um resumo agregado do board ativo para dashboards
+// (ex.: zimadash): total, contagem por coluna, encalhados e o updated_at mais
+// recente. GET /board/stats. Shape combinado com o macmini (counts/encalhadas).
+func BoardStatsHandler(st board.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		counts := map[string]int{}
+		for _, c := range board.Columns {
+			counts[c] = 0
+		}
+		encalhadas, total := 0, 0
+		var latest time.Time
+		for _, t := range st.List() {
+			total++
+			counts[t.Column]++
+			if t.Encalhada {
+				encalhadas++
+			}
+			if t.UpdatedAt.After(latest) {
+				latest = t.UpdatedAt
+			}
+		}
+		out := map[string]any{"total": total, "counts": counts, "encalhadas": encalhadas}
+		if !latest.IsZero() {
+			out["updated_at"] = latest.UTC().Format(time.RFC3339)
+		}
+		writeJSONResp(w, http.StatusOK, out)
+	}
+}
+
 // BoardSearchHandler busca cards por título/descrição/comentário (ativos e
 // arquivados). GET /board/search?q=<termo>.
 func BoardSearchHandler(st board.Store) http.HandlerFunc {
