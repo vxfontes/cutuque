@@ -8,13 +8,14 @@ targets:
     type: application
     platform: iOS
     sources: [CutuqueApp, Shared]
-    # Entitlements de push (Fase 4). aps-environment=development para APNs de dev.
+    # Entitlements de push (Fase 4). aps-environment=production para TestFlight/App
+    # Store (tokens de produção; o hub aponta CUTUQUE_APNS_HOST=api.push.apple.com).
     # No simulador, com CODE_SIGNING_ALLOWED=NO, o arquivo não é embutido, mas o
     # build segue funcionando e o push simulado (xcrun simctl push) dispensa APNs real.
     entitlements:
       path: CutuqueApp/CutuqueApp.entitlements
       properties:
-        aps-environment: development
+        aps-environment: production
         # Sem esta entitlement a Apple rebaixa o interruption-level time-sensitive
         # do needs_you e o cutucão não fura Focus/DND (review F4, bloqueante #2).
         # É self-service — não exige aprovação da Apple.
@@ -24,8 +25,8 @@ targets:
       properties:
         UILaunchScreen: {}
         CFBundleDisplayName: Cutuque
-        CFBundleShortVersionString: "1.9.0"
-        CFBundleVersion: "9"
+        CFBundleShortVersionString: "2.0.0"
+        CFBundleVersion: "10"
         # Live Activities (Dynamic Island / tela de bloqueio) para sessões rodando.
         NSSupportsLiveActivities: true
         # Declara criptografia isenta (ex.: TLS/HTTPS e APIs do sistema) para
@@ -70,8 +71,8 @@ targets:
       properties:
         CFBundleDisplayName: Cutuque
         CFBundleIconName: AppIcon
-        CFBundleShortVersionString: "1.9.0"
-        CFBundleVersion: "9"
+        CFBundleShortVersionString: "2.0.0"
+        CFBundleVersion: "10"
         ITSAppUsesNonExemptEncryption: false
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.vxfontes.cutuque
@@ -90,8 +91,8 @@ targets:
       path: CutuqueWidgets/Info.plist
       properties:
         CFBundleDisplayName: Cutuque
-        CFBundleShortVersionString: "1.9.0"
-        CFBundleVersion: "9"
+        CFBundleShortVersionString: "2.0.0"
+        CFBundleVersion: "10"
         ITSAppUsesNonExemptEncryption: false
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension

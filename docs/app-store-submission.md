@@ -5,8 +5,13 @@ enviar o build pelo App Store Connect.
 
 ## Estado atual (já pronto no repo)
 
-- [x] **Versão / build:** `CFBundleShortVersionString 1.9.0`, `CFBundleVersion 9`
-      (iOS, watchOS e widget alinhados — ver `app/project.yml`).
+- [x] **Versão / build:** `CFBundleShortVersionString 2.0.0`, `CFBundleVersion 10`
+      (iOS, watchOS e widget alinhados — ver `app/project.yml`). Lembrete: subir o
+      `CFBundleVersion` a cada upload novo ao TestFlight.
+- [x] **APNs de produção:** `aps-environment: production` no app e
+      `CUTUQUE_APNS_HOST=api.push.apple.com` no hub (config/hub.env do macmini).
+      Requer chave `.p8` de produção e que o device (build TestFlight) registre um
+      token de **produção** — o token de sandbox antigo para de funcionar.
 - [x] **Conformidade de exportação:** `ITSAppUsesNonExemptEncryption = false`
       (usa só TLS/APIs do sistema) — evita a pergunta manual no App Store Connect.
 - [x] **Descrição de uso de rede local:** `NSLocalNetworkUsageDescription` presente.
@@ -38,8 +43,9 @@ Opções (escolher antes de enviar):
 - [ ] Conta Apple Developer ativa; App ID `com.vxfontes.cutuque` (+ `.watchkitapp`,
       `.widgets`) registrado com as capabilities: Push Notifications, App Groups
       (se usados), Time-Sensitive Notifications.
-- [ ] Chave APNs (`.p8`) de **produção** e `aps-environment: production` no build de
-      release (hoje está `development` no `project.yml`).
+- [x] `aps-environment: production` no `project.yml` + `CUTUQUE_APNS_HOST=api.push.apple.com`
+      no hub. **Confirmar** que a chave `.p8` configurada no hub serve para produção
+      (a mesma chave `.p8` normalmente vale para sandbox e produção).
 - [ ] Build de release assinado (distribution) e arquivado (Xcode → Archive).
 - [ ] Screenshots por dispositivo exigido (iPhone 6.9" e 6.5"; Apple Watch).
 - [ ] Preencher os metadados e a Privacy Nutrition Label (abaixo).
