@@ -525,10 +525,10 @@
 
   // Cor da tag de ambiente (grupo): paleta sortida, determinística por nome.
   // Evita azul/verde/roxo (reservados p/ tipo claude/codex/opencode).
-  // Tons quentes/rosados/teal/marrom — claramente distintos de azul/verde/roxo (tipos).
+  // Espectro contínuo (laranja→rosa→roxo→azul→ciano→verde→lima→amarelo), 14 cores.
   const GROUP_PALETTE = [
-    '#f5a623', '#f97316', '#ea580c', '#ec4899', '#db2777', '#f43f5e', '#e11d48',
-    '#be123c', '#eab308', '#ca8a04', '#14b8a6', '#0d9488', '#fb7185', '#b45309',
+    '#FFAA5C', '#FF7D73', '#FF6FAE', '#F078D4', '#C084FC', '#9B8AFB', '#748FFC',
+    '#5BA8FF', '#43C6F5', '#35D0C1', '#48D597', '#74D680', '#B5D95C', '#FFD05A',
   ];
   // Atribui uma cor DISTINTA por grupo: o hash é só a preferência inicial; se a cor
   // já estiver em uso, pega a próxima livre (linear probing). Assim não há repetição
