@@ -28,3 +28,9 @@ DerivedData/
 
 # Artefato local de tooling (skill copiada), não faz parte do projeto
 /skills/
+
+# Assinatura local (Team ID) — cada dev usa o seu; template em Local.xcconfig.example
+/app/Local.xcconfig
+
+# .xcodeproj é gerado pelo xcodegen (project.yml é a fonte da verdade) — rode `xcodegen generate`
+/app/CutuqueApp.xcodeproj/

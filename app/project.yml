@@ -3,6 +3,11 @@ options:
   bundleIdPrefix: com.vxfontes
   deploymentTarget:
     iOS: "17.0"
+# Assinatura: DEVELOPMENT_TEAM vem de Local.xcconfig (gitignored, cada dev usa o seu;
+# template em Local.xcconfig.example) — não fica no repo público nem é apagado no xcodegen.
+configFiles:
+  Debug: Local.xcconfig
+  Release: Local.xcconfig
 targets:
   CutuqueApp:
     type: application
