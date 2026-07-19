@@ -530,10 +530,24 @@
     '#f5a623', '#f97316', '#ea580c', '#ec4899', '#db2777', '#f43f5e', '#e11d48',
     '#be123c', '#eab308', '#ca8a04', '#14b8a6', '#0d9488', '#fb7185', '#b45309',
   ];
+  // Atribui uma cor DISTINTA por grupo: o hash é só a preferência inicial; se a cor
+  // já estiver em uso, pega a próxima livre (linear probing). Assim não há repetição
+  // enquanto houver ≤ GROUP_PALETTE.length (14) grupos distintos. Cache mantém a cor
+  // estável durante a sessão da página.
+  const _groupColorCache = new Map();
   function groupColor(name) {
+    if (_groupColorCache.has(name)) return _groupColorCache.get(name);
     let h = 0;
     for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-    return GROUP_PALETTE[h % GROUP_PALETTE.length];
+    const n = GROUP_PALETTE.length;
+    const used = new Set(_groupColorCache.values());
+    let chosen = GROUP_PALETTE[h % n]; // fallback se todas ocupadas (> n grupos)
+    for (let k = 0; k < n; k++) {
+      const c = GROUP_PALETTE[(h + k) % n];
+      if (!used.has(c)) { chosen = c; break; }
+    }
+    _groupColorCache.set(name, chosen);
+    return chosen;
   }
   const groupTag = (g) => `<span class="tag tag-group" style="--gc:${groupColor(g)}">${esc(g)}</span>`;
 
