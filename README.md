@@ -66,4 +66,9 @@ cd board && npm install && npm test
 
 ## Licença
 
-Veja [`LICENSE`](./LICENSE).
+Copyright (C) 2026 vxfontes.
+
+Distribuído sob a **GNU Affero General Public License v3.0** — veja
+[`LICENSE`](./LICENSE). Em resumo: você pode usar, estudar e modificar o código,
+mas qualquer versão distribuída ou oferecida como serviço em rede precisa
+disponibilizar o código-fonte correspondente sob a mesma licença.
