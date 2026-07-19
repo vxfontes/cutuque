@@ -25,3 +25,6 @@ DerivedData/
 /config/*
 !/config/*.example
 /app/build/
+
+# Artefato local de tooling (skill copiada), não faz parte do projeto
+/skills/
