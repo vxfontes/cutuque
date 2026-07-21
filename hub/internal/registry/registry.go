@@ -291,6 +291,31 @@ func (r *Registry) UpdateState(id string, st session.State) error {
 	return nil
 }
 
+// UpdateStateIfCurrent muda o estado da sessão para `to` SÓ SE o estado atual
+// ainda for `from` — checagem+escrita sob o MESMO lock (mesmo espírito atômico
+// de AddIfAbsent/AddIfAllowed). Devolve ok=false sem mexer em nada se o id não
+// existir ou se o estado já tiver mudado (ex.: terminou por conta própria numa
+// corrida) — o chamador usa isso para nunca sobrescrever um estado terminal
+// legítimo com um mais tarde e obsoleto (achado da revisão da Ludmilla, card
+// 6b74500a1fd9a1f2: Launcher.Interrupt aplicava Errored incondicionalmente e
+// podia pisar num Done que acabara de chegar pelo caminho normal do stream).
+func (r *Registry) UpdateStateIfCurrent(id string, from, to session.State) (ok bool) {
+	r.mu.Lock()
+	s, exists := r.byID[id]
+	if !exists || s.State != from {
+		r.mu.Unlock()
+		return false
+	}
+	s.State = to
+	s.UpdatedAt = time.Now()
+	r.byID[id] = s
+	r.mu.Unlock()
+
+	r.broadcast(s)
+	r.persist()
+	return true
+}
+
 // SetPane atualiza o alvo tmux ("<socket>\t<pane>") de uma sessão, se mudou.
 // No-op se o id não existir, se pane vazio, ou se já for o atual (evita
 // broadcast à toa). Não mexe em UpdatedAt.

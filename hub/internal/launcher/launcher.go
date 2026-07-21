@@ -599,6 +599,93 @@ func (l *Launcher) Remove(id string) error {
 	return nil
 }
 
+// InterruptEffect descreve o efeito REAL de um Interrupt bem-sucedido — a API
+// devolve isto explicitamente para o app rotular a UI certa (card
+// 6b74500a1fd9a1f2): "pausou" (sessão tmux, continua viva) é bem diferente de
+// "encerrou" (sessão pipe-mode, processo morto).
+type InterruptEffect string
+
+const (
+	// InterruptEffectPaused: sessão tmux (session.Pane != "") — manda Esc ao
+	// pane (mesma tecla que a usuária apertaria no terminal pra abortar o
+	// turno). A sessão CONTINUA viva, volta a aceitar prompt novo.
+	InterruptEffectPaused InterruptEffect = "paused"
+	// InterruptEffectEnded: sessão pipe-mode (claude -p --input-format
+	// stream-json, sem pty) — o protocolo do CLI headless não tem hoje um
+	// interrupt "suave" que aborte só o turno preservando o processo (feature
+	// request aberta e não implementada, anthropics/claude-code#41665). A
+	// única ação possível é ENCERRAR o processo; a sessão vai a done/error e
+	// precisa de --resume para continuar a conversa.
+	InterruptEffectEnded InterruptEffect = "ended"
+)
+
+// Interrupt para o agente em execução da sessão {id}. Só faz sentido com a
+// sessão running — devolve ErrStaleState fora disso (mesma convenção de
+// respond/claimPending), para o app não confundir estado.
+//
+//   - session.Pane != "" (sessão tmux, TUI interativo de verdade por trás):
+//     manda a tecla Esc ao pane via TmuxKey (mesma infra do
+//     TmuxKeyHandler) — InterruptEffectPaused, sessão segue viva.
+//   - Sem Pane (caminho principal, LocalTarget/SSHTarget em stream-json): não
+//     há primitiva de interrupt no protocolo hoje, então a única opção
+//     honesta é encerrar o processo (h.Close(), mesma ação de Remove sem
+//     apagar do Registry) — InterruptEffectEnded.
+//
+// O erro de Close (ex.: "signal: killed") é DESCARTADO de propósito — mesmo
+// padrão do Remove: matar o processo É o sucesso esperado aqui, não falha.
+// A sessão é marcada errored explicitamente por ESTE método (não confiamos no
+// Runner detectar sozinho: ele só aplica Errored no EOF PURO do stdout —
+// agent/runner.go — e fechar o Stdout enquanto o Runner está bloqueado num
+// Read concorrente pode devolver um erro de "already closed" em vez de
+// io.EOF, o que faria o Runner retornar sem marcar terminal e a sessão ficar
+// presa em running pra sempre).
+//
+// TOCTOU corrigido na revisão da Ludmilla (card 6b74500a1fd9a1f2): entre o
+// Get() de checagem no topo deste método e o h.Close() logo abaixo, o
+// processo pode terminar NATURALMENTE (Finished→done, aplicado pelo Runner
+// numa goroutine concorrente) — o handle só sai de l.handles DEPOIS que
+// runner.Run retorna (launcher.go, goroutine de Launch), então ainda está
+// "live" nesse instante. Um Apply(Errored) incondicional aqui pisaria num
+// Done legítimo: o Engine só no-opa transições REDUNDANTES (cur == target),
+// não protege contra sobrescrever um estado terminal DIFERENTE. Por isso a
+// transição usa Registry.UpdateStateIfCurrent (mesmo espírito atômico de
+// AddIfAbsent/AddIfAllowed: checa+escreve sob o mesmo lock) condicionada a
+// StateRunning — se a sessão já saiu de running por conta própria, esta
+// chamada é um no-op e o Done legítimo sobrevive. h.Close() continua
+// incondicional: é idempotente (sync.Once) e seguro mesmo se o caminho normal
+// também estiver fechando o handle nesse instante (launcher.go:238).
+//
+// TODO(#interrupt-stdin): quando o CLI headless suportar um interrupt real no
+// stdin (ex.: {"type":"interrupt"}), trocar o branch sem Pane para escrevê-lo
+// via h.WriteJSON em vez de h.Close() — daria InterruptEffectPaused também
+// para sessões em pipe, sem matar o processo.
+func (l *Launcher) Interrupt(id string) (InterruptEffect, error) {
+	s, ok := l.reg.Get(id)
+	if !ok {
+		return "", ErrUnknownSession
+	}
+	if s.State != session.StateRunning {
+		return "", ErrStaleState
+	}
+
+	if s.Pane != "" {
+		if err := l.TmuxKey(s.Machine, s.Pane, "Escape"); err != nil {
+			return "", err
+		}
+		return InterruptEffectPaused, nil
+	}
+
+	l.mu.Lock()
+	h, live := l.handles[id]
+	l.mu.Unlock()
+	if !live {
+		return "", ErrNoHandle
+	}
+	_ = h.Close() // mata o processo; erro de saída (SIGKILL/exit) é esperado, não falha do Interrupt
+	l.reg.UpdateStateIfCurrent(id, session.StateRunning, session.StateError)
+	return InterruptEffectEnded, nil
+}
+
 // Approve aprova o pedido de permissão pendente da sessão (behavior=allow, com
 // o input original como updatedInput).
 func (l *Launcher) Approve(id string) error { return l.respond(id, true) }
@@ -658,12 +745,80 @@ func (l *Launcher) Answer(id string, answers []session.QuestionAnswer) error {
 		l.setPending(id, p)
 		return err
 	}
+	// Eco ANTES do envio ao CLI (mesma ordem cronológica do SendText/resume,
+	// launcher.go:742/803): sem isso a escolha da usuária não aparece como
+	// bolha no transcrito do app — parece que o agente seguiu sozinho (card
+	// cf66236a1b68488b). Só depois de validar (não ecoa resposta inválida).
+	l.eng.Apply(event.Event{SessionID: id, Type: event.OutputChunk, Kind: event.KindUser, Data: buildAnswerEcho(p, answers), At: time.Now()})
 	if err := h.WriteJSON(buildAnswerResponse(p, answers)); err != nil {
 		l.setPending(id, p)
 		return err
 	}
 	l.eng.Apply(event.Event{SessionID: id, Type: event.UserResponded, At: time.Now()})
 	return nil
+}
+
+// answerEchoMaxLen é o teto de tamanho do eco (kind=user) de uma resposta a
+// AskUserQuestion — mesmo padrão dos ~200 chars usados no truncamento de
+// tool_result (adapter/claudecode/parser.go), para uma pergunta com opções
+// muito longas não estourar a bolha do app.
+const answerEchoMaxLen = 200
+
+// buildAnswerEcho monta o texto do eco (kind=user) de uma resposta de seleção,
+// na ORDEM do pedido original (não da resposta do cliente): pergunta única →
+// só o(s) rótulo(s) escolhido(s); 2+ perguntas → "Header: rótulo(s)" por
+// linha, usando o `header` curto (≤12 chars) do protocolo nativo em vez do
+// enunciado completo (formato acordado com o app, card cf66236a1b68488b).
+// Trunca em answerEchoMaxLen runas.
+func buildAnswerEcho(p pending, answers []session.QuestionAnswer) string {
+	var in struct {
+		Questions []struct {
+			Question string `json:"question"`
+			Header   string `json:"header"`
+		} `json:"questions"`
+	}
+	_ = json.Unmarshal(p.input, &in)
+
+	selected := make(map[string]string, len(answers))
+	for _, a := range answers {
+		selected[a.Question] = strings.Join(a.Selected, ", ")
+	}
+
+	single := len(in.Questions) == 1
+	lines := make([]string, 0, len(in.Questions))
+	for _, q := range in.Questions {
+		val, ok := selected[q.Question]
+		if !ok {
+			continue
+		}
+		if single {
+			lines = append(lines, val)
+			continue
+		}
+		header := q.Header
+		if header == "" {
+			header = q.Question
+		}
+		lines = append(lines, header+": "+val)
+	}
+	if len(lines) == 0 {
+		// Defensivo: não deveria acontecer pós-validateAnswers (toda answer bate
+		// com uma pergunta real), mas evita eco vazio se o input divergir.
+		for _, a := range answers {
+			lines = append(lines, strings.Join(a.Selected, ", "))
+		}
+	}
+	return truncateRunes(strings.Join(lines, "\n"), answerEchoMaxLen)
+}
+
+// truncateRunes corta s em n runas (não bytes, para não quebrar UTF-8 no meio
+// de um caractere multi-byte).
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
 }
 
 // validateAnswers confere que toda resposta referencia uma pergunta existente no

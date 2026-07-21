@@ -23,6 +23,9 @@ type fakeLauncher struct {
 	sendErr       error
 	answerErr     error
 
+	interruptErr    error
+	interruptEffect launcher.InterruptEffect
+
 	machines   []string
 	removeErr  error
 	historyErr error
@@ -53,6 +56,7 @@ type fakeLauncher struct {
 	gotTmuxTarget, gotTmuxText              string
 	gotAnswerID                             string
 	gotAnswers                              []session.QuestionAnswer
+	gotInterruptID                          string
 }
 
 func (f *fakeLauncher) Machines() []string { return f.machines }
@@ -126,6 +130,10 @@ func (f *fakeLauncher) Deny(id string) error    { f.gotDenyID = id; return f.den
 func (f *fakeLauncher) Answer(id string, answers []session.QuestionAnswer) error {
 	f.gotAnswerID, f.gotAnswers = id, answers
 	return f.answerErr
+}
+func (f *fakeLauncher) Interrupt(id string) (launcher.InterruptEffect, error) {
+	f.gotInterruptID = id
+	return f.interruptEffect, f.interruptErr
 }
 func (f *fakeLauncher) SendText(id, text string) error {
 	f.gotInputID, f.gotInputText = id, text
@@ -346,6 +354,69 @@ func TestDenyOK(t *testing.T) {
 	}
 	if f.gotDenyID != "xyz" {
 		t.Errorf("Deny recebeu id=%q, quero \"xyz\"", f.gotDenyID)
+	}
+}
+
+// TestInterruptReturnsEffect cobre o contrato de POST /sessions/{id}/interrupt:
+// o corpo de sucesso traz `effect` ("paused" ou "ended") pra UI rotular certo
+// (card 6b74500a1fd9a1f2) — não é só {"ok":true} como approve/deny.
+func TestInterruptReturnsEffect(t *testing.T) {
+	cases := []struct {
+		name       string
+		effect     launcher.InterruptEffect
+		wantEffect string
+	}{
+		{"paused (tmux)", launcher.InterruptEffectPaused, "paused"},
+		{"ended (pipe-mode)", launcher.InterruptEffectEnded, "ended"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := &fakeLauncher{interruptEffect: c.effect}
+			rec := do(t, f, http.MethodPost, "/sessions/abc/interrupt", "")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, quero 200 (corpo: %s)", rec.Code, rec.Body.String())
+			}
+			if f.gotInterruptID != "abc" {
+				t.Errorf("Interrupt recebeu id=%q, quero \"abc\"", f.gotInterruptID)
+			}
+			var resp struct {
+				OK     bool   `json:"ok"`
+				Effect string `json:"effect"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("corpo inválido: %v", err)
+			}
+			if !resp.OK || resp.Effect != c.wantEffect {
+				t.Errorf("corpo = %+v, quero ok=true effect=%q", resp, c.wantEffect)
+			}
+		})
+	}
+}
+
+// TestInterruptErrorStatuses cobre o mapeamento de erro: sessão desconhecida,
+// fora de running (stale) e sem canal vivo (pipe-mode já morto) → 404/409/409.
+func TestInterruptErrorStatuses(t *testing.T) {
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{"unknown", launcher.ErrUnknownSession, http.StatusNotFound, "unknown_session"},
+		{"stale", launcher.ErrStaleState, http.StatusConflict, "stale_state"},
+		{"no handle", launcher.ErrNoHandle, http.StatusConflict, "no_live_session"},
+		{"unknown machine (tmux)", launcher.ErrUnknownMachine, http.StatusNotFound, "unknown_machine"},
+		{"tmux failed", launcher.ErrDiscoverFailed, http.StatusBadGateway, "tmux_failed"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := &fakeLauncher{interruptErr: c.err}
+			rec := do(t, f, http.MethodPost, "/sessions/abc/interrupt", "")
+			if rec.Code != c.wantStatus {
+				t.Fatalf("status = %d, quero %d (corpo: %s)", rec.Code, c.wantStatus, rec.Body.String())
+			}
+			assertErrorCode(t, rec.Body.Bytes(), c.wantCode)
+		})
 	}
 }
 

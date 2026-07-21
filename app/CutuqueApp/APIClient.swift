@@ -627,6 +627,48 @@ struct APIClient {
         try await postAction(sessionID: sessionID, action: "deny")
     }
 
+    /// Corpo de sucesso de `POST /sessions/{id}/interrupt`: `effect` diz o que
+    /// REALMENTE aconteceu — "paused" (sessão tmux-adotada, Esc no pane, a
+    /// sessão CONTINUA rodando) ou "ended" (sessão pipe-mode, sem primitiva de
+    /// interrupt suave no protocolo do CLI headless hoje — o hub encerra o
+    /// processo; a sessão vai a done/error e precisa de nova mensagem/--resume).
+    private struct InterruptResponse: Decodable {
+        let ok: Bool
+        let effect: String
+    }
+
+    /// Interrompe o turno em andamento da sessão (card 6b74500a1fd9a1f2).
+    /// `POST /sessions/{id}/interrupt`. Só faz sentido com `state == .running`
+    /// — fora disso o hub devolve 409 (`CutuqueError.staleState`). Devolve o
+    /// `effect` ("paused"/"ended") para a UI avisar corretamente qual dos
+    /// dois ocorreu — NUNCA assuma de antemão qual vai ser.
+    func interrupt(sessionID: String) async throws -> String {
+        let url = baseURL
+            .appendingPathComponent("sessions")
+            .appendingPathComponent(sessionID)
+            .appendingPathComponent("interrupt")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        switch http.statusCode {
+        case 200:
+            return try JSONDecoder().decode(InterruptResponse.self, from: data).effect
+        case 404:
+            throw CutuqueError.notFound
+        case 409:
+            // Cobre tanto "stale_state" (saiu de running) quanto "no_live_session"
+            // (sem processo vivo pra interromper) — os dois significam "o estado
+            // que você assumia não é mais válido", mesma convenção do resto do app.
+            throw CutuqueError.staleState
+        default:
+            let message = Self.errorMessage(from: data) ?? "erro do servidor"
+            throw CutuqueError.server(status: http.statusCode, message: message)
+        }
+    }
+
     /// Um item de resposta a uma pergunta de seleção: `question` é o texto
     /// EXATO da pergunta (como veio em `pending_questions`); `selected` são os
     /// labels escolhidos (1 para seleção única, N para múltipla) — ou o texto

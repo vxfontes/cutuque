@@ -104,6 +104,29 @@ final class SessionDetailViewModel: ObservableObject {
         await runAction { try await self.api.deny(sessionID: self.session.id) }
     }
 
+    /// Interrompe o turno em andamento (card 6b74500a1fd9a1f2). Não usa
+    /// `runAction` porque precisa do `effect` devolvido pelo hub ("paused" —
+    /// sessão tmux-adotada, Esc no pane, CONTINUA rodando — ou "ended" —
+    /// pipe-mode, processo encerrado) para avisar corretamente qual dos dois
+    /// aconteceu; nunca prometemos de antemão qual vai ser (a confirmação, na
+    /// view, já hedge isso conforme `session.pane`).
+    func interrupt() async {
+        actionInProgress = true
+        defer { actionInProgress = false }
+        do {
+            let effect = try await api.interrupt(sessionID: session.id)
+            notice = effect == "paused"
+                ? "o agente pausou — pode responder"
+                : "sessão encerrada — o turno não foi salvo (mande uma mensagem nova pra continuar)"
+            await reloadSession()
+        } catch CutuqueError.staleState {
+            await reloadSession()
+            notice = "o estado mudou"
+        } catch {
+            notice = error.localizedDescription
+        }
+    }
+
     /// Responde a uma ou mais perguntas de seleção pendentes (AskUserQuestion).
     /// Igual às demais ações: 409 recarrega a sessão e avisa "o estado mudou"
     /// (o card de pergunta some sozinho quando a sessão sai de needs_you).
@@ -178,6 +201,18 @@ struct SessionDetailView: View {
     @State private var renaming = false
     @State private var renameText = ""
     @State private var showingDetails = false
+    // Sheet paginado de perguntas (card 4c76eb0d0b8f3337) — capturamos o set
+    // no momento do toque no CTA (`questionsBanner`) em vez de ler
+    // `pendingQuestions` ao vivo de dentro do sheet: assim, se a sessão sair
+    // de needs_you enquanto o sheet está aberto (respondida por outro
+    // cliente, timeout), não corremos risco de o array virar vazio debaixo
+    // da view — o `.onChange` abaixo fecha o sheet nesse caso.
+    @State private var showQuestionSheet = false
+    @State private var sheetQuestions: [PendingQuestion] = []
+    // Confirmação do botão de parar (card 6b74500a1fd9a1f2) — destrutivo no
+    // caminho comum (mata o processo pipe-mode); hedge porque sessões
+    // tmux-adotadas só pausam (ver `isTmuxBacked`).
+    @State private var confirmingInterrupt = false
     // Foco do campo de digitação — a barra sobe corretamente com o teclado
     // porque só o transcrito (ScrollView) ignora a safe area do teclado;
     // a VStack externa, essa sim, empurra a barra pra cima normalmente.
@@ -233,17 +268,15 @@ struct SessionDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
-            // Card de permissão/pergunta acima do terminal (invariante docs/04:
-            // sempre exibe o texto). Pergunta manda quando presente — nunca o
-            // sim/não sem sentido para uma pergunta de seleção.
-            if let questions = pendingQuestions {
-                QuestionCardView(
-                    questions: questions,
-                    actionInProgress: model.actionInProgress,
-                    onSubmit: { answers in Task { await model.answerQuestions(answers) } },
-                    onCancel: { Task { await model.deny() } }
-                )
-            } else if let prompt = permissionPrompt {
+            // Card de permissão acima do terminal (invariante docs/04: sempre
+            // exibe o texto — aprovar/negar nunca pode ser às cegas). Pergunta
+            // de seleção NÃO fica mais fixa aqui (card 4c76eb0d0b8f3337): ela
+            // cobria a tela e empurrava pra baixo a explicação do agente, que
+            // é só mais uma bolha no transcrito logo abaixo. Agora vira um CTA
+            // fino perto do campo (`questionsBanner`, dentro de
+            // `interactionBar`) que abre um sheet paginado sob demanda —
+            // o transcrito flui livre, sem nada pinado por cima.
+            if let prompt = permissionPrompt {
                 permissionCard(prompt)
             } else if let prompt = externalPrompt {
                 externalPromptCard(prompt)
@@ -280,6 +313,34 @@ struct SessionDetailView: View {
             NavigationStack {
                 ChatDetailsView(session: model.session, displayTitle: displayTitle)
             }
+        }
+        .sheet(isPresented: $showQuestionSheet) {
+            NavigationStack {
+                QuestionCardView(
+                    questions: sheetQuestions,
+                    actionInProgress: model.actionInProgress,
+                    onSubmit: { answers in
+                        showQuestionSheet = false
+                        Task { await model.answerQuestions(answers) }
+                    },
+                    onCancel: {
+                        showQuestionSheet = false
+                        Task { await model.deny() }
+                    }
+                )
+                .navigationTitle("Precisa de você")
+                .navigationBarTitleDisplayMode(.inline)
+                // Sem botão de fechar na toolbar de propósito: o "Cancelar"
+                // (que de fato nega o pedido) já está no rodapé do
+                // QuestionCardView. Swipe-down só fecha o sheet sem decidir
+                // nada — a sessão continua needs_you e o CTA reabre depois.
+            }
+        }
+        // Sessão saiu de needs_you (respondida por outro cliente/terminal,
+        // timeout, ou a própria resposta) enquanto o sheet estava aberto →
+        // fecha sozinho, mesmo princípio do card fixo de antes.
+        .onChange(of: pendingQuestions) { _, newValue in
+            if newValue == nil { showQuestionSheet = false }
         }
         .task { await model.start() }
         .onDisappear { model.stop() }
@@ -387,6 +448,18 @@ struct SessionDetailView: View {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.actionInProgress
     }
 
+    /// Sessão tmux-adotada (TUI de verdade por trás do pane, `pane` não
+    /// vazio) — o interrupt manda só Esc ao pane e a sessão CONTINUA
+    /// rodando (hub: `Launcher.Interrupt`, `InterruptEffectPaused`). Sem pane
+    /// (caminho principal, pipe-mode) o interrupt mata o processo — não há
+    /// primitiva de "abortar só o turno" no protocolo do CLI headless hoje
+    /// (`InterruptEffectEnded`). Usamos isso pra avisar certo ANTES de agir —
+    /// nunca prometer pausa quando na prática vai encerrar, nem assustar com
+    /// "encerra" quando na prática só pausa.
+    private var isTmuxBacked: Bool {
+        !(model.session.pane ?? "").isEmpty
+    }
+
     /// Barra moderna: campo que cresce com o texto + botão circular de enviar.
     /// A mensagem enviada aparece como bolha no transcrito via o eco do
     /// hub (WS `output_chunk` kind=user) — não fazemos eco otimista aqui.
@@ -395,30 +468,81 @@ struct SessionDetailView: View {
         "Sim, prossiga", "Continua", "Rode os testes", "Commita", "Explica melhor", "Não, cancela",
     ]
 
+    /// Há uma permissão ou pergunta pendente — o CLI está travado esperando o
+    /// `control_response` nativo dela. Um quick reply nesse meio-tempo iria pro
+    /// stdin como mensagem solta, sem responder o pedido em si (e sem gente
+    /// tocar Aprovar/Negar ou o seletor da pergunta, que respondem pelo canal
+    /// certo) — oculta a barra pra não convidar a isso.
+    private var hasPendingGate: Bool {
+        model.session.pendingPrompt != nil || !(model.session.pendingQuestions ?? []).isEmpty
+    }
+
     @ViewBuilder private var quickRepliesBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(Self.quickReplies, id: \.self) { reply in
-                    Button {
-                        Task { _ = await model.sendInput(reply) }
-                    } label: {
-                        Text(reply)
-                            .font(.footnote)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color(.secondarySystemGroupedBackground), in: Capsule())
-                            .foregroundStyle(.primary)
+        if !hasPendingGate {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Self.quickReplies, id: \.self) { reply in
+                        Button {
+                            Task { _ = await model.sendInput(reply) }
+                        } label: {
+                            Text(reply)
+                                .font(.footnote)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+                                .foregroundStyle(.primary)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(model.actionInProgress)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(model.actionInProgress)
                 }
+                .padding(.horizontal, 12)
             }
+        }
+    }
+
+    /// CTA fino perto do campo (card 4c76eb0d0b8f3337) — substitui os quick
+    /// replies (que já se ocultam sozinhos via `hasPendingGate`) quando há
+    /// perguntas pendentes. Mostra o `header` direto se for 1 pergunta só;
+    /// "N perguntas pendentes" se for um set. Ao tocar, CAPTURA o set em
+    /// `sheetQuestions` (não lê `pendingQuestions` ao vivo de dentro do
+    /// sheet) e abre o sheet paginado.
+    @ViewBuilder private var questionsBanner: some View {
+        if let questions = pendingQuestions {
+            Button {
+                sheetQuestions = questions
+                showQuestionSheet = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "list.bullet.rectangle.portrait")
+                    Text(questions.count == 1 ? questions[0].header : "\(questions.count) perguntas pendentes")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    Spacer()
+                    Text("Responder")
+                        .font(.subheadline.weight(.semibold))
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                }
+                .foregroundStyle(.orange)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Color.orange.opacity(0.12), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(model.actionInProgress)
             .padding(.horizontal, 12)
+            .accessibilityLabel(
+                questions.count == 1
+                    ? "Responder pergunta: \(questions[0].header)"
+                    : "Responder \(questions.count) perguntas pendentes"
+            )
         }
     }
 
     private var interactionBar: some View {
       VStack(spacing: 8) {
+        questionsBanner
         quickRepliesBar
         HStack(alignment: .bottom, spacing: 10) {
             TextField(
@@ -433,6 +557,12 @@ struct SessionDetailView: View {
             .focused($inputFocused)
 
             Button {
+                // Rodando: o botão circular vira "parar" (card 6b74500a1fd9a1f2)
+                // — pede confirmação antes (destrutivo no caminho comum).
+                if isRunning {
+                    confirmingInterrupt = true
+                    return
+                }
                 let text = draft
                 Task {
                     if model.recapUnavailable {
@@ -455,6 +585,9 @@ struct SessionDetailView: View {
                     if model.actionInProgress {
                         ProgressView()
                             .tint(.white)
+                    } else if isRunning {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 14, weight: .bold))
                     } else {
                         Image(systemName: "arrow.up")
                             .font(.system(size: 15, weight: .bold))
@@ -462,11 +595,31 @@ struct SessionDetailView: View {
                 }
                 .frame(width: 36, height: 36)
                 .foregroundStyle(.white)
-                .background(canSend ? Color.accentColor : Color.gray.opacity(0.35), in: Circle())
+                .background(
+                    isRunning ? Color.red : (canSend ? Color.accentColor : Color.gray.opacity(0.35)),
+                    in: Circle()
+                )
             }
-            .disabled(!canSend)
+            .disabled(isRunning ? model.actionInProgress : !canSend)
             .animation(.snappy, value: canSend)
-            .accessibilityLabel("Enviar mensagem")
+            .animation(.snappy, value: isRunning)
+            .accessibilityLabel(isRunning ? "Parar o agente" : "Enviar mensagem")
+            .confirmationDialog(
+                isTmuxBacked ? "Interromper o turno?" : "Encerrar o turno?",
+                isPresented: $confirmingInterrupt,
+                titleVisibility: .visible
+            ) {
+                Button(isTmuxBacked ? "Interromper" : "Encerrar", role: .destructive) {
+                    Task { await model.interrupt() }
+                }
+                Button("Cancelar", role: .cancel) {}
+            } message: {
+                Text(
+                    isTmuxBacked
+                        ? "Manda Esc pro terminal — a sessão continua rodando, só o turno atual é abortado."
+                        : "Essa sessão não tem como só abortar o turno — o processo é encerrado e o progresso não salvo se perde (dá pra continuar mandando uma mensagem nova depois)."
+                )
+            }
         }
         .padding(.horizontal, 12)
       }
@@ -505,9 +658,9 @@ struct SessionDetailView: View {
                         emptyTranscript
                     } else {
                         LazyVStack(alignment: .leading, spacing: 14) {
-                            ForEach(Array(chatItems.enumerated()), id: \.offset) { index, item in
+                            ForEach(chatItems) { item in
                                 chatItemView(item)
-                                    .id(index)
+                                    .id(item.id)
                                     .transition(.opacity.combined(with: .move(edge: .bottom)))
                             }
                             // Indicador discreto de "digitando" enquanto o agente roda.
@@ -520,7 +673,14 @@ struct SessionDetailView: View {
                                 .background(bottomProbe)
                         }
                         .padding(16)
-                        .animation(.easeOut(duration: 0.25), value: chatItems.count)
+                        // SEM .animation(value: chatItems.count) aqui: agora que ChatItem
+                        // tem identidade estável (id herdado do OutputChunk que originou o
+                        // grupo), o .transition acima só dispara pra itens genuinamente
+                        // novos. O append ao vivo já é animado no ViewModel
+                        // (startLiveUpdates, withAnimation no append) — duplicar a animação
+                        // aqui, num LazyVStack, era o que deixava linhas fora da viewport
+                        // presas em opacidade intermediária (bug do transcrito sumindo —
+                        // card d1a0796400fb73f0).
                     }
                 }
                 .scrollDismissesKeyboard(.interactively)
@@ -599,7 +759,7 @@ struct SessionDetailView: View {
     /// Desenha um item do transcrito conforme seu papel.
     @ViewBuilder
     private func chatItemView(_ item: ChatItem) -> some View {
-        switch item {
+        switch item.content {
         case .user(let text):
             userBubble(text)
         case .assistant(let text):
@@ -730,50 +890,74 @@ private struct TypingIndicator: View {
 // MARK: - Itens do transcrito (agrupamento de chunks crus)
 
 /// Item pronto pra desenhar no transcrito: já agrupado a partir dos
-/// `OutputChunk` crus (ver `grouping(_:)`).
-private enum ChatItem {
-    case user(String)
-    case assistant(String)
-    /// Uma tool call e, se já chegou, seu resultado (tool_result).
-    case tool(command: String, result: String?)
+/// `OutputChunk` crus (ver `grouping(_:)`). `id` é herdado do `OutputChunk`
+/// que ORIGINOU o grupo (o primeiro chunk daquele item) e permanece o MESMO
+/// através dos merges — identidade estável pro `ForEach`. Antes disso o
+/// `ForEach` usava o índice do array como id: como `grouping(_:)` recomputa
+/// tudo a cada render (merges de `.assistant`, resolução retroativa de
+/// `tool_result` num item mais antigo, trim de `model.chunks` na frente), o
+/// mapeamento índice→conteúdo não era estável entre renders, e o SwiftUI
+/// tratava linhas existentes como removidas/inseridas — combinado com
+/// `.transition` + `.animation` num `LazyVStack` (que só materializa linhas
+/// visíveis), linhas fora da viewport ficavam presas em opacidade
+/// intermediária até um remount completo (sair/reentrar). Ver card
+/// d1a0796400fb73f0.
+private struct ChatItem: Identifiable {
+    let id: UUID
+    var content: Content
 
-    /// Agrupa a lista crua e cronológica de chunks: linhas consecutivas do
-    /// mesmo papel se fundem (evita várias bolhas picadas pro mesmo turno);
-    /// tool + tool_result que vêm em seguida viram um único grupo recolhível.
+    enum Content {
+        case user(String)
+        case assistant(String)
+        /// Uma tool call e, se já chegou, seu resultado (tool_result).
+        case tool(command: String, result: String?)
+    }
+
+    /// Agrupa a lista crua e cronológica de chunks. `.assistant` consecutivos
+    /// se fundem (evita várias bolhas picadas pro streaming do mesmo turno).
+    /// `.user` NUNCA funde — cada input da usuária já chega inteiro num chunk
+    /// só (diferente do assistente, que estrema em pedaços); fundir bolhas de
+    /// usuário era o que causava o "chip de resposta rápida concatenado com o
+    /// prompt inicial" (card 1297f46a93f95b40): quando o agente pedia
+    /// permissão/pergunta sem responder nada em texto antes, o prompt inicial
+    /// ficava como último chunk `.user` do histórico, e o eco do chip (também
+    /// `.user`) se fundia visualmente nele com "\n" — dois envios distintos e
+    /// corretos, mas mostrados como um só. tool + tool_result que vêm em
+    /// seguida viram um único grupo recolhível.
     static func grouping(_ chunks: [OutputChunk]) -> [ChatItem] {
         var items: [ChatItem] = []
         for chunk in chunks {
             switch chunk.kind {
             case .user:
-                if case .user(let previous) = items.last {
-                    items[items.count - 1] = .user(previous + "\n" + chunk.text)
-                } else {
-                    items.append(.user(chunk.text))
-                }
+                // Sempre um item novo, com o id do próprio chunk — nunca funde
+                // com o item anterior (ver doc acima).
+                items.append(ChatItem(id: chunk.id, content: .user(chunk.text)))
             case .assistant:
-                if case .assistant(let previous) = items.last {
-                    items[items.count - 1] = .assistant(previous + "\n" + chunk.text)
+                if let last = items.last, case .assistant(let previous) = last.content {
+                    items[items.count - 1].content = .assistant(previous + "\n" + chunk.text)
                 } else {
-                    items.append(.assistant(chunk.text))
+                    items.append(ChatItem(id: chunk.id, content: .assistant(chunk.text)))
                 }
             case .tool:
                 // CADA tool call é um item próprio — o Claude emite vários
                 // tool_use no mesmo turno (ex.: 2 Reads paralelos) e fundir
                 // esconderia todas menos a primeira (review UX, bloqueante).
-                items.append(.tool(command: chunk.text, result: nil))
+                items.append(ChatItem(id: chunk.id, content: .tool(command: chunk.text, result: nil)))
             case .toolResult:
                 // Pareia com a tool pendente mais ANTIGA sem resultado: os
-                // tool_result chegam na ordem das chamadas (FIFO).
+                // tool_result chegam na ordem das chamadas (FIFO). Reusa o id
+                // do item da tool (não o do chunk de resultado) — a identidade
+                // da linha continua sendo a da tool call, só o conteúdo muda.
                 if let idx = items.firstIndex(where: {
-                    if case .tool(_, let r) = $0 { return r == nil }
+                    if case .tool(_, let r) = $0.content { return r == nil }
                     return false
                 }) {
-                    if case .tool(let command, _) = items[idx] {
-                        items[idx] = .tool(command: command, result: chunk.text)
+                    if case .tool(let command, _) = items[idx].content {
+                        items[idx].content = .tool(command: command, result: chunk.text)
                     }
                 } else {
                     // Borda: tool_result sem tool anterior (histórico truncado).
-                    items.append(.tool(command: "resultado", result: chunk.text))
+                    items.append(ChatItem(id: chunk.id, content: .tool(command: "resultado", result: chunk.text)))
                 }
             }
         }

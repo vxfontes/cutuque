@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -299,6 +301,92 @@ func TestAnswerWritesExactControlResponseSingle(t *testing.T) {
 	final, _ := reg.Get(sid)
 	if len(final.PendingQuestions) != 0 {
 		t.Errorf("PendingQuestions = %+v, quero vazio após responder", final.PendingQuestions)
+	}
+}
+
+// TestAnswerEchoesChoiceAsUserOutputChunk cobre o card cf66236a1b68488b: a
+// escolha da usuária tem que aparecer no transcrito como kind=user (senão
+// parece que o agente respondeu sozinho, pior em multiseleção).
+func TestAnswerEchoesChoiceAsUserOutputChunk(t *testing.T) {
+	tgt := &scriptTarget{name: "macbook", run: askUserQuestionScript, captured: make(chan string, 1)}
+	l, reg := newTestLauncher(tgt)
+
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "escolha uma cor", "", "", "", ""); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	waitFor(t, func() bool {
+		got, _ := reg.Get(sid)
+		return got.State == session.StateNeedsYou
+	})
+
+	if err := l.Answer(sid, []session.QuestionAnswer{{Question: "Qual cor você prefere?", Selected: []string{"Vermelho"}}}); err != nil {
+		t.Fatalf("Answer: %v", err)
+	}
+	<-tgt.captured // espera o control_response ser escrito: eco já foi gravado antes (mesma ordem do WriteJSON)
+
+	out := reg.Output(sid)
+	found := false
+	for _, c := range out {
+		if c.Kind == event.KindUser && c.Text == "Vermelho" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Output = %+v, quero um chunk {kind:user, text:\"Vermelho\"}", out)
+	}
+}
+
+// TestAnswerEchoesMultiQuestionWithHeaderFormat cobre 2+ perguntas: o eco usa
+// "Header: valor" por linha, na ORDEM do pedido original — não da resposta do
+// cliente (aqui invertida de propósito).
+func TestAnswerEchoesMultiQuestionWithHeaderFormat(t *testing.T) {
+	const (
+		multiReqID     = "f8a9ad13-multi-0001"
+		multiToolUseID = "toolu_multi_0001"
+		multiInput     = `{"questions":[{"question":"Qual cor você prefere?","header":"Cor","options":[{"label":"Vermelho"},{"label":"Azul"}],"multiSelect":false},{"question":"Qual linguagem?","header":"Lang","options":[{"label":"Go"},{"label":"Swift"}],"multiSelect":false}]}`
+		multiLine      = `{"type":"control_request","request_id":"` + multiReqID + `","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":` + multiInput + `,"tool_use_id":"` + multiToolUseID + `","requires_user_interaction":true}}`
+	)
+	tgt := &scriptTarget{
+		name:     "macbook",
+		captured: make(chan string, 1),
+		run: func(stdout io.Writer, stdin *bufio.Reader, captured chan<- string) {
+			_, _ = stdin.ReadString('\n') // prompt inicial
+			_, _ = io.WriteString(stdout, initLine+"\n")
+			_, _ = io.WriteString(stdout, multiLine+"\n")
+			resp, _ := stdin.ReadString('\n')
+			captured <- trimNL(resp)
+			_, _ = io.WriteString(stdout, resultLine+"\n")
+		},
+	}
+	l, reg := newTestLauncher(tgt)
+
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "escolha", "", "", "", ""); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	waitFor(t, func() bool {
+		got, _ := reg.Get(sid)
+		return got.State == session.StateNeedsYou
+	})
+
+	err := l.Answer(sid, []session.QuestionAnswer{
+		{Question: "Qual linguagem?", Selected: []string{"Go"}},
+		{Question: "Qual cor você prefere?", Selected: []string{"Vermelho"}},
+	})
+	if err != nil {
+		t.Fatalf("Answer: %v", err)
+	}
+	<-tgt.captured
+
+	out := reg.Output(sid)
+	want := "Cor: Vermelho\nLang: Go"
+	found := false
+	for _, c := range out {
+		if c.Kind == event.KindUser && c.Text == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Output = %+v, quero um chunk {kind:user, text:%q}", out, want)
 	}
 }
 
@@ -913,5 +1001,290 @@ func TestResumeReusesSessionModel(t *testing.T) {
 	// resume chama Start de forma síncrona antes de retornar.
 	if tgt.lastModel != "openai/gpt-5.4-mini" {
 		t.Errorf("model no resume = %q, quero o modelo da sessão (openai/gpt-5.4-mini)", tgt.lastModel)
+	}
+}
+
+// --- buildAnswerEcho (unitário) ---------------------------------------------
+
+// TestBuildAnswerEchoSingleQuestion cobre 1 pergunta: o eco é só o(s) valor(es),
+// sem header/prefixo (card cf66236a1b68488b).
+func TestBuildAnswerEchoSingleQuestion(t *testing.T) {
+	p := pending{input: json.RawMessage(`{"questions":[{"question":"Qual cor você prefere?","header":"Cor"}]}`)}
+	got := buildAnswerEcho(p, []session.QuestionAnswer{{Question: "Qual cor você prefere?", Selected: []string{"Vermelho"}}})
+	if want := "Vermelho"; got != want {
+		t.Errorf("buildAnswerEcho = %q, quero %q", got, want)
+	}
+}
+
+// TestBuildAnswerEchoMultiSelectJoinsWithComma cobre 1 pergunta multiSelect: os
+// rótulos escolhidos viram uma linha só, juntados com ", ".
+func TestBuildAnswerEchoMultiSelectJoinsWithComma(t *testing.T) {
+	p := pending{input: json.RawMessage(`{"questions":[{"question":"Quais cores?","header":"Cor"}]}`)}
+	got := buildAnswerEcho(p, []session.QuestionAnswer{{Question: "Quais cores?", Selected: []string{"Vermelho", "Azul"}}})
+	if want := "Vermelho, Azul"; got != want {
+		t.Errorf("buildAnswerEcho = %q, quero %q", got, want)
+	}
+}
+
+// TestBuildAnswerEchoMultiQuestionUsesHeader cobre 2+ perguntas: cada linha é
+// "Header: valor", na ordem das perguntas originais (não da resposta).
+func TestBuildAnswerEchoMultiQuestionUsesHeader(t *testing.T) {
+	p := pending{input: json.RawMessage(`{"questions":[{"question":"Qual cor você prefere?","header":"Cor"},{"question":"Qual linguagem?","header":"Lang"}]}`)}
+	got := buildAnswerEcho(p, []session.QuestionAnswer{
+		{Question: "Qual linguagem?", Selected: []string{"Go"}},
+		{Question: "Qual cor você prefere?", Selected: []string{"Vermelho"}},
+	})
+	if want := "Cor: Vermelho\nLang: Go"; got != want {
+		t.Errorf("buildAnswerEcho = %q, quero %q", got, want)
+	}
+}
+
+// TestBuildAnswerEchoFallsBackToQuestionWhenHeaderEmpty cobre o fallback: sem
+// header preenchido, usa o texto completo da pergunta como prefixo da linha.
+func TestBuildAnswerEchoFallsBackToQuestionWhenHeaderEmpty(t *testing.T) {
+	p := pending{input: json.RawMessage(`{"questions":[{"question":"Qual cor você prefere?"},{"question":"Qual linguagem?","header":"Lang"}]}`)}
+	got := buildAnswerEcho(p, []session.QuestionAnswer{
+		{Question: "Qual cor você prefere?", Selected: []string{"Vermelho"}},
+		{Question: "Qual linguagem?", Selected: []string{"Go"}},
+	})
+	if want := "Qual cor você prefere?: Vermelho\nLang: Go"; got != want {
+		t.Errorf("buildAnswerEcho = %q, quero %q", got, want)
+	}
+}
+
+// TestBuildAnswerEchoTruncatesLongText garante o teto de answerEchoMaxLen
+// runas — mesmo padrão de truncamento do parser.go (~200 chars), pra não
+// inflar o transcrito com um eco gigante.
+func TestBuildAnswerEchoTruncatesLongText(t *testing.T) {
+	long := strings.Repeat("a", answerEchoMaxLen+50)
+	p := pending{input: json.RawMessage(`{"questions":[{"question":"q","header":"H"}]}`)}
+	got := buildAnswerEcho(p, []session.QuestionAnswer{{Question: "q", Selected: []string{long}}})
+	if n := len([]rune(got)); n != answerEchoMaxLen {
+		t.Errorf("len(buildAnswerEcho) = %d, quero %d", n, answerEchoMaxLen)
+	}
+}
+
+// TestBuildAnswerEchoFallsBackWhenInputUnparsable cobre a defesa: se p.input
+// não trouxer as perguntas (nil/vazio), ainda assim ecoa algo a partir das
+// respostas dadas, em vez de devolver uma string vazia (o app perderia a
+// bolha da usuária).
+func TestBuildAnswerEchoFallsBackWhenInputUnparsable(t *testing.T) {
+	p := pending{input: nil}
+	got := buildAnswerEcho(p, []session.QuestionAnswer{{Question: "Qual cor?", Selected: []string{"Vermelho"}}})
+	if want := "Vermelho"; got != want {
+		t.Errorf("buildAnswerEcho = %q, quero %q", got, want)
+	}
+}
+
+// --- Interrupt ---------------------------------------------------------------
+
+// tmuxFakeTarget é um fake mínimo que só existe pra exercer o branch tmux do
+// Interrupt: satisfaz claudecode.Target (o bastante pra newTestLauncher) e
+// claudecode.Tmuxer (só TmuxKey é exercido por este teste; os demais métodos
+// da interface existem só pra satisfazer o type assertion em anyTarget).
+type tmuxFakeTarget struct {
+	name      string
+	gotTarget string
+	gotKey    string
+	keyErr    error
+}
+
+func (f *tmuxFakeTarget) Name() string { return f.name }
+func (f *tmuxFakeTarget) Kind() string { return "claude-code" }
+
+func (f *tmuxFakeTarget) NewRunner(app claudecode.Applier) *claudecode.Runner {
+	return claudecode.NewRunner(app)
+}
+
+func (f *tmuxFakeTarget) Start(_ context.Context, _, _, _, _, _, _ string) (*claudecode.Handle, error) {
+	return nil, errors.New("tmuxFakeTarget: Start não é usado neste teste")
+}
+
+func (f *tmuxFakeTarget) TmuxList(_ context.Context) ([]claudecode.TmuxPane, error) { return nil, nil }
+func (f *tmuxFakeTarget) TmuxCapture(_ context.Context, _ string) (string, error)    { return "", nil }
+func (f *tmuxFakeTarget) TmuxSend(_ context.Context, _, _ string) error             { return nil }
+
+func (f *tmuxFakeTarget) TmuxKey(_ context.Context, target, key string) error {
+	f.gotTarget = target
+	f.gotKey = key
+	return f.keyErr
+}
+
+func (f *tmuxFakeTarget) TmuxResize(_ context.Context, _ string, _, _ int) error { return nil }
+func (f *tmuxFakeTarget) TmuxKill(_ context.Context, _ string) error             { return nil }
+func (f *tmuxFakeTarget) TmuxKillServer(_ context.Context, _ string) error       { return nil }
+
+// TestInterruptUnknownSession cobre o card 6b74500a1fd9a1f2: id desconhecido
+// devolve ErrUnknownSession, mesma convenção de Approve/Deny/Answer.
+func TestInterruptUnknownSession(t *testing.T) {
+	l, _ := newTestLauncher(nil)
+	if _, err := l.Interrupt("fantasma"); err != ErrUnknownSession {
+		t.Errorf("err = %v, quero ErrUnknownSession", err)
+	}
+}
+
+// TestInterruptStaleState cobre sessão que existe mas não está running (ex.:
+// já terminou) — não faz sentido interromper o que já parou.
+func TestInterruptStaleState(t *testing.T) {
+	l, reg := newTestLauncher(nil)
+	const id = "done-sess-0001"
+	reg.AddIfAbsent(session.Session{ID: id, Machine: "macbook", Agent: "claude-code", State: session.StateDone})
+
+	if _, err := l.Interrupt(id); err != ErrStaleState {
+		t.Errorf("err = %v, quero ErrStaleState", err)
+	}
+}
+
+// TestInterruptNoHandle cobre sessão running sem handle vivo no processo
+// (ex.: sessão seedada direto no registry, nunca passou por Launch) — não há
+// processo pra matar.
+func TestInterruptNoHandle(t *testing.T) {
+	l, reg := newTestLauncher(nil)
+	const id = "running-sess-0001"
+	reg.AddIfAbsent(session.Session{ID: id, Machine: "macbook", Agent: "claude-code", State: session.StateRunning})
+
+	if _, err := l.Interrupt(id); err != ErrNoHandle {
+		t.Errorf("err = %v, quero ErrNoHandle", err)
+	}
+}
+
+// TestInterruptPipeModeEndsSession cobre o caminho principal (sem Pane): mata
+// o processo (h.Close()) e marca a sessão como error explicitamente — não
+// confia no Runner detectar sozinho o EOF (ver doc de Interrupt em
+// launcher.go). Chamar de novo depois já dá ErrStaleState (idempotência: não
+// tenta matar um handle já morto outra vez).
+func TestInterruptPipeModeEndsSession(t *testing.T) {
+	tgt := &scriptTarget{
+		name:     "macbook",
+		captured: make(chan string, 1),
+		run: func(stdout io.Writer, stdin *bufio.Reader, _ chan<- string) {
+			_, _ = stdin.ReadString('\n') // prompt inicial
+			_, _ = io.WriteString(stdout, initLine+"\n")
+			_, _ = stdin.ReadString('\n') // bloqueia — "turno em andamento" até o Interrupt fechar o stdin
+		},
+	}
+	l, reg := newTestLauncher(tgt)
+
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "tarefa longa", "", "", "", ""); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	waitFor(t, func() bool {
+		got, _ := reg.Get(sid)
+		return got.State == session.StateRunning
+	})
+
+	effect, err := l.Interrupt(sid)
+	if err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	if effect != InterruptEffectEnded {
+		t.Errorf("effect = %q, quero %q", effect, InterruptEffectEnded)
+	}
+	got, _ := reg.Get(sid)
+	if got.State != session.StateError {
+		t.Errorf("State = %q após Interrupt (pipe-mode), quero StateError", got.State)
+	}
+
+	if _, err := l.Interrupt(sid); err != ErrStaleState {
+		t.Errorf("segunda chamada: err = %v, quero ErrStaleState", err)
+	}
+}
+
+// finishOnCloseWriter envolve o Stdin do handle e dispara onClose ANTES de
+// fechar de verdade — usado só para reproduzir deterministicamente, num único
+// goroutine, o pior instante da corrida do TestInterruptDoesNotOverwriteNaturalCompletionRace
+// (sem depender de sorte de agendamento entre goroutines de verdade).
+type finishOnCloseWriter struct {
+	io.WriteCloser
+	onClose func()
+}
+
+func (f *finishOnCloseWriter) Close() error {
+	f.onClose()
+	return f.WriteCloser.Close()
+}
+
+// TestInterruptDoesNotOverwriteNaturalCompletionRace cobre o achado
+// BLOQUEANTE da revisão da Ludmilla (card 6b74500a1fd9a1f2): entre o Get() de
+// checagem no topo do Interrupt e a transição final (Errored), o processo
+// pode terminar NATURALMENTE (Finished→done, aplicado pelo Runner numa
+// goroutine concorrente) — o handle só sai de l.handles DEPOIS que runner.Run
+// retorna, então ainda está "live" nesse instante. Antes do fix, o
+// Apply(Errored) incondicional pisava nesse Done legítimo.
+//
+// Reproduz a corrida de forma determinística (sem depender de agendamento):
+// envenena o Stdin do handle vivo para que fechá-lo — exatamente o que
+// Interrupt faz via h.Close() — dispare o Finished ANTES de o Close
+// retornar, simulando o pior caso possível da janela real.
+func TestInterruptDoesNotOverwriteNaturalCompletionRace(t *testing.T) {
+	tgt := &scriptTarget{
+		name:     "macbook",
+		captured: make(chan string, 1),
+		run: func(stdout io.Writer, stdin *bufio.Reader, _ chan<- string) {
+			_, _ = stdin.ReadString('\n') // prompt inicial
+			_, _ = io.WriteString(stdout, initLine+"\n")
+			_, _ = stdin.ReadString('\n') // bloqueia — "turno em andamento"
+		},
+	}
+	l, reg := newTestLauncher(tgt)
+
+	if _, err := l.Launch(context.Background(), "macbook", "claude-code", "tarefa longa", "", "", "", ""); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	waitFor(t, func() bool {
+		got, _ := reg.Get(sid)
+		return got.State == session.StateRunning
+	})
+
+	l.mu.Lock()
+	h := l.handles[sid]
+	h.Stdin = &finishOnCloseWriter{
+		WriteCloser: h.Stdin,
+		onClose: func() {
+			// Simula o Runner aplicando o Finished legítimo EXATAMENTE durante
+			// o Close do Interrupt — o pior instante possível da corrida real.
+			l.eng.Apply(event.Event{SessionID: sid, Type: event.Finished, At: time.Now()})
+		},
+	}
+	l.mu.Unlock()
+
+	effect, err := l.Interrupt(sid)
+	if err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	if effect != InterruptEffectEnded {
+		t.Errorf("effect = %q, quero %q (o processo foi encerrado de um jeito ou de outro)", effect, InterruptEffectEnded)
+	}
+
+	got, _ := reg.Get(sid)
+	if got.State != session.StateDone {
+		t.Errorf("State = %q, quero StateDone preservado — o Errored do Interrupt não pode pisar num done legítimo que chegou primeiro", got.State)
+	}
+}
+
+// TestInterruptTmuxPanePauses cobre o caminho tmux (session.Pane != ""): manda
+// a tecla Esc ao pane via TmuxKey e devolve InterruptEffectPaused — a sessão
+// CONTINUA running, diferente do caminho pipe-mode.
+func TestInterruptTmuxPanePauses(t *testing.T) {
+	tgt := &tmuxFakeTarget{name: "macbook"}
+	l, reg := newTestLauncher(tgt)
+	const id = "tmux-sess-0001"
+	const pane = "/tmp/tmux-501/default\t%12"
+	reg.AddIfAbsent(session.Session{ID: id, Machine: "macbook", Agent: "claude-code", State: session.StateRunning, Pane: pane})
+
+	effect, err := l.Interrupt(id)
+	if err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	if effect != InterruptEffectPaused {
+		t.Errorf("effect = %q, quero %q", effect, InterruptEffectPaused)
+	}
+	if tgt.gotTarget != pane || tgt.gotKey != "Escape" {
+		t.Errorf("TmuxKey chamado com (%q, %q), quero (%q, %q)", tgt.gotTarget, tgt.gotKey, pane, "Escape")
+	}
+
+	got, _ := reg.Get(id)
+	if got.State != session.StateRunning {
+		t.Errorf("State = %q após pausar via tmux, quero StateRunning (sessão continua viva)", got.State)
 	}
 }

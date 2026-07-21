@@ -208,6 +208,59 @@ func TestUpdateStateMissingReturnsError(t *testing.T) {
 	}
 }
 
+// TestUpdateStateIfCurrentAppliesWhenStateMatches cobre o caminho feliz da
+// primitiva atômica: estado atual bate com `from`, a transição acontece.
+func TestUpdateStateIfCurrentAppliesWhenStateMatches(t *testing.T) {
+	r := New()
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	r.Add(mkSession("a", old))
+
+	ok := r.UpdateStateIfCurrent("a", session.StateRunning, session.StateError)
+	if !ok {
+		t.Fatalf("UpdateStateIfCurrent = false, quero true (estado batia)")
+	}
+	got, _ := r.Get("a")
+	if got.State != session.StateError {
+		t.Errorf("State = %q, quero \"error\"", got.State)
+	}
+	if !got.UpdatedAt.After(old) {
+		t.Errorf("UpdatedAt = %v, quero depois de %v", got.UpdatedAt, old)
+	}
+}
+
+// TestUpdateStateIfCurrentNoOpsWhenStateChanged cobre o achado BLOQUEANTE da
+// revisão da Ludmilla (card 6b74500a1fd9a1f2): se o estado atual já não é mais
+// `from` (ex.: a sessão terminou com sucesso por conta própria numa corrida),
+// a chamada não pode sobrescrever o estado terminal legítimo.
+func TestUpdateStateIfCurrentNoOpsWhenStateChanged(t *testing.T) {
+	r := New()
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	s := mkSession("a", old)
+	s.State = session.StateDone
+	r.Add(s)
+
+	ok := r.UpdateStateIfCurrent("a", session.StateRunning, session.StateError)
+	if ok {
+		t.Fatalf("UpdateStateIfCurrent = true, quero false (estado já não era running)")
+	}
+	got, _ := r.Get("a")
+	if got.State != session.StateDone {
+		t.Errorf("State = %q, quero \"done\" preservado (não pode virar error)", got.State)
+	}
+	if got.UpdatedAt.After(old) {
+		t.Errorf("UpdatedAt = %v, mudou mesmo com no-op — não devia", got.UpdatedAt)
+	}
+}
+
+// TestUpdateStateIfCurrentMissingSessionReturnsFalse cobre id desconhecido:
+// no-op, sem pânico.
+func TestUpdateStateIfCurrentMissingSessionReturnsFalse(t *testing.T) {
+	r := New()
+	if ok := r.UpdateStateIfCurrent("fantasma", session.StateRunning, session.StateError); ok {
+		t.Errorf("UpdateStateIfCurrent = true, quero false (sessão não existe)")
+	}
+}
+
 func TestSubscribeReceivesOnAdd(t *testing.T) {
 	r := New()
 	sub := r.Subscribe()

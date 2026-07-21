@@ -21,6 +21,7 @@ type Launcher interface {
 	Approve(id string) error
 	Deny(id string) error
 	Answer(id string, answers []session.QuestionAnswer) error
+	Interrupt(id string) (launcher.InterruptEffect, error)
 	SendText(id, text string) error
 	Reply(id, text string) error
 	Machines() []string
@@ -562,6 +563,44 @@ func AnswerHandler(lch Launcher) http.HandlerFunc {
 			writeJSONError(w, http.StatusConflict, "stale_state")
 		default:
 			writeOK(w)
+		}
+	}
+}
+
+// interruptResponse é o corpo de sucesso de POST /sessions/{id}/interrupt: o
+// app usa `effect` pra rotular a UI certa — "paused" (sessão tmux, continua
+// viva) é bem diferente de "ended" (pipe-mode, processo encerrado).
+type interruptResponse struct {
+	OK     bool                     `json:"ok"`
+	Effect launcher.InterruptEffect `json:"effect"`
+}
+
+// InterruptHandler para o agente em execução da sessão {id}: pausa (sessão
+// tmux, Esc no pane) ou encerra (sessão pipe-mode, sem primitiva de interrupt
+// suave no protocolo do CLI hoje — ver Launcher.Interrupt). Só válido com a
+// sessão running.
+//
+//	POST /sessions/{id}/interrupt → 200 {"ok":true,"effect":"paused"|"ended"} |
+//	404 unknown_session | 409 stale_state | 409 no_live_session | 502 tmux_failed
+func InterruptHandler(lch Launcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		effect, err := lch.Interrupt(id)
+		switch {
+		case errors.Is(err, launcher.ErrUnknownSession):
+			writeJSONError(w, http.StatusNotFound, "unknown_session")
+		case errors.Is(err, launcher.ErrStaleState):
+			writeJSONError(w, http.StatusConflict, "stale_state")
+		case errors.Is(err, launcher.ErrNoHandle):
+			writeJSONError(w, http.StatusConflict, "no_live_session")
+		case errors.Is(err, launcher.ErrUnknownMachine):
+			writeJSONError(w, http.StatusNotFound, "unknown_machine")
+		case err != nil:
+			writeJSONError(w, http.StatusBadGateway, "tmux_failed")
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(interruptResponse{OK: true, Effect: effect})
 		}
 	}
 }

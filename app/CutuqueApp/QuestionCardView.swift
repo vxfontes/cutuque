@@ -25,9 +25,13 @@ private struct QuestionAnswer {
     }
 }
 
-/// Card que SUBSTITUI o de permissão sim/não quando o pedido pendente é uma
-/// pergunta de seleção (1 a 4 perguntas, cada uma com 2 a 4 opções). Mesmo
-/// estilo visual do `permissionCard` (fundo laranja, cantos 16, mesma tipografia).
+/// Conteúdo de um SHEET (apresentado sob demanda via o CTA "Responder" perto
+/// do campo — ver `SessionDetailView.questionsBanner`) para responder 1 a 4
+/// perguntas de seleção. Pagina UMA pergunta por vez — nunca despeja todas de
+/// uma vez — deixando o texto do agente no transcrito visível antes de abrir
+/// (card 4c76eb0d0b8f3337: antes era um card fixo acima do transcrito,
+/// cobrindo a tela; agora é conteúdo isolado, só aberto quando a usuária toca
+/// no CTA).
 struct QuestionCardView: View {
     let questions: [PendingQuestion]
     let actionInProgress: Bool
@@ -39,23 +43,55 @@ struct QuestionCardView: View {
     let onCancel: () -> Void
 
     @State private var answers: [String: QuestionAnswer] = [:]
+    /// Página atual (0-based) — "Pergunta X de N" só aparece quando há mais
+    /// de uma pergunta no set.
+    @State private var currentIndex = 0
 
+    private var currentQuestion: PendingQuestion { questions[currentIndex] }
+    private var isLastQuestion: Bool { currentIndex == questions.count - 1 }
+
+    /// Válido pra HABILITAR "Responder" (na última página) — TODAS as
+    /// perguntas do set, não só a atual, já que dá pra voltar e mudar
+    /// respostas anteriores sem perder o progresso.
     private var allValid: Bool {
         questions.allSatisfy { (answers[$0.id] ?? QuestionAnswer()).isValid }
     }
 
+    /// Válido pra avançar da página atual pra próxima — só a pergunta
+    /// exibida agora precisa estar respondida.
+    private var currentValid: Bool {
+        (answers[currentQuestion.id] ?? QuestionAnswer()).isValid
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label("Precisa de você", systemImage: "list.bullet.rectangle.portrait")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.orange)
+            if questions.count > 1 {
+                HStack(spacing: 8) {
+                    Button {
+                        currentIndex -= 1
+                    } label: {
+                        Image(systemName: "chevron.left")
+                    }
+                    .opacity(currentIndex > 0 ? 1 : 0)
+                    .disabled(currentIndex == 0)
+                    .accessibilityHidden(currentIndex == 0)
+                    .accessibilityLabel("Pergunta anterior")
 
-            ForEach(questions) { question in
-                QuestionBlockView(question: question, answer: binding(for: question))
-                if question.id != questions.last?.id {
-                    Divider()
+                    Spacer()
+                    Text("Pergunta \(currentIndex + 1) de \(questions.count)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+
+                    // Espaçador simétrico: o botão de voltar sempre ocupa
+                    // espaço (só fica invisível/desabilitado na 1ª página),
+                    // então o texto central nunca pula de posição.
+                    Image(systemName: "chevron.left").opacity(0)
+                        .accessibilityHidden(true)
                 }
             }
+
+            QuestionBlockView(question: currentQuestion, answer: binding(for: currentQuestion))
 
             HStack(spacing: 12) {
                 Button {
@@ -68,20 +104,27 @@ struct QuestionCardView: View {
                 .accessibilityLabel("Cancelar a pergunta")
 
                 Button {
-                    let result = questions.map { question in
-                        APIClient.AnswerItem(
-                            question: question.question,
-                            selected: (answers[question.id] ?? QuestionAnswer()).values
-                        )
+                    if isLastQuestion {
+                        let result = questions.map { question in
+                            APIClient.AnswerItem(
+                                question: question.question,
+                                selected: (answers[question.id] ?? QuestionAnswer()).values
+                            )
+                        }
+                        onSubmit(result)
+                    } else {
+                        currentIndex += 1
                     }
-                    onSubmit(result)
                 } label: {
-                    Label("Responder", systemImage: "checkmark")
-                        .frame(maxWidth: .infinity)
+                    Label(
+                        isLastQuestion ? "Responder" : "Próxima",
+                        systemImage: isLastQuestion ? "checkmark" : "chevron.right"
+                    )
+                    .frame(maxWidth: .infinity)
                 }
                 .tint(.green)
-                .disabled(!allValid)
-                .accessibilityLabel("Enviar a resposta")
+                .disabled(isLastQuestion ? !allValid : !currentValid)
+                .accessibilityLabel(isLastQuestion ? "Enviar a resposta" : "Próxima pergunta")
             }
             .buttonStyle(.borderedProminent)
             .disabled(actionInProgress)
@@ -92,15 +135,9 @@ struct QuestionCardView: View {
             }
         }
         .padding()
-        .background(Color.orange.opacity(0.12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.orange.opacity(0.4), lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .padding()
-        // Reseta a seleção se o CONJUNTO de perguntas mudar (ex.: o hub emenda
-        // uma pergunta nova sem a sessão sair de needs_you entre as duas).
+        // Reseta a seleção E a página se o CONJUNTO de perguntas mudar (ex.: o
+        // hub emenda uma pergunta nova sem a sessão sair de needs_you entre
+        // as duas) — o .id força o SwiftUI a remontar a view (e o @State) do zero.
         .id(questions.map(\.question).joined(separator: "\u{1}"))
     }
 

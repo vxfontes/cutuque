@@ -101,6 +101,9 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		// sim/não pelo seletor de PendingQuestions e responde aqui em vez de
 		// approve/deny.
 		mux.Handle("POST /sessions/{id}/answer", requireAuth(cfg.Token, AnswerHandler(lch)))
+		// Interromper o agente em execução: pausa (tmux) ou encerra (pipe-mode,
+		// sem primitiva de interrupt suave no protocolo hoje — ver Launcher.Interrupt).
+		mux.Handle("POST /sessions/{id}/interrupt", requireAuth(cfg.Token, InterruptHandler(lch)))
 		mux.Handle("POST /sessions/{id}/input", requireAuth(cfg.Token, InputHandler(lch)))
 		mux.Handle("POST /sessions/{id}/reply", requireAuth(cfg.Token, ReplyHandler(lch)))
 		// Máquinas disponíveis (picker do app) e apagar sessão (swipe-to-delete).
