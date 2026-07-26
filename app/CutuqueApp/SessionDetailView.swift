@@ -196,6 +196,7 @@ struct SessionDetailView: View {
     @ObservedObject private var namer = SessionNamesStore.shared
     // Router p/ navegar ao detalhe da nova sessão ao relançar de uma encerrada.
     @EnvironmentObject private var router: Router
+    @EnvironmentObject private var nav: NavigationState
     @State private var draft = ""
     @State private var showScrollToBottom = false
     @State private var renaming = false
@@ -289,6 +290,16 @@ struct SessionDetailView: View {
         }
         .navigationTitle(displayTitle)
         .navigationBarTitleDisplayMode(.inline)
+        // ⌘. — abre a MESMA confirmação do botão de parar; no pipe-mode isso
+        // mata a sessão, então o atalho não pula o gate.
+        //
+        // Só consome o que trata: a lista de sessões está viva na outra coluna
+        // da split view e espera pelos intents dela.
+        .onChange(of: nav.intent) { _, intent in
+            guard intent == .interrupt else { return }
+            nav.consume()
+            confirmingInterrupt = true
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
