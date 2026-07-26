@@ -114,11 +114,19 @@ struct BoardView: View {
     // Injetado pelo app: a coluna de filtros (iPad) precisa do MESMO modelo.
     @EnvironmentObject private var model: BoardModel
     @EnvironmentObject private var nav: NavigationState
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showCloseWeekConfirm = false
     @State private var showArchive = false
     @State private var searchText = ""
     @State private var searchTask: Task<Void, Never>?
+
+    /// iPad de verdade — NÃO `horizontalSizeClass == .regular` (achado
+    /// Important 2 da revisão: iPhone Plus/Pro Max em paisagem também reporta
+    /// `.regular`, e isso fazia o `BoardView` dentro do `RootTabView`, raiz do
+    /// iPhone, esconder a FilterBar sem `BoardFilterList` pra substituí-la,
+    /// esconder os resultados de busca e desligar a paginação por swipe — uma
+    /// regressão no iPhone, proibida pela restrição global do plano). Mesmo
+    /// idiom que escolhe a raiz do app em `CutuqueApp.swift`.
+    private var isPad: Bool { BoardLayout.isPad(UIDevice.current.userInterfaceIdiom) }
 
     private var isSearching: Bool { !searchText.trimmingCharacters(in: .whitespaces).isEmpty }
 
@@ -133,13 +141,13 @@ struct BoardView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if isSearching && horizontalSizeClass != .regular {
+                if isSearching && !isPad {
                     // Compacto: a busca ainda toma a tela, como sempre foi.
                     searchResultsView
                 } else {
                     VStack(spacing: 0) {
                         // No iPad os filtros moram na coluna do meio.
-                        if horizontalSizeClass != .regular {
+                        if !isPad {
                             FilterBar(model: model)
                             Divider()
                         }
@@ -153,8 +161,13 @@ struct BoardView: View {
                     }
                 }
             }
-            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always),
-                        prompt: "Buscar título, descrição, comentários…")
+            // No iPad a busca já mora inteira na coluna do meio
+            // (`BoardFilterList`) — manter esta aqui também deixaria DOIS
+            // campos vivos escrevendo em `model.searchResults` ao mesmo
+            // tempo, o de trás sobrescrevendo o da frente em silêncio, sem
+            // nunca aparecer (achado Important 1 da revisão). No iPhone a
+            // busca continua exatamente como sempre foi.
+            .modifier(SearchableWhenCompact(enabled: !isPad, text: $searchText))
             .onChange(of: searchText) { _, q in
                 searchTask?.cancel()
                 searchTask = Task {
@@ -245,7 +258,7 @@ struct BoardView: View {
     /// a largura e ficam todas visíveis, que é o ponto de ter tela grande.
     private var boardScroller: some View {
         GeometryReader { geo in
-            let isRegular = horizontalSizeClass == .regular
+            let isRegular = isPad
             let visibleColumns = BoardColumn.allCases.count + (model.encalhadas.isEmpty ? 0 : 1)
             let colWidth = BoardLayout.columnWidth(available: geo.size.width,
                                                    columns: visibleColumns,
@@ -801,5 +814,24 @@ private struct PagingWhenCompact: ViewModifier {
     let enabled: Bool
     func body(content: Content) -> some View {
         if enabled { content.scrollTargetBehavior(.viewAligned) } else { content }
+    }
+}
+
+/// Mesmo precedente do `PagingWhenCompact`: `.searchable` muda o tipo
+/// concreto da view, então não dá pra condicionar inline com ternário. No
+/// iPad este modifier some por completo — a busca da coluna de detalhe não
+/// existe mais, só a da coluna do meio (`BoardFilterList`) fica viva. É a
+/// correção do achado Important 1 (busca dupla no iPad escrevendo, as duas,
+/// no mesmo `model.searchResults`).
+private struct SearchableWhenCompact: ViewModifier {
+    let enabled: Bool
+    @Binding var text: String
+    func body(content: Content) -> some View {
+        if enabled {
+            content.searchable(text: $text, placement: .navigationBarDrawer(displayMode: .always),
+                                prompt: "Buscar título, descrição, comentários…")
+        } else {
+            content
+        }
     }
 }

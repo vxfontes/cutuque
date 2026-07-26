@@ -107,4 +107,23 @@ final class BoardMoveLogicTests: XCTestCase {
         XCTAssertEqual(BoardLayout.columnWidth(available: 1366, columns: 0, isRegular: true),
                        1366 * 0.86, accuracy: 0.01)
     }
+
+    // MARK: idiom (Task 13, correção dos achados Important 1 e 2 da revisão)
+    //
+    // `horizontalSizeClass == .regular` NÃO é "iPad": iPhone Plus/Pro Max em
+    // paisagem também reporta `.regular`. `BoardView` (raiz do iPhone dentro
+    // do `RootTabView`) e a busca duplicada da coluna de detalhe (que
+    // sobrescrevia em silêncio a busca de `BoardFilterList` no iPad) dependem
+    // desta MESMA decisão — travando-a aqui, pura, sem hospedar view.
+
+    func testIPhoneNuncaEhPadNenhumSizeClass() {
+        // O idiom do iPhone é fixo (.phone) mesmo quando o size class medido é
+        // .regular (Plus/Pro Max em paisagem) — é exatamente o caso que
+        // regredia antes desta correção.
+        XCTAssertFalse(BoardLayout.isPad(.phone))
+    }
+
+    func testIPadEhPad() {
+        XCTAssertTrue(BoardLayout.isPad(.pad))
+    }
 }

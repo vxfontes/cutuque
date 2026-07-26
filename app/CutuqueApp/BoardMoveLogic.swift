@@ -1,4 +1,5 @@
 import CoreGraphics
+import UIKit
 
 /// Onde um card pode ser solto. "Encalhadas" não é coluna do hub — é o
 /// predicado `encalhada == true` — mas no board é uma faixa como as outras.
@@ -69,4 +70,14 @@ enum BoardLayout {
         let gutters = spacing * CGFloat(columns + 1)
         return max(minColumnWidth, (available - gutters) / CGFloat(columns))
     }
+
+    /// Verdadeiro só no iPad. `horizontalSizeClass == .regular` NÃO serve pra
+    /// discriminar isto — iPhone Plus/Pro Max em paisagem também reporta
+    /// `.regular`, e usar sizeClass aqui fazia esses aparelhos perderem a
+    /// FilterBar, a busca cheia de tela e a paginação por swipe (achado
+    /// Important 2 da revisão da Task 13: o `BoardView` dentro do
+    /// `RootTabView`, raiz do iPhone, regredia). O mesmo idiom que escolhe a
+    /// raiz do app em `CutuqueApp.swift` decide aqui — nunca muda em runtime,
+    /// então rotação/Slide Over não trocam o layout no meio do caminho.
+    static func isPad(_ idiom: UIUserInterfaceIdiom) -> Bool { idiom == .pad }
 }
