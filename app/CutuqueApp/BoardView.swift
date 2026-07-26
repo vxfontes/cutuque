@@ -122,6 +122,12 @@ struct BoardView: View {
     // mínimo, rotação). Nunca decide "sou iPad?" (isso é `isPad`, por idiom).
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
+    // Idiom: nunca muda em runtime (mesmo valor que escolhe a raiz do app em
+    // `CutuqueApp.swift`). Lido uma vez aqui e reaproveitado por `isPad` e
+    // pelo `boardScroller` — nada de ler `UIDevice.current.userInterfaceIdiom`
+    // duas vezes soltas pela view.
+    private var idiom: UIUserInterfaceIdiom { UIDevice.current.userInterfaceIdiom }
+
     /// iPad de verdade — NÃO `horizontalSizeClass == .regular` (achado
     /// Important 2 da revisão: iPhone Plus/Pro Max em paisagem também reporta
     /// `.regular`, e isso fazia o `BoardView` dentro do `RootTabView`, raiz do
@@ -129,18 +135,23 @@ struct BoardView: View {
     /// esconder os resultados de busca e desligar a paginação por swipe — uma
     /// regressão no iPhone, proibida pela restrição global do plano). Mesmo
     /// idiom que escolhe a raiz do app em `CutuqueApp.swift`.
-    private var isPad: Bool { BoardLayout.isPad(UIDevice.current.userInterfaceIdiom) }
+    private var isPad: Bool { BoardLayout.isPad(idiom) }
 
-    /// Em Slide Over / Split View no mínimo a `NavigationSplitView` colapsa
-    /// numa pilha e o `BoardFilterList` (coluna do meio, dono dos filtros e
-    /// da busca) some de vista — só dá pra alcançar navegando pra trás. Ali,
-    /// mesmo no iPad, o `BoardView` precisa da própria FilterBar/busca, como
-    /// sempre foi no iPhone (achado da revisão da Task 16). No iPhone
-    /// `isPad` é sempre falso, então isto é sempre `true` — comportamento
-    /// preservado.
+    /// O `BoardFilterList` (coluna do meio, dono dos filtros e da busca) some
+    /// de vista em três situações independentes — Slide Over/Split View no
+    /// mínimo (`horizontalSizeClass == .compact`), OU a regra dos 700 pt
+    /// escondendo sidebar+conteúdo (`nav.columnVisibility == .detailOnly`,
+    /// que dispara até em tela cheia `.regular`: um iPad de 11" em retrato
+    /// normal já tem coluna de detalhe abaixo de 700 pt — achado da rodada 2
+    /// da revisão da Task 16, reabrindo por um gatilho mais comum que o
+    /// Slide Over que motivou a task). Em qualquer uma delas, e mesmo no
+    /// iPad, o `BoardView` precisa da própria FilterBar/busca, como sempre
+    /// foi no iPhone. No iPhone `isPad` é sempre falso, então isto é sempre
+    /// `true` — comportamento preservado.
     private var showsOwnFilterAndSearch: Bool {
         BoardLayout.showsOwnFilterAndSearch(isPad: isPad,
-                                             horizontalSizeClassIsCompact: horizontalSizeClass == .compact)
+                                             horizontalSizeClassIsCompact: horizontalSizeClass == .compact,
+                                             columnVisibilityIsDetailOnly: nav.columnVisibility == .detailOnly)
     }
 
     private var isSearching: Bool { !searchText.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -275,8 +286,15 @@ struct BoardView: View {
         }
     }
 
-    /// No iPhone as colunas paginam no swipe (~86% cada). No iPad elas dividem
-    /// a largura e ficam todas visíveis, que é o ponto de ter tela grande.
+    /// No iPhone (e no iPad em Slide Over/Split View no mínimo) as colunas
+    /// paginam no swipe (~86% cada, uma coluna por vez, com "encaixe"). No
+    /// iPad largo elas dividem a largura disponível proporcionalmente — mas
+    /// o piso de `BoardLayout.minColumnWidth` (260 pt) quase sempre entra em
+    /// jogo nos tamanhos reais de tela: 5 colunas pedem `5×260 + 6×12 =
+    /// 1372 pt`, 6 (com Encalhadas) pedem `1644 pt`, e nem o 13" em paisagem
+    /// (1366 pt) cobre isso. Na prática o board sempre rola na horizontal
+    /// pra ver todas as colunas no iPad também — só sem o "encaixe" de
+    /// paginação, que atrapalharia o arraste de card.
     private var boardScroller: some View {
         GeometryReader { geo in
             // Largura MEDIDA, não idiom: em Slide Over ou Split View no
@@ -284,8 +302,7 @@ struct BoardView: View {
             // dos 700 pt — as colunas precisam voltar a paginar como no
             // iPhone (achado da revisão da Task 16; `isRegular = isPad`
             // ignorava a largura que este próprio `GeometryReader` já mede).
-            let isRegular = BoardLayout.isRegularWidth(idiom: UIDevice.current.userInterfaceIdiom,
-                                                        measuredWidth: geo.size.width)
+            let isRegular = BoardLayout.isRegularWidth(idiom: idiom, measuredWidth: geo.size.width)
             let visibleColumns = BoardColumn.allCases.count + (model.encalhadas.isEmpty ? 0 : 1)
             let colWidth = BoardLayout.columnWidth(available: geo.size.width,
                                                    columns: visibleColumns,

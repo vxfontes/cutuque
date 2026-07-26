@@ -100,17 +100,37 @@ enum BoardLayout {
         isPad(idiom) && measuredWidth >= PadLayout.expandThreshold
     }
 
-    /// No iPad, a `NavigationSplitView` de três colunas colapsa numa pilha de
-    /// coluna única quando `horizontalSizeClass` vira `.compact` (Slide Over,
-    /// Split View no mínimo): a coluna do meio (`BoardFilterList`, dona de
-    /// verdade dos filtros e da busca) sai de vista — só dá pra alcançar
-    /// navegando pra trás na pilha. Enquanto o `BoardView` (detalhe) for a
-    /// tela da frente sozinha, ele precisa da SUA PRÓPRIA barra de filtros e
-    /// busca, como sempre foi no iPhone. No iPad largo (`.regular`) o
-    /// `BoardFilterList` está ao lado — manter as duas buscas vivas ao mesmo
-    /// tempo reproduziria a busca dupla escrevendo em `searchResults` em
-    /// silêncio (achado Important 1 da revisão da Task 13).
-    static func showsOwnFilterAndSearch(isPad: Bool, horizontalSizeClassIsCompact: Bool) -> Bool {
-        !isPad || horizontalSizeClassIsCompact
+    /// A pergunta certa não é "estou compacto?" — é "o `BoardFilterList`
+    /// (coluna do meio, dona de verdade dos filtros e da busca) está visível
+    /// ao lado do `BoardView` agora?". Três eixos, independentes, e faltando
+    /// QUALQUER um deles o `BoardFilterList` sai de vista:
+    ///
+    /// 1. idiom `.pad` — só existe coluna de filtros no iPad (estrutura,
+    ///    nunca muda em runtime).
+    /// 2. `horizontalSizeClass != .compact` — a `NavigationSplitView` não
+    ///    colapsou numa pilha de coluna única (Slide Over, Split View no
+    ///    mínimo). Achado da rodada 1 da revisão da Task 16.
+    /// 3. `columnVisibility != .detailOnly` — a regra dos 700 pt
+    ///    (`NavigationState.applyWidthRule`, Task 7) não escondeu
+    ///    sidebar+conteúdo. Ela colapsa sempre que a coluna de DETALHE mede
+    ///    menos de 700 pt — e isso acontece até em tela cheia `.regular`,
+    ///    sem Split View nenhum: um iPad de 11" em retrato normal, três
+    ///    colunas, tem só ~554 pt de coluna de detalhe (ver
+    ///    `TerminalGeometryTests.swift`). Achado da rodada 2 da revisão: o
+    ///    board reabre o MESMO bug por este terceiro eixo, num gatilho mais
+    ///    comum que o Slide Over que motivou a task — e sem saída, porque só
+    ///    o `expandButton` de sessão chama `toggleColumns()`, o board não
+    ///    tem botão equivalente.
+    ///
+    /// Faltando qualquer um dos três, o `BoardView` precisa da SUA PRÓPRIA
+    /// barra de filtros e busca, como sempre foi no iPhone — senão o board
+    /// fica sem NENHUMA forma de filtrar ou buscar. No iPad com os três
+    /// eixos a favor (largo, colunas todas visíveis) manter as duas buscas
+    /// vivas ao mesmo tempo reproduziria a busca dupla escrevendo em
+    /// `searchResults` em silêncio (achado Important 1 da revisão da Task 13).
+    static func showsOwnFilterAndSearch(isPad: Bool,
+                                         horizontalSizeClassIsCompact: Bool,
+                                         columnVisibilityIsDetailOnly: Bool) -> Bool {
+        !isPad || horizontalSizeClassIsCompact || columnVisibilityIsDetailOnly
     }
 }

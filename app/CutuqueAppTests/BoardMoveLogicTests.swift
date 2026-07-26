@@ -165,27 +165,84 @@ final class BoardMoveLogicTests: XCTestCase {
                        320 * 0.86, accuracy: 0.01)
     }
 
-    // MARK: FilterBar/busca própria do BoardView (Task 16)
+    // MARK: FilterBar/busca própria do BoardView (Task 16, rodadas 1 e 2)
     //
-    // Em Slide Over / Split View no mínimo a `NavigationSplitView` colapsa e
-    // o `BoardFilterList` (coluna do meio) sai de vista — só alcançável
-    // navegando pra trás. Ali o `BoardView` precisa da própria FilterBar e
-    // busca, como sempre foi no iPhone.
+    // Três eixos independentes decidem se o `BoardFilterList` (coluna do
+    // meio, dono de verdade dos filtros e da busca) está visível ao lado do
+    // `BoardView` agora:
+    //   1. isPad (idiom, nunca muda em runtime)
+    //   2. horizontalSizeClass == .compact (Slide Over, Split View no mínimo
+    //      — achado da rodada 1)
+    //   3. columnVisibility == .detailOnly (regra dos 700 pt da coluna de
+    //      DETALHE, `NavigationState.applyWidthRule` — dispara até em tela
+    //      cheia `.regular`, sem Split View nenhum, num iPad de 11" em
+    //      retrato normal; achado da rodada 2, mesmo bug reaberto por um
+    //      gatilho mais comum que o Slide Over)
+    //
+    // Faltando qualquer um dos três, o `BoardFilterList` sai de vista e o
+    // `BoardView` precisa da própria FilterBar/busca — daí o `||`. Tabela-
+    // verdade completa: as 8 combinações, não só as que "interessam".
 
-    func testIPhoneSempreMostraAPropriaFilterBarEBusca() {
-        XCTAssertTrue(BoardLayout.showsOwnFilterAndSearch(isPad: false, horizontalSizeClassIsCompact: false))
-        XCTAssertTrue(BoardLayout.showsOwnFilterAndSearch(isPad: false, horizontalSizeClassIsCompact: true))
+    func testTabelaVerdadeCompletaDosTresEixos() {
+        // (isPad, compact, detailOnly) -> esperado
+        let casos: [(Bool, Bool, Bool, Bool)] = [
+            (false, false, false, true),   // iPhone, nada especial
+            (false, false, true,  true),   // iPhone, detailOnly (nem se aplica de fato, mas isPad=false já garante true)
+            (false, true,  false, true),   // iPhone compacto (retrato comum)
+            (false, true,  true,  true),   // iPhone compacto + detailOnly
+            (true,  false, false, false),  // iPad largo, todas as colunas visíveis — BoardFilterList AO LADO
+            (true,  false, true,  true),   // iPad "regular" mas regra dos 700pt escondeu sidebar+conteúdo (achado rodada 2)
+            (true,  true,  false, true),   // iPad em Slide Over/Split View no mínimo (achado rodada 1)
+            (true,  true,  true,  true),   // iPad compacto E detailOnly — os dois motivos ao mesmo tempo
+        ]
+        for (isPad, compact, detailOnly, esperado) in casos {
+            XCTAssertEqual(
+                BoardLayout.showsOwnFilterAndSearch(isPad: isPad,
+                                                     horizontalSizeClassIsCompact: compact,
+                                                     columnVisibilityIsDetailOnly: detailOnly),
+                esperado,
+                "isPad=\(isPad) compact=\(compact) detailOnly=\(detailOnly)"
+            )
+        }
     }
 
-    func testIPadLargoEscondeAPropriaFilterBarEBusca() {
-        // `BoardFilterList` está ao lado — duplicar aqui reproduziria a
-        // busca dupla (achado Important 1 da Task 13).
-        XCTAssertFalse(BoardLayout.showsOwnFilterAndSearch(isPad: true, horizontalSizeClassIsCompact: false))
+    func testIPhoneSempreMostraAPropriaFilterBarEBuscaQualquerCombinacao() {
+        // Com isPad=false o resultado tem que ser `true` por curto-circuito,
+        // não importa o que os outros dois eixos digam — é a garantia de
+        // "iPhone não pode regredir".
+        for compact in [false, true] {
+            for detailOnly in [false, true] {
+                XCTAssertTrue(BoardLayout.showsOwnFilterAndSearch(isPad: false,
+                                                                   horizontalSizeClassIsCompact: compact,
+                                                                   columnVisibilityIsDetailOnly: detailOnly))
+            }
+        }
+    }
+
+    func testIPadLargoComTodasAsColunasVisiveisEscondeAPropriaFilterBarEBusca() {
+        // Único caso `false`: `BoardFilterList` está ao lado — duplicar aqui
+        // reproduziria a busca dupla (achado Important 1 da Task 13).
+        XCTAssertFalse(BoardLayout.showsOwnFilterAndSearch(isPad: true,
+                                                            horizontalSizeClassIsCompact: false,
+                                                            columnVisibilityIsDetailOnly: false))
     }
 
     func testIPadCompactoMostraAPropriaFilterBarEBusca() {
         // Slide Over/Split View no mínimo: `BoardFilterList` colapsou pra
         // trás na pilha — sem isto o board ficaria sem busca nenhuma.
-        XCTAssertTrue(BoardLayout.showsOwnFilterAndSearch(isPad: true, horizontalSizeClassIsCompact: true))
+        XCTAssertTrue(BoardLayout.showsOwnFilterAndSearch(isPad: true,
+                                                           horizontalSizeClassIsCompact: true,
+                                                           columnVisibilityIsDetailOnly: false))
+    }
+
+    func testIPadDetailOnlyEmTelaCheiaRegularMostraAPropriaFilterBarEBusca() {
+        // O achado da rodada 2: um iPad de 11" em retrato normal (regular,
+        // sem Split View nenhum) já colapsa pra `.detailOnly` pela regra dos
+        // 700 pt da coluna de detalhe — o board não tem botão pra desfazer
+        // isso (só o `expandButton` de sessão chama `toggleColumns()`), e
+        // sem esta busca ficaria sem NENHUMA forma de filtrar/buscar.
+        XCTAssertTrue(BoardLayout.showsOwnFilterAndSearch(isPad: true,
+                                                           horizontalSizeClassIsCompact: false,
+                                                           columnVisibilityIsDetailOnly: true))
     }
 }
