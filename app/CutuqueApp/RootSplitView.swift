@@ -135,12 +135,7 @@ struct ArchivedTaskPane: View {
     }
 }
 
-// MARK: - Stubs temporários (substituídos nas Tasks 8 e 13)
-
-struct SessionDetailPane: View {
-    let selection: DetailSelection
-    var body: some View { Text("painel da sessão") }
-}
+// MARK: - Stubs temporários (substituídos na Task 13)
 
 struct BoardFilterList: View {
     var body: some View { Text("filtros") }

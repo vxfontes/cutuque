@@ -173,6 +173,10 @@ struct TerminalMirrorView: View {
     let machine: String
     let target: String
     let title: String
+    /// Falso quando o espelho está na hierarquia mas escondido (o painel está
+    /// no Chat). Para o poll sem desmontar a view — desmontar dispararia o
+    /// `restoreSize()`, que só deve rodar ao fechar a sessão de verdade.
+    var isActive: Bool = true
 
     @StateObject private var model: TerminalMirrorModel
     @Environment(\.dismiss) private var dismiss
@@ -197,10 +201,14 @@ struct TerminalMirrorView: View {
     private let fontMin = TerminalGeometry.fontMin
     private let fontMax = TerminalGeometry.fontMax
 
-    init(machine: String, target: String, title: String) {
+    /// Segura a rajada de resize do arraste do divisor do Split View.
+    @State private var resizeDebouncer = ResizeDebouncer()
+
+    init(machine: String, target: String, title: String, isActive: Bool = true) {
         self.machine = machine
         self.target = target
         self.title = title
+        self.isActive = isActive
         _model = StateObject(wrappedValue: TerminalMirrorModel(machine: machine, target: target))
     }
 
@@ -214,8 +222,13 @@ struct TerminalMirrorView: View {
                 inputBar
             }
             .task(id: "\(cols)x\(rows)") {
-                model.resize(cols: cols, rows: rows)
-                model.start()
+                resizeDebouncer.schedule(cols: cols, rows: rows) { c, r in
+                    model.resize(cols: c, rows: r)
+                }
+                if isActive { model.start() }
+            }
+            .onChange(of: isActive) { _, active in
+                if active { model.start() } else { model.stop() }
             }
             .onKeyPress(phases: .down) { press in
                 guard let key = TerminalKeyboard.tmuxKey(for: press.key.character,
