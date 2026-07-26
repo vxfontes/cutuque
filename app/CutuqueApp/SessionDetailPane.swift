@@ -26,22 +26,37 @@ struct SessionDetailPane: View {
 
     private var showsChat: Bool { nav.paneMode == .chat }
 
+    /// Único título de navegação do pane — `SessionDetailView`/
+    /// `TerminalMirrorView` embutidas aqui recebem `ownsNavigationTitle:
+    /// false` e não contribuem mais nada ao `.navigationTitle` (nem uma
+    /// string vazia). Decisão pura em `SessionDetailPaneLogic.paneTitle`.
+    private var paneTitle: String {
+        SessionDetailPaneLogic.paneTitle(
+            showsChat: showsChat,
+            chatTitle: session.map { namer.displayTitle(for: $0) },
+            terminalTitle: terminal?.title
+        )
+    }
+
     var body: some View {
         ZStack {
             if let session {
-                SessionDetailView(session: session, isActive: showsChat)
+                SessionDetailView(session: session, isActive: showsChat, ownsNavigationTitle: false)
                     .opacity(showsChat ? 1 : 0)
                     .allowsHitTesting(showsChat)
                     .accessibilityHidden(!showsChat)
             }
             if let terminal {
                 TerminalMirrorView(machine: terminal.machine, target: terminal.target,
-                                   title: terminal.title, isActive: !showsChat)
+                                   title: terminal.title, isActive: !showsChat,
+                                   ownsNavigationTitle: false)
                     .opacity(showsChat ? 0 : 1)
                     .allowsHitTesting(!showsChat)
                     .accessibilityHidden(showsChat)
             }
         }
+        .navigationTitle(paneTitle)
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if session != nil, terminal != nil {
                 ToolbarItem(placement: .principal) { paneSelector }

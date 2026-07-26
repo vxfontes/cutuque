@@ -202,6 +202,11 @@ struct SessionDetailView: View {
     /// #19). Default `true` preserva o iPhone, que só monta um painel por
     /// vez e nunca chama isto com `false`.
     var isActive: Bool = true
+    /// Falso quando embutida no `SessionDetailPane` do iPad, que passa a ser
+    /// a ÚNICA fonte de `.navigationTitle` (ver `OwnedNavigationTitle.swift`).
+    /// Default `true` preserva o iPhone, que monta esta view sozinha e nunca
+    /// passa nada aqui.
+    var ownsNavigationTitle: Bool = true
     @State private var draft = ""
     @State private var showScrollToBottom = false
     @State private var renaming = false
@@ -224,9 +229,10 @@ struct SessionDetailView: View {
     // a VStack externa, essa sim, empurra a barra pra cima normalmente.
     @FocusState private var inputFocused: Bool
 
-    init(session: Session, isActive: Bool = true) {
+    init(session: Session, isActive: Bool = true, ownsNavigationTitle: Bool = true) {
         _model = StateObject(wrappedValue: SessionDetailViewModel(session: session))
         self.isActive = isActive
+        self.ownsNavigationTitle = ownsNavigationTitle
     }
 
     /// Título a exibir (apelido local, se houver, senão o original).
@@ -294,15 +300,18 @@ struct SessionDetailView: View {
             // texto lança uma nova tarefa na mesma máquina (relançar).
             interactionBar
         }
-        // `isActive` gate no VALOR do título e no CONTEÚDO do toolbar — não no
-        // modificador em si — pelo mesmo motivo do `TerminalMirrorView`: as
-        // duas views ficam montadas ao mesmo tempo no painel do iPad
-        // (`SessionDetailPane`), e `.toolbar`/`.navigationTitle` de views
-        // simultâneas na hierarquia disputam a mesma barra, sem que
-        // `.opacity`/`.allowsHitTesting` (que só afetam a área de conteúdo)
-        // resolvam isso.
-        .navigationTitle(isActive ? displayTitle : "")
-        .navigationBarTitleDisplayMode(.inline)
+        // Título de navegação: só quando esta view é dona dele (mesmo
+        // mecanismo do `TerminalMirrorView`, ver `OwnedNavigationTitle.swift`)
+        // — embutida no `SessionDetailPane` do iPad ela recebe
+        // `ownsNavigationTitle: false` e não contribui NADA ao
+        // `.navigationTitle`, nem uma string vazia: duas views montadas ao
+        // mesmo tempo (decisão #19) competindo pelo mesmo preference key,
+        // mesmo com uma delas em `""`, ainda dependeria de composição
+        // interna do SwiftUI pra decidir o vencedor. O pane passa a ser a
+        // única fonte, computada a partir de `showsChat`.
+        //
+        // Toolbar: gate no CONTEÚDO, não no modificador em si — mesmo motivo.
+        .ownedNavigationTitle(displayTitle, owns: ownsNavigationTitle)
         // ⌘. — abre a MESMA confirmação do botão de parar; no pipe-mode isso
         // mata a sessão, então o atalho não pula o gate.
         //

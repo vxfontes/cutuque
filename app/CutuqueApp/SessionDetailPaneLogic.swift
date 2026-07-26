@@ -37,4 +37,23 @@ enum SessionDetailPaneLogic {
         }
         return required == current ? nil : required
     }
+
+    /// Único título de navegação do pane, computado a partir de `showsChat` —
+    /// a fonte de verdade que substitui os dois `.navigationTitle` que
+    /// disputavam a mesma barra quando `SessionDetailView` e
+    /// `TerminalMirrorView` ficavam montadas juntas (ver
+    /// `OwnedNavigationTitle.swift`). Correto por construção: não depende de
+    /// quem "vence" a composição de preference keys concorrentes.
+    ///
+    /// `chatTitle`/`terminalTitle` já vêm resolvidos (apelido local incluso)
+    /// — esta função só decide QUAL dos dois mostrar. Quando o lado
+    /// preferido por `showsChat` não existe (seleção só tem um dos dois
+    /// painéis — ver `correctedPaneMode`), cai pro que houver; `""` só no
+    /// caso, teoricamente inatingível em uso normal, de nenhum dos dois
+    /// existir.
+    static func paneTitle(showsChat: Bool, chatTitle: String?, terminalTitle: String?) -> String {
+        if showsChat, let chatTitle { return chatTitle }
+        if !showsChat, let terminalTitle { return terminalTitle }
+        return chatTitle ?? terminalTitle ?? ""
+    }
 }

@@ -85,4 +85,43 @@ final class SessionDetailPaneLogicTests: XCTestCase {
         XCTAssertEqual(SessionDetailPaneLogic.correctedPaneMode(hasChat: true, hasTerminal: false, current: .terminal), .chat)
         XCTAssertNil(SessionDetailPaneLogic.correctedPaneMode(hasChat: true, hasTerminal: false, current: .chat))
     }
+
+    // MARK: - paneTitle
+
+    /// Com Chat em foco e os dois títulos disponíveis, mostra o do chat —
+    /// nunca o do terminal, mesmo que ele exista.
+    func testComChatEmFocoMostraTituloDoChat() {
+        let title = SessionDetailPaneLogic.paneTitle(
+            showsChat: true, chatTitle: "sessão", terminalTitle: "sessão (tmux)"
+        )
+        XCTAssertEqual(title, "sessão")
+    }
+
+    /// Com Terminal em foco, o espelho — nunca o do chat.
+    func testComTerminalEmFocoMostraTituloDoTerminal() {
+        let title = SessionDetailPaneLogic.paneTitle(
+            showsChat: false, chatTitle: "sessão", terminalTitle: "sessão (tmux)"
+        )
+        XCTAssertEqual(title, "sessão (tmux)")
+    }
+
+    /// Seleção sem chat (só `.live` sem sessão do registry, hipoteticamente):
+    /// `correctedPaneMode` já forçaria `showsChat == false` neste caso, mas
+    /// mesmo que `showsChat` chegasse `true` por algum motivo, o título cai
+    /// pro terminal em vez de virar `""` — nunca fica em branco à toa.
+    func testSemChatCaiProTituloDoTerminalMesmoComShowsChatTrue() {
+        let title = SessionDetailPaneLogic.paneTitle(
+            showsChat: true, chatTitle: nil, terminalTitle: "sessão (tmux)"
+        )
+        XCTAssertEqual(title, "sessão (tmux)")
+    }
+
+    /// Mesma lógica espelhada: sem terminal, cai pro chat mesmo com
+    /// `showsChat == false`.
+    func testSemTerminalCaiProTituloDoChatMesmoComShowsChatFalse() {
+        let title = SessionDetailPaneLogic.paneTitle(
+            showsChat: false, chatTitle: "sessão", terminalTitle: nil
+        )
+        XCTAssertEqual(title, "sessão")
+    }
 }

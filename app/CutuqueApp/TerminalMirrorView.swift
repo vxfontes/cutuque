@@ -177,6 +177,11 @@ struct TerminalMirrorView: View {
     /// no Chat). Para o poll sem desmontar a view — desmontar dispararia o
     /// `restoreSize()`, que só deve rodar ao fechar a sessão de verdade.
     var isActive: Bool = true
+    /// Falso quando embutida no `SessionDetailPane` do iPad, que passa a ser
+    /// a ÚNICA fonte de `.navigationTitle` (ver `OwnedNavigationTitle.swift`).
+    /// Default `true` preserva o iPhone, que monta esta view sozinha e nunca
+    /// passa nada aqui.
+    var ownsNavigationTitle: Bool = true
 
     @StateObject private var model: TerminalMirrorModel
     @Environment(\.dismiss) private var dismiss
@@ -204,11 +209,13 @@ struct TerminalMirrorView: View {
     /// Segura a rajada de resize do arraste do divisor do Split View.
     @State private var resizeDebouncer = ResizeDebouncer()
 
-    init(machine: String, target: String, title: String, isActive: Bool = true) {
+    init(machine: String, target: String, title: String, isActive: Bool = true,
+         ownsNavigationTitle: Bool = true) {
         self.machine = machine
         self.target = target
         self.title = title
         self.isActive = isActive
+        self.ownsNavigationTitle = ownsNavigationTitle
         _model = StateObject(wrappedValue: TerminalMirrorModel(machine: machine, target: target))
     }
 
@@ -238,16 +245,24 @@ struct TerminalMirrorView: View {
                 return .handled
             }
         }
-        // `isActive` gate no VALOR (título) e no CONTEÚDO do toolbar (não no
-        // modificador em si) — não é `if/else` na árvore de views, então não
-        // remonta nada (decisão #19). Sem isto, o painel Chat|Terminal do
-        // iPad (que mantém as duas views vivas ao mesmo tempo, ver
-        // `SessionDetailPane`) tinha o X vermelho de "Encerrar sessão do
-        // tmux" tocável na toolbar mesmo com o Chat em foco — `.toolbar`
-        // compõe as contribuições de TODAS as views montadas, e
-        // `.opacity`/`.allowsHitTesting` não alcançam a barra de navegação.
-        .navigationTitle(isActive ? title : "")
-        .navigationBarTitleDisplayMode(.inline)
+        // Título de navegação: só quando esta view é dona dele (iPhone,
+        // sozinha). Embutida no `SessionDetailPane` do iPad ela recebe
+        // `ownsNavigationTitle: false` e não contribui NADA ao
+        // `.navigationTitle` — nem uma string vazia — porque o pane é a
+        // única fonte (ver `OwnedNavigationTitle.swift`): duas views
+        // simultaneamente montadas competindo pelo mesmo preference key,
+        // mesmo que uma delas mande `""`, ainda é uma disputa cujo vencedor
+        // depende de composição interna do SwiftUI, não de garantia nossa.
+        //
+        // Toolbar: gate no CONTEÚDO (não no modificador em si) — não é
+        // `if/else` na árvore de views, então não remonta nada (decisão
+        // #19). Sem isto, o painel Chat|Terminal do iPad (que mantém as duas
+        // views vivas ao mesmo tempo, ver `SessionDetailPane`) tinha o X
+        // vermelho de "Encerrar sessão do tmux" tocável na toolbar mesmo com
+        // o Chat em foco — `.toolbar` compõe as contribuições de TODAS as
+        // views montadas, e `.opacity`/`.allowsHitTesting` não alcançam a
+        // barra de navegação.
+        .ownedNavigationTitle(title, owns: ownsNavigationTitle)
         .toolbar {
             if isActive {
                 ToolbarItem(placement: .topBarTrailing) { themeMenu }
