@@ -124,4 +124,40 @@ final class SessionDetailPaneLogicTests: XCTestCase {
         )
         XCTAssertEqual(title, "sessão")
     }
+
+    /// Minor da revisão (rodada 2): sem chat NEM terminal (hoje inatingível
+    /// em uso normal — `correctedPaneMode` sempre garante pelo menos um dos
+    /// dois), o pane não quebra: devolve `""` em vez de crashar ou forçar um
+    /// unwrap. Trava o comportamento pra não regredir silenciosamente se a
+    /// lógica de seleção mudar.
+    func testSemChatENemTerminalDevolveStringVazia() {
+        let title = SessionDetailPaneLogic.paneTitle(showsChat: true, chatTitle: nil, terminalTitle: nil)
+        XCTAssertEqual(title, "")
+    }
+
+    // MARK: - resolvedChatTitle
+
+    /// Título ao vivo presente sempre vence — é o próprio conserto da rodada
+    /// 3: o snapshot congelado de `nav.selection` não pode mais defasar o
+    /// título visível do chat quando o hub muda `Session.title` depois da
+    /// criação (`Registry.Reclaim`).
+    func testTituloAoVivoPresenteVence() {
+        let title = SessionDetailPaneLogic.resolvedChatTitle(live: "título novo (ao vivo)", fallback: "título antigo (snapshot)")
+        XCTAssertEqual(title, "título novo (ao vivo)")
+    }
+
+    /// Sem título ao vivo ainda (preference não chegou / pane acabou de
+    /// montar), cai pro fallback estático — nunca fica sem título à toa
+    /// enquanto a primeira preference não chega.
+    func testSemTituloAoVivoCaiProFallback() {
+        let title = SessionDetailPaneLogic.resolvedChatTitle(live: nil, fallback: "título antigo (snapshot)")
+        XCTAssertEqual(title, "título antigo (snapshot)")
+    }
+
+    /// Nenhum dos dois (sem seleção de chat): `nil` mesmo — quem decide o
+    /// que fazer com isso é `paneTitle` (cai pro terminal, ou `""` no caso
+    /// dos dois ausentes).
+    func testSemNenhumDevolveNil() {
+        XCTAssertNil(SessionDetailPaneLogic.resolvedChatTitle(live: nil, fallback: nil))
+    }
 }

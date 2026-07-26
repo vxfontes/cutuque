@@ -11,6 +11,13 @@ struct SessionDetailPane: View {
     let selection: DetailSelection
     @EnvironmentObject private var nav: NavigationState
     @ObservedObject private var namer = SessionNamesStore.shared
+    /// Título ao vivo do chat, subido pelo `SessionDetailView` via
+    /// `LiveChatTitleKey` (acompanha `session_updated`/`snapshot`,
+    /// desacoplado do snapshot congelado de `nav.selection` — ver o
+    /// comentário na chave e em `SessionDetailPaneLogic.resolvedChatTitle`).
+    /// `nil` até a primeira preference chegar (mostra o fallback estático
+    /// enquanto isso).
+    @State private var liveChatTitle: String?
 
     private var session: Session? {
         if case .session(let s) = selection { return s }
@@ -26,6 +33,18 @@ struct SessionDetailPane: View {
 
     private var showsChat: Bool { nav.paneMode == .chat }
 
+    /// Título do chat pra entrar em `paneTitle`: prefere o ao vivo
+    /// (`liveChatTitle`, subido via `LiveChatTitleKey`) e só cai pro estático
+    /// (apelido sobre o snapshot congelado de `session`) antes da primeira
+    /// preference chegar. Decisão pura em
+    /// `SessionDetailPaneLogic.resolvedChatTitle`.
+    private var chatTitle: String? {
+        SessionDetailPaneLogic.resolvedChatTitle(
+            live: liveChatTitle,
+            fallback: session.map { namer.displayTitle(for: $0) }
+        )
+    }
+
     /// Único título de navegação do pane — `SessionDetailView`/
     /// `TerminalMirrorView` embutidas aqui recebem `ownsNavigationTitle:
     /// false` e não contribuem mais nada ao `.navigationTitle` (nem uma
@@ -33,7 +52,7 @@ struct SessionDetailPane: View {
     private var paneTitle: String {
         SessionDetailPaneLogic.paneTitle(
             showsChat: showsChat,
-            chatTitle: session.map { namer.displayTitle(for: $0) },
+            chatTitle: chatTitle,
             terminalTitle: terminal?.title
         )
     }
@@ -57,6 +76,9 @@ struct SessionDetailPane: View {
         }
         .navigationTitle(paneTitle)
         .navigationBarTitleDisplayMode(.inline)
+        // Único leitor de `LiveChatTitleKey` — só o `SessionDetailView`
+        // escreve nela, sem concorrência a resolver.
+        .onPreferenceChange(LiveChatTitleKey.self) { liveChatTitle = $0 }
         .toolbar {
             if session != nil, terminal != nil {
                 ToolbarItem(placement: .principal) { paneSelector }

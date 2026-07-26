@@ -56,4 +56,21 @@ enum SessionDetailPaneLogic {
         if !showsChat, let terminalTitle { return terminalTitle }
         return chatTitle ?? terminalTitle ?? ""
     }
+
+    /// Resolve QUAL título de chat entra em `paneTitle`: o ao vivo (subido
+    /// via `LiveChatTitleKey`, que acompanha `session_updated`/`snapshot`)
+    /// quando presente, senão o fallback estático calculado a partir do
+    /// snapshot congelado de `nav.selection`.
+    ///
+    /// Existe porque `SessionDetailPane.session` vem de `nav.selection` —
+    /// congelado de propósito (só reatribuído no toque numa linha ou
+    /// deep-link, pra não remontar o pane a cada campo que muda) — enquanto
+    /// `SessionDetailViewModel.session` é atualizado ao vivo e o hub PODE
+    /// mudar `Session.title` depois da criação (`Registry.Reclaim`). Sem
+    /// preferir o ao vivo aqui, o título do chat no iPad ficaria preso no
+    /// valor de quando a sessão foi selecionada — regressão em relação ao
+    /// iPhone, que sempre leu o título ao vivo direto.
+    static func resolvedChatTitle(live: String?, fallback: String?) -> String? {
+        live ?? fallback
+    }
 }

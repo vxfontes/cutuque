@@ -312,6 +312,16 @@ struct SessionDetailView: View {
         //
         // Toolbar: gate no CONTEÚDO, não no modificador em si — mesmo motivo.
         .ownedNavigationTitle(displayTitle, owns: ownsNavigationTitle)
+        // Sobe o título ao vivo (apelido + `model.session.title`, que
+        // acompanha `session_updated`/`snapshot`) pro `SessionDetailPane`
+        // via `LiveChatTitleKey` — ver o comentário lá pra por quê:
+        // `nav.selection` é um snapshot congelado de propósito, e o pane não
+        // pode mais ler `.navigationTitle` desta view (rodada 2), então sem
+        // este canal o título do chat no iPad ficaria preso no valor de
+        // quando a sessão foi selecionada. Único escritor desta chave —
+        // `TerminalMirrorView` nunca grava nela — então não há concorrência
+        // pra decidir vencedor.
+        .preference(key: LiveChatTitleKey.self, value: displayTitle)
         // ⌘. — abre a MESMA confirmação do botão de parar; no pipe-mode isso
         // mata a sessão, então o atalho não pula o gate.
         //
