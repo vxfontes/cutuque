@@ -6,6 +6,9 @@ struct CutuqueApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     // Router de deep-link compartilhado (mesma instância usada pelo PushManager).
     @StateObject private var router = Router.shared
+    // Estado de navegação do iPad. Mora aqui (e não na view raiz) porque a cena
+    // `.commands` abaixo precisa alcançá-lo para emitir os atalhos ⌘ (Task 11).
+    @StateObject private var nav = NavigationState()
     // Aparência (modo claro/escuro) + tema de cor, aplicados na raiz. @AppStorage
     // observa as chaves — mudou nos ajustes, re-aplica aqui na hora.
     @AppStorage(AppThemeKeys.colorScheme) private var colorSchemeRaw = AppColorScheme.system.rawValue
@@ -18,6 +21,7 @@ struct CutuqueApp: App {
             // Raiz = TabView com bottom bar (Sessões / Board).
             RootTabView()
             .environmentObject(router)
+            .environmentObject(nav)
             .tint((AppAccent(rawValue: accentRaw) ?? .blue).color)
             .preferredColorScheme((AppColorScheme(rawValue: colorSchemeRaw) ?? .system).scheme)
             // Deep-link da Live Activity: cutuque://session/<id> abre a sessão.
@@ -32,6 +36,7 @@ struct CutuqueApp: App {
                 await PushManager.shared.requestAuthorization()
             }
         }
+        .commands { CutuqueCommands(nav: nav) }
         .onChange(of: scenePhase) { _, phase in
             ForegroundReporter.shared.update(phase)
         }

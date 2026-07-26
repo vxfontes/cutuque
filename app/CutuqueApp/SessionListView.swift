@@ -260,6 +260,15 @@ struct SessionListView: View {
     @ObservedObject private var namer = SessionNamesStore.shared
     // Router de deep-link vindo de uma notificação (Fase 4).
     @EnvironmentObject private var router: Router
+    // Estado de navegação do iPad — consumido aqui só pelos atalhos ⌘ que
+    // precisam da lista carregada (Task 11): ⌘N e ⌘1…⌘9.
+    @EnvironmentObject private var nav: NavigationState
+    // Preenchida pela versão embutida da lista numa NavigationSplitView do
+    // iPad (Task 6, em paralelo). Aqui só é usada para os atalhos ⌘1…⌘9
+    // escolherem a sessão sem depender de push na pilha de navegação; nil
+    // (iPhone) faz `sessionLink`/`selectSession(index:)` seguir sem efeito
+    // nenhum além do já existente.
+    var splitSelection: Binding<DetailSelection?>?
     @State private var showingNew = false
     @State private var showingDiscover = false
     @State private var showingSettings = false
@@ -419,6 +428,16 @@ struct SessionListView: View {
     }
 
     var body: some View {
+        // O `.modifier` do atalho ⌘ (Task 11) fica FORA da cadeia gigante de
+        // `bodyContent` de propósito: colado direto nela, o type-checker do
+        // Swift não fecha a conta ("unable to type-check this expression in
+        // reasonable time" — erro real de build). Em compensação, quebrar a
+        // expressão em duas (esta e `bodyContent`) resolve.
+        bodyContent
+            .modifier(AppIntentListener(handle: handleAppIntent))
+    }
+
+    private var bodyContent: some View {
         NavigationStack(path: $path) {
             List {
                 liveServerSections
@@ -598,6 +617,34 @@ struct SessionListView: View {
                 if !isShowing { resolveDeepLink() }
             }
         }
+    }
+
+    /// Trata só `.newSession` e `.selectSession` — os demais casos (board,
+    /// terminal, interrupt...) são de outros consumidores.
+    ///
+    /// Só consome o que ELE trata: a lista e o painel de detalhe ficam vivos
+    /// ao mesmo tempo (colunas diferentes da split view), então zerar o
+    /// intent no `default` faria a lista engolir o ⌘. antes do chat ver.
+    ///
+    /// Chamada pelo `AppIntentListener` (fim do arquivo) via `body`, não
+    /// direto na cadeia de `bodyContent` — ver o comentário lá.
+    private func handleAppIntent(_ intent: AppIntent?) {
+        switch intent {
+        case .newSession:
+            showingNew = true
+        case .reload:
+            Task { await model.refresh(); await model.refreshLive() }
+        case .selectSession(let index):
+            // ⌘1…⌘9 na ordem em que a lista aparece: precisa de você, ao
+            // vivo, depois as demais ativas.
+            let ordered = needsYou + activeOthers
+            if let session = ordered[safe: index] {
+                splitSelection?.wrappedValue = .session(session)
+            }
+        default:
+            return
+        }
+        nav.consume()
     }
 
     /// Resolve o deep-link pendente: se a sessão já está na lista, navega e limpa.
@@ -877,5 +924,32 @@ private struct HubStatusIndicator: View {
         case .online:  return "hub online"
         case .offline: return "hub offline"
         }
+    }
+}
+
+// MARK: - Atalhos ⌘ (Task 11)
+
+/// `.onChange(of: nav.intent)` isolado num `ViewModifier` concreto: colado
+/// direto na cadeia gigante de modificadores de `bodyContent`, o
+/// type-checker do Swift não fecha a conta ("unable to type-check this
+/// expression in reasonable time" — erro real de build, não achismo). Como
+/// `ViewModifier` de tipo próprio, o corpo é checado à parte.
+private struct AppIntentListener: ViewModifier {
+    @EnvironmentObject private var nav: NavigationState
+    let handle: (AppIntent?) -> Void
+
+    func body(content: Content) -> some View {
+        content.onChange(of: nav.intent) { _, intent in handle(intent) }
+    }
+}
+
+// MARK: - Índice seguro (⌘1…⌘9)
+
+// Sem `private`: precisa ser visível de `CutuqueAppTests` (⌘5 numa lista de 3
+// sessões simplesmente não faz nada, sem crash — coberto por teste unitário).
+extension Array {
+    /// Índice que não estoura — fora dos limites (ou negativo) devolve nil.
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }
