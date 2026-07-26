@@ -135,8 +135,3 @@ struct ArchivedTaskPane: View {
     }
 }
 
-// MARK: - Stubs temporários (substituídos na Task 13)
-
-struct BoardFilterList: View {
-    var body: some View { Text("filtros") }
-}

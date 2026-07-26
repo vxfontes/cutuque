@@ -63,6 +63,8 @@ final class NavigationState: ObservableObject {
     @Published var paneMode: PaneMode = .chat
     @Published var columnVisibility: NavigationSplitViewVisibility = .all
     @Published var archiveSelection: BoardTask?
+    /// Card aberto no inspector do board (também alimentado pela busca).
+    @Published var boardSelection: BoardTask?
     @Published var intent: AppIntent?
 
     /// O que está no detalhe agora disputa largura? Board sempre; sessão só
