@@ -78,3 +78,20 @@ final class PollPacerTests: XCTestCase {
         XCTAssertEqual(pacer.interval, .milliseconds(1500))
     }
 }
+
+final class DurationSecondsTests: XCTestCase {
+
+    /// `PollPacer.record` recebe `elapsed: TimeInterval`; o `start()` só tem a
+    /// `Duration` do intervalo que acabou de dormir — esta conversão fecha a ponta.
+    func testConverteDurationEmSegundos() {
+        XCTAssertEqual(Duration.seconds(3).seconds, 3.0, accuracy: 0.0001)
+    }
+
+    func testConverteMilissegundosFracionarios() {
+        XCTAssertEqual(Duration.milliseconds(1500).seconds, 1.5, accuracy: 0.0001)
+    }
+
+    func testZeroPermanceZero() {
+        XCTAssertEqual(Duration.zero.seconds, 0, accuracy: 0.0001)
+    }
+}

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - Temas do terminal
 
@@ -89,10 +90,13 @@ final class TerminalMirrorModel: ObservableObject {
     func start() {
         guard pollTask == nil else { return }
         pollTask = Task { [weak self] in
+            var pacer = PollPacer()
             while !Task.isCancelled {
                 guard let self else { return }
-                await self.refresh()
-                try? await Task.sleep(for: .seconds(1.5))
+                let changed = await self.refresh()
+                let interval = pacer.interval
+                pacer.record(changed: changed, elapsed: interval.seconds)
+                try? await Task.sleep(for: interval)
             }
         }
     }
@@ -123,10 +127,13 @@ final class TerminalMirrorModel: ObservableObject {
     }
 
     /// Só atualiza (e re-renderiza) quando a tela realmente muda — evita
-    /// re-parsear ANSI à toa a cada poll.
-    private func refresh() async {
+    /// re-parsear ANSI à toa a cada poll. Devolve se houve diff, para o pacer.
+    @discardableResult
+    private func refresh() async -> Bool {
         let s = await api.tmuxScreen(machine: machine, target: target)
-        if !s.isEmpty && s != screen { screen = s }
+        guard !s.isEmpty, s != screen else { return false }
+        screen = s
+        return true
     }
 
     /// Digita a mensagem no terminal ao vivo (send-keys + Enter).
@@ -177,10 +184,18 @@ struct TerminalMirrorView: View {
 
     // Tamanho da fonte, ajustável (A−/A+). Menor = mais colunas = a TUI do claude
     // renderiza mais larga (parecida com o PC); maior = mais legível.
-    @AppStorage("cutuque.terminalFont") private var fontPtStored: Double = 10
+    // Duas chaves: o tamanho bom no iPhone (10 pt, 393 pt de largura) é miúdo
+    // demais num painel de iPad, e vice-versa. Cada plataforma lembra o seu.
+    @AppStorage("cutuque.terminalFont") private var fontPhone: Double = 10
+    @AppStorage("cutuque.terminalFont.pad") private var fontPad: Double = 13
+    private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
+    private var fontPtStored: Double {
+        get { isPad ? fontPad : fontPhone }
+        nonmutating set { if isPad { fontPad = newValue } else { fontPhone = newValue } }
+    }
     private var fontPt: CGFloat { CGFloat(fontPtStored) }
-    private let fontMin = 5.0
-    private let fontMax = 22.0
+    private let fontMin = TerminalGeometry.fontMin
+    private let fontMax = TerminalGeometry.fontMax
 
     init(machine: String, target: String, title: String) {
         self.machine = machine
@@ -191,13 +206,8 @@ struct TerminalMirrorView: View {
 
     var body: some View {
         GeometryReader { geo in
-            // 0.62 ≈ largura/altura do SF Mono, com folga pra a linha do claude
-            // NÃO re-quebrar no app (o que deixava o layout "zicado").
-            let cols = max(30, Int((geo.size.width - 16) / (fontPt * 0.62)))
-            // Reserva só o mínimo (barras) para dar o MÁXIMO de linhas ao pane:
-            // fonte menor → muito mais linhas → o claude mostra mais da conversa
-            // de uma vez (mais contexto), além do PageUp pra subir mais ainda.
-            let rows = max(20, Int((geo.size.height - 120) / (fontPt * 1.28)))
+            let cols = TerminalGeometry.columns(width: geo.size.width, fontPt: fontPt)
+            let rows = TerminalGeometry.rows(height: geo.size.height, fontPt: fontPt)
             VStack(spacing: 0) {
                 terminal
                 keyBar

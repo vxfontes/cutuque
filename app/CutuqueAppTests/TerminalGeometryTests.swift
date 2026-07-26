@@ -50,4 +50,11 @@ final class TerminalGeometryTests: XCTestCase {
         // mas a função não pode responder "expandido" por acidente.
         XCTAssertFalse(PadLayout.startsExpanded(detailWidth: 0))
     }
+
+    // fontMin/fontMax vieram da Task 3 sem consumidor: a TerminalMirrorView
+    // (Task 9) é quem passa a usar os dois nos limites do A−/A+.
+    func testLimitesDeFontePraOsBotoesAMenosEAMais() {
+        XCTAssertEqual(TerminalGeometry.fontMin, 5)
+        XCTAssertEqual(TerminalGeometry.fontMax, 22)
+    }
 }

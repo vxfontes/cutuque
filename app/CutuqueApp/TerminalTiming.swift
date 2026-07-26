@@ -48,3 +48,10 @@ struct PollPacer {
 
     var interval: Duration { quietFor >= Self.idleThreshold ? Self.slow : Self.fast }
 }
+
+extension Duration {
+    /// A duração em segundos, para contas de tempo ocioso.
+    var seconds: TimeInterval {
+        TimeInterval(components.seconds) + TimeInterval(components.attoseconds) / 1e18
+    }
+}
