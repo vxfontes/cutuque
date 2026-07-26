@@ -18,15 +18,10 @@ struct SessionDetailPane: View {
     }
 
     /// Alvo tmux desta seleção: uma entrada ao vivo sempre tem; uma sessão do
-    /// registry só se ela roda dentro do tmux.
+    /// registry só se ela roda dentro do tmux. Decisão pura (testável sem
+    /// hosting de View) em `SessionDetailPaneLogic.terminalTarget`.
     private var terminal: (machine: String, target: String, title: String)? {
-        switch selection {
-        case .live(let entry):
-            return (entry.machine, entry.session.id, entry.session.title)
-        case .session(let s):
-            guard let target = s.tmuxTarget else { return nil }
-            return (s.machine, target, namer.displayTitle(for: s))
-        }
+        SessionDetailPaneLogic.terminalTarget(for: selection) { namer.displayTitle(for: $0) }
     }
 
     private var showsChat: Bool { nav.paneMode == .chat }
@@ -34,7 +29,7 @@ struct SessionDetailPane: View {
     var body: some View {
         ZStack {
             if let session {
-                SessionDetailView(session: session)
+                SessionDetailView(session: session, isActive: showsChat)
                     .opacity(showsChat ? 1 : 0)
                     .allowsHitTesting(showsChat)
                     .accessibilityHidden(!showsChat)
@@ -54,9 +49,14 @@ struct SessionDetailPane: View {
             ToolbarItem(placement: .topBarTrailing) { expandButton }
         }
         .onAppear {
-            // Seleção sem chat só pode mostrar terminal, e vice-versa.
-            if session == nil { nav.paneMode = .terminal }
-            else if terminal == nil { nav.paneMode = .chat }
+            // Seleção sem chat só pode mostrar terminal, e vice-versa. Decisão
+            // pura (testável sem hosting de View) em
+            // `SessionDetailPaneLogic.correctedPaneMode`.
+            if let corrected = SessionDetailPaneLogic.correctedPaneMode(
+                hasChat: session != nil, hasTerminal: terminal != nil, current: nav.paneMode
+            ) {
+                nav.paneMode = corrected
+            }
         }
     }
 

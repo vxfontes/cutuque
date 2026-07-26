@@ -54,6 +54,29 @@ final class ResizeDebouncerTests: XCTestCase {
 
         XCTAssertEqual(chamadas, 0)
     }
+
+    /// Regressão da Task 8 (revisão, Critical 2): o `Task` pendente de
+    /// `schedule()` não pode reter `self` por forte — se o `ResizeDebouncer`
+    /// for liberado (dono saiu de cena) SEM que ninguém chame `cancel()`
+    /// explicitamente, o resize atrasado tem que morrer junto, nunca disparar
+    /// depois. Aqui o `debouncer` só existe dentro do `do {}`; ninguém chama
+    /// `cancel()`. Com `self` forte no `schedule()`, o próprio `Task`
+    /// pendente mantém o objeto vivo (ciclo `self → pending → closure →
+    /// self`) e o `send` dispara mesmo assim — por isso este teste é RED
+    /// antes da correção. Com `[weak self]`, o objeto é liberado de verdade
+    /// ao sair do escopo, o `Task` acorda com `self` nil e desiste sem
+    /// enviar.
+    func testObjetoLiberadoSemCancelarNaoEnviaODelayAtrasado() async {
+        var chamadas = 0
+        do {
+            let debouncer = ResizeDebouncer(delay: .milliseconds(30))
+            debouncer.schedule(cols: 100, rows: 40) { _, _ in chamadas += 1 }
+            // `debouncer` sai de escopo aqui — de propósito, sem `cancel()`.
+        }
+        try? await Task.sleep(for: .milliseconds(120))
+
+        XCTAssertEqual(chamadas, 0)
+    }
 }
 
 final class PollPacerTests: XCTestCase {

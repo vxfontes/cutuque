@@ -19,9 +19,17 @@ final class ResizeDebouncer {
     func schedule(cols: Int, rows: Int, send: @escaping @MainActor (Int, Int) -> Void) {
         if let last = lastSent, last.cols == cols, last.rows == rows { return }
         pending?.cancel()
-        pending = Task { @MainActor [delay] in
+        // `[weak self]`: sem isto, `self` ficaria retido por forte dentro do
+        // Task, que por sua vez é retido por `self.pending` — um ciclo
+        // clássico (self → pending → closure → self). O dono (a view do
+        // terminal) chama `cancel()` no teardown e isso já quebra o ciclo,
+        // mas capturar fraco é a segunda trava: se algum caminho futuro
+        // esquecer de chamar `cancel()`, o objeto ainda assim é liberado
+        // quando o último dono externo soltar, e o resize atrasado nunca
+        // dispara — em vez de vazar até o delay todo passar.
+        pending = Task { @MainActor [weak self, delay] in
             try? await Task.sleep(for: delay)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, let self else { return }
             self.lastSent = (cols, rows)
             send(cols, rows)
         }

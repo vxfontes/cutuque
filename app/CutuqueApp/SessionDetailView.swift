@@ -197,6 +197,11 @@ struct SessionDetailView: View {
     // Router p/ navegar ao detalhe da nova sessão ao relançar de uma encerrada.
     @EnvironmentObject private var router: Router
     @EnvironmentObject private var nav: NavigationState
+    /// Falso quando esta view está viva na hierarquia mas escondida atrás do
+    /// terminal (painel Chat|Terminal do iPad, `SessionDetailPane`, decisão
+    /// #19). Default `true` preserva o iPhone, que só monta um painel por
+    /// vez e nunca chama isto com `false`.
+    var isActive: Bool = true
     @State private var draft = ""
     @State private var showScrollToBottom = false
     @State private var renaming = false
@@ -219,8 +224,9 @@ struct SessionDetailView: View {
     // a VStack externa, essa sim, empurra a barra pra cima normalmente.
     @FocusState private var inputFocused: Bool
 
-    init(session: Session) {
+    init(session: Session, isActive: Bool = true) {
         _model = StateObject(wrappedValue: SessionDetailViewModel(session: session))
+        self.isActive = isActive
     }
 
     /// Título a exibir (apelido local, se houver, senão o original).
@@ -288,7 +294,14 @@ struct SessionDetailView: View {
             // texto lança uma nova tarefa na mesma máquina (relançar).
             interactionBar
         }
-        .navigationTitle(displayTitle)
+        // `isActive` gate no VALOR do título e no CONTEÚDO do toolbar — não no
+        // modificador em si — pelo mesmo motivo do `TerminalMirrorView`: as
+        // duas views ficam montadas ao mesmo tempo no painel do iPad
+        // (`SessionDetailPane`), e `.toolbar`/`.navigationTitle` de views
+        // simultâneas na hierarquia disputam a mesma barra, sem que
+        // `.opacity`/`.allowsHitTesting` (que só afetam a área de conteúdo)
+        // resolvam isso.
+        .navigationTitle(isActive ? displayTitle : "")
         .navigationBarTitleDisplayMode(.inline)
         // ⌘. — abre a MESMA confirmação do botão de parar; no pipe-mode isso
         // mata a sessão, então o atalho não pula o gate.
@@ -301,23 +314,25 @@ struct SessionDetailView: View {
             confirmingInterrupt = true
         }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button {
-                        showingDetails = true
+            if isActive {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button {
+                            showingDetails = true
+                        } label: {
+                            Label("Detalhes", systemImage: "info.circle")
+                        }
+                        Button {
+                            renameText = namer.customName(for: model.session.id) ?? model.session.title
+                            renaming = true
+                        } label: {
+                            Label("Renomear", systemImage: "pencil")
+                        }
                     } label: {
-                        Label("Detalhes", systemImage: "info.circle")
+                        Image(systemName: "ellipsis.circle")
                     }
-                    Button {
-                        renameText = namer.customName(for: model.session.id) ?? model.session.title
-                        renaming = true
-                    } label: {
-                        Label("Renomear", systemImage: "pencil")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
+                    .accessibilityLabel("Mais opções")
                 }
-                .accessibilityLabel("Mais opções")
             }
         }
         .sheet(isPresented: $showingDetails) {

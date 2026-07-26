@@ -238,21 +238,40 @@ struct TerminalMirrorView: View {
                 return .handled
             }
         }
-        .navigationTitle(title)
+        // `isActive` gate no VALOR (título) e no CONTEÚDO do toolbar (não no
+        // modificador em si) — não é `if/else` na árvore de views, então não
+        // remonta nada (decisão #19). Sem isto, o painel Chat|Terminal do
+        // iPad (que mantém as duas views vivas ao mesmo tempo, ver
+        // `SessionDetailPane`) tinha o X vermelho de "Encerrar sessão do
+        // tmux" tocável na toolbar mesmo com o Chat em foco — `.toolbar`
+        // compõe as contribuições de TODAS as views montadas, e
+        // `.opacity`/`.allowsHitTesting` não alcançam a barra de navegação.
+        .navigationTitle(isActive ? title : "")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) { themeMenu }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(role: .destructive) {
-                    confirmingKill = true
-                } label: {
-                    Image(systemName: "xmark.circle")
+            if isActive {
+                ToolbarItem(placement: .topBarTrailing) { themeMenu }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(role: .destructive) {
+                        confirmingKill = true
+                    } label: {
+                        Image(systemName: "xmark.circle")
+                    }
+                    .tint(.red)
+                    .accessibilityLabel("Encerrar sessão do tmux")
                 }
-                .tint(.red)
-                .accessibilityLabel("Encerrar sessão do tmux")
             }
         }
         .onDisappear {
+            // Cancela QUALQUER resize debounced ainda pendente antes de
+            // parar o poll e restaurar o tamanho. Sem isto: arrastar o
+            // divisor e trocar de sessão nos ~300ms seguintes deixava o
+            // resize atrasado disparar DEPOIS do restoreSize() — o pane no
+            // Mac ficava com o tamanho errado (a troca de sessão usa
+            // `.id(selection)`, que destrói este painel e roda este
+            // onDisappear na hora). stop()/restoreSize() continuam na
+            // mesma ordem de sempre — só o cancel() entra, antes dos dois.
+            resizeDebouncer.cancel()
             model.stop()
             model.restoreSize()
         }
