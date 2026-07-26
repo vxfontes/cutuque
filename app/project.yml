@@ -70,6 +70,10 @@ targets:
       - target: CutuqueWidgets
       - target: CutuqueWatch
         embed: true
+    # Liga o bundle de testes ao scheme do app, para `xcodebuild test` achar.
+    scheme:
+      testTargets:
+        - CutuqueAppTests
 
   # App do Apple Watch (watchOS 9+ single-target). Cliente fino que fala com o
   # iPhone via WatchConnectivity (o hub só existe na Tailscale, fora do alcance
@@ -117,3 +121,17 @@ targets:
         # "1,2" = iPhone + iPad. O widget acompanha o app: uma Live Activity de
         # extension declarada só como iPhone não aparece no iPad.
         TARGETED_DEVICE_FAMILY: "1,2"
+
+  # Testes unitários da lógica pura do app (geometria do terminal, debounce,
+  # movimento do board, mapa de teclas). Não há UI test — é decisão do spec.
+  CutuqueAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [CutuqueAppTests]
+    dependencies:
+      - target: CutuqueApp
+    settings:
+      base:
+        # xcodegen não gera Info.plist automaticamente pra bundle.unit-test;
+        # sem isto o code sign falha ("does not have an Info.plist file").
+        GENERATE_INFOPLIST_FILE: YES
