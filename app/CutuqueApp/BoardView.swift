@@ -114,7 +114,7 @@ struct BoardView: View {
     // Injetado pelo app: a coluna de filtros (iPad) precisa do MESMO modelo.
     @EnvironmentObject private var model: BoardModel
     @EnvironmentObject private var nav: NavigationState
-    @State private var selected: BoardTask?
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showCloseWeekConfirm = false
     @State private var showArchive = false
     @State private var searchText = ""
@@ -122,15 +122,27 @@ struct BoardView: View {
 
     private var isSearching: Bool { !searchText.trimmingCharacters(in: .whitespaces).isEmpty }
 
+    // No iPad a busca da coluna do meio (BoardFilterList) também precisa
+    // conseguir abrir o card — por isso o estado mora no NavigationState
+    // compartilhado, não num @State local desta view.
+    private var selected: BoardTask? {
+        get { nav.boardSelection }
+        nonmutating set { nav.boardSelection = newValue }
+    }
+
     var body: some View {
         NavigationStack {
             Group {
-                if isSearching {
+                if isSearching && horizontalSizeClass != .regular {
+                    // Compacto: a busca ainda toma a tela, como sempre foi.
                     searchResultsView
                 } else {
                     VStack(spacing: 0) {
-                        FilterBar(model: model)
-                        Divider()
+                        // No iPad os filtros moram na coluna do meio.
+                        if horizontalSizeClass != .regular {
+                            FilterBar(model: model)
+                            Divider()
+                        }
                         if model.isLoading && model.tasks.isEmpty {
                             Spacer(); ProgressView(); Spacer()
                         } else if model.tasks.isEmpty, let err = model.errorText {
@@ -203,8 +215,17 @@ struct BoardView: View {
             } message: {
                 Text("Os concluídos serão arquivados e saem do board; to-dos antigos não iniciados viram encalhados. Normalmente acontece sozinho no domingo 23:59.")
             }
-            .sheet(item: $selected) { task in
-                BoardTaskDetailView(task: task, model: model, readOnly: task.archived == true)
+            .inspector(isPresented: Binding(get: { selected != nil },
+                                            set: { if !$0 { selected = nil } })) {
+                if let task = selected {
+                    BoardTaskDetailView(task: task, model: model,
+                                        readOnly: task.archived == true,
+                                        onClose: { selected = nil })
+                        .inspectorColumnWidth(min: 320, ideal: 380, max: 520)
+                } else {
+                    // O inspector precisa de conteúdo mesmo fechado.
+                    Color.clear
+                }
             }
             .sheet(isPresented: $showArchive) {
                 ArchiveView()
@@ -220,10 +241,15 @@ struct BoardView: View {
         }
     }
 
-    // Colunas lado a lado, cada uma ~85% da largura, com paginação (swipe estilo Trello).
+    /// No iPhone as colunas paginam no swipe (~86% cada). No iPad elas dividem
+    /// a largura e ficam todas visíveis, que é o ponto de ter tela grande.
     private var boardScroller: some View {
         GeometryReader { geo in
-            let colWidth = geo.size.width * 0.86
+            let isRegular = horizontalSizeClass == .regular
+            let visibleColumns = BoardColumn.allCases.count + (model.encalhadas.isEmpty ? 0 : 1)
+            let colWidth = BoardLayout.columnWidth(available: geo.size.width,
+                                                   columns: visibleColumns,
+                                                   isRegular: isRegular)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 12) {
                     if !model.encalhadas.isEmpty {
@@ -250,7 +276,9 @@ struct BoardView: View {
                 .padding(.vertical, 12)
                 .scrollTargetLayout()
             }
-            .scrollTargetBehavior(.viewAligned)
+            // Paginação só no compacto: no iPad as colunas já cabem juntas e o
+            // "encaixe" por coluna atrapalharia o arraste de card.
+            .modifier(PagingWhenCompact(enabled: !isRegular))
             .refreshable { await model.load() }
         }
     }
@@ -286,7 +314,7 @@ struct BoardView: View {
 
 // MARK: - Barra de filtros
 
-private struct FilterBar: View {
+struct FilterBar: View {
     @ObservedObject var model: BoardModel
 
     var body: some View {
@@ -309,7 +337,7 @@ private struct FilterBar: View {
     }
 }
 
-private struct FilterMenu: View {
+struct FilterMenu: View {
     let label: String
     @Binding var selection: String
     let options: [String]
@@ -509,12 +537,19 @@ struct BoardTaskDetailView: View {
     let task: BoardTask
     @ObservedObject var model: BoardModel
     var readOnly: Bool = false   // cards arquivados: só leitura (sem mover/apagar/comentar)
+    /// Quando não-nil, fechar é responsabilidade de quem apresentou (inspector).
+    /// Nil = sheet, e o `dismiss` do ambiente resolve, como sempre.
+    var onClose: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @State private var showDeleteConfirm = false
     @State private var newComment = ""
     @FocusState private var commentFocused: Bool
 
     private var live: BoardTask { model.tasks.first { $0.id == task.id } ?? task }
+
+    private func close() {
+        if let onClose { onClose() } else { dismiss() }
+    }
 
     var body: some View {
         NavigationStack {
@@ -538,7 +573,7 @@ struct BoardTaskDetailView: View {
                     Section("Mover para") {
                         ForEach(BoardColumn.allCases) { column in
                             let isCurrent = live.column == column.rawValue && !live.isEncalhada
-                            Button { Task { await model.move(live, to: column); dismiss() } } label: {
+                            Button { Task { await model.move(live, to: column); close() } } label: {
                                 HStack {
                                     Text(column.label)
                                     Spacer()
@@ -547,7 +582,7 @@ struct BoardTaskDetailView: View {
                             }
                             .disabled(isCurrent)
                         }
-                        Button { Task { await model.markEncalhada(live); dismiss() } } label: {
+                        Button { Task { await model.markEncalhada(live); close() } } label: {
                             Label("Marcar como encalhada", systemImage: "exclamationmark.triangle")
                         }
                         .tint(.red).disabled(live.isEncalhada)
@@ -615,10 +650,10 @@ struct BoardTaskDetailView: View {
             }
             .navigationTitle(live.title)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Fechar") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Fechar") { close() } } }
             .alert("Apagar card?", isPresented: $showDeleteConfirm) {
                 Button("Cancelar", role: .cancel) {}
-                Button("Apagar", role: .destructive) { Task { await model.delete(live); dismiss() } }
+                Button("Apagar", role: .destructive) { Task { await model.delete(live); close() } }
             } message: {
                 Text("\"\(live.title)\" será apagado. Esta ação não pode ser desfeita.")
             }
@@ -652,29 +687,41 @@ struct ArchiveView: View {
     private let api = APIClient()
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if loading {
-                    ProgressView()
-                } else if weeks.isEmpty {
-                    ContentUnavailableView("Nada arquivado ainda", systemImage: "archivebox",
-                        description: Text("Os concluídos vêm pra cá no fechamento da semana."))
-                } else {
-                    List {
-                        ForEach(months, id: \.key) { m in
-                            Section(m.label) {
-                                ForEach(m.weeks) { wk in
-                                    DisclosureGroup {
-                                        ForEach(wk.tasks) { t in
-                                            Button { selected = t } label: { BoardCardRow(task: t) }
-                                                .buttonStyle(.plain)
-                                        }
-                                    } label: {
-                                        HStack {
-                                            Text(Self.range(wk)).font(.subheadline).fontWeight(.medium)
-                                            Spacer()
-                                            Text("\(wk.tasks.count)").font(.caption).foregroundStyle(.secondary)
-                                        }
+        Group {
+            if embedded { archiveList } else { NavigationStack { archiveList } }
+        }
+        .task {
+            loading = true
+            weeks = (try? await api.boardArchive()) ?? []
+            loading = false
+        }
+    }
+
+    @ViewBuilder private var archiveList: some View {
+        Group {
+            if loading {
+                ProgressView()
+            } else if weeks.isEmpty {
+                ContentUnavailableView("Nada arquivado ainda", systemImage: "archivebox",
+                    description: Text("Os concluídos vêm pra cá no fechamento da semana."))
+            } else {
+                List {
+                    ForEach(months, id: \.key) { m in
+                        Section(m.label) {
+                            ForEach(m.weeks) { wk in
+                                DisclosureGroup {
+                                    ForEach(wk.tasks) { t in
+                                        Button {
+                                            if let selection { selection.wrappedValue = t }
+                                            else { selected = t }
+                                        } label: { BoardCardRow(task: t) }
+                                            .buttonStyle(.plain)
+                                    }
+                                } label: {
+                                    HStack {
+                                        Text(Self.range(wk)).font(.subheadline).fontWeight(.medium)
+                                        Spacer()
+                                        Text("\(wk.tasks.count)").font(.caption).foregroundStyle(.secondary)
                                     }
                                 }
                             }
@@ -682,17 +729,16 @@ struct ArchiveView: View {
                     }
                 }
             }
-            .navigationTitle("Arquivo semanal")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Fechar") { dismiss() } } }
-            .sheet(item: $selected) { t in
-                BoardTaskDetailView(task: t, model: roModel, readOnly: true)
+        }
+        .navigationTitle("Arquivo semanal")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if !embedded {
+                ToolbarItem(placement: .topBarTrailing) { Button("Fechar") { dismiss() } }
             }
         }
-        .task {
-            loading = true
-            weeks = (try? await api.boardArchive()) ?? []
-            loading = false
+        .sheet(item: embedded ? .constant(nil) : $selected) { t in
+            BoardTaskDetailView(task: t, model: roModel, readOnly: true)
         }
     }
 
@@ -746,5 +792,14 @@ private struct DraggableCard: ViewModifier {
     let enabled: Bool
     func body(content: Content) -> some View {
         if enabled { content.draggable(id) } else { content }
+    }
+}
+
+/// `.scrollTargetBehavior` não é condicionável inline (os behaviors são tipos
+/// concretos distintos); este modifier resolve com um `if` de verdade.
+private struct PagingWhenCompact: ViewModifier {
+    let enabled: Bool
+    func body(content: Content) -> some View {
+        if enabled { content.scrollTargetBehavior(.viewAligned) } else { content }
     }
 }

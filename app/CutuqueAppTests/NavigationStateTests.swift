@@ -99,4 +99,18 @@ final class NavigationStateTests: XCTestCase {
             XCTAssertFalse(d.symbol.isEmpty)
         }
     }
+
+    /// Card aberto no inspector do board (Task 13) — alimentado também pela
+    /// busca da coluna do meio, que fica num arquivo separado do `BoardView`
+    /// e por isso precisa de um estado compartilhado pra abrir o card nele.
+    func testBoardSelectionComecaNilEEhAlimentavelPelaBusca() {
+        let nav = NavigationState()
+        XCTAssertNil(nav.boardSelection)
+        let json = """
+        {"id":"x","title":"t","column":"a_fazer","group":"g","session":"s"}
+        """
+        let task = try! JSONDecoder().decode(BoardTask.self, from: Data(json.utf8))
+        nav.boardSelection = task
+        XCTAssertEqual(nav.boardSelection?.id, "x")
+    }
 }
