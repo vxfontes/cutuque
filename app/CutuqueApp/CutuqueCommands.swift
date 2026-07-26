@@ -41,13 +41,13 @@ struct CutuqueCommands: Commands {
             Divider()
 
             Button("Board") { nav.destination = .board }
-                .keyboardShortcut("0")
+                .keyboardShortcut(digitShortcut(0))
             ForEach(1...9, id: \.self) { n in
                 Button("Sessão \(n)") {
                     nav.destination = .sessions
                     nav.send(.selectSession(index: n - 1))
                 }
-                .keyboardShortcut(KeyEquivalent(Character("\(n)")))
+                .keyboardShortcut(digitShortcut(n))
             }
 
             Divider()
@@ -58,4 +58,14 @@ struct CutuqueCommands: Commands {
                 .keyboardShortcut(.rightArrow, modifiers: .command)
         }
     }
+}
+
+/// `KeyEquivalent` de um dígito 0…9 — um único ponto de construção pro
+/// atalho do Board (0) e da `ForEach` de sessões (1…9), que são o mesmo tipo
+/// de coisa (dígito → tecla). `KeyEquivalent` conforma a
+/// `ExpressibleByExtendedGraphemeClusterLiteral`, mas isso só se aplica a
+/// literais escritos direto no código-fonte; `n` é uma variável, então o
+/// `Character(String)` explícito continua necessário aqui.
+private func digitShortcut(_ n: Int) -> KeyEquivalent {
+    KeyEquivalent(Character("\(n)"))
 }

@@ -102,4 +102,42 @@ final class NavigationState: ObservableObject {
         consume()
         return true
     }
+
+    /// Zera o intent SE (e só se) for um dos três que a lista de sessões
+    /// trata — `.newSession`, `.reload`, `.selectSession` — e devolve a ação
+    /// equivalente pronta pra View aplicar. Demais casos (`.interrupt`,
+    /// `.moveCardLeft`...) voltam `nil` e o intent continua vivo pro vizinho
+    /// (o painel de detalhe, na outra coluna da split view) tratar.
+    ///
+    /// Mesmo espírito do `consumeIfInterrupt()` acima (Task 15): a decisão
+    /// "reconheço ou não" mora aqui, testável direto, sem hospedar
+    /// `SessionListView` em teste. Achado da Task 11 (revisão): sem isso, um
+    /// refactor que trocasse o `default: return` da View por um `consume()`
+    /// passava a suíte inteira e engolia ⌘. e ⌘←/⌘→ em silêncio.
+    @discardableResult
+    func consumeSessionListIntent() -> SessionListIntentAction? {
+        let action: SessionListIntentAction?
+        switch intent {
+        case .newSession:
+            action = .newSession
+        case .reload:
+            action = .reload
+        case .selectSession(let index):
+            action = .selectSession(index: index)
+        default:
+            action = nil
+        }
+        if action != nil {
+            consume()
+        }
+        return action
+    }
+}
+
+/// Ação equivalente a um `AppIntent` reconhecido pela lista de sessões — ver
+/// `NavigationState.consumeSessionListIntent()`.
+enum SessionListIntentAction: Equatable {
+    case newSession
+    case reload
+    case selectSession(index: Int)
 }

@@ -632,17 +632,20 @@ struct SessionListView: View {
         }
     }
 
-    /// Trata só `.newSession` e `.selectSession` — os demais casos (board,
-    /// terminal, interrupt...) são de outros consumidores.
+    /// Trata só `.newSession`, `.reload` e `.selectSession` — os demais casos
+    /// (board, terminal, interrupt...) são de outros consumidores.
     ///
-    /// Só consome o que ELE trata: a lista e o painel de detalhe ficam vivos
-    /// ao mesmo tempo (colunas diferentes da split view), então zerar o
-    /// intent no `default` faria a lista engolir o ⌘. antes do chat ver.
+    /// A decisão "reconheço ou não" NÃO mora aqui: é
+    /// `nav.consumeSessionListIntent()` (`NavigationState.swift`) quem só
+    /// consome o intent quando é um dos três que a lista trata, e devolve a
+    /// ação equivalente. Isso é testado direto na `NavigationState`, sem
+    /// hospedar esta View em teste — aqui embaixo é só fiação (o "I/O": abrir
+    /// a sheet, disparar o refresh, tocar `splitSelection`).
     ///
     /// Chamada pelo `AppIntentListener` (fim do arquivo) via `body`, não
     /// direto na cadeia de `bodyContent` — ver o comentário lá.
-    private func handleAppIntent(_ intent: AppIntent?) {
-        switch intent {
+    private func handleAppIntent(_: AppIntent?) {
+        switch nav.consumeSessionListIntent() {
         case .newSession:
             showingNew = true
         case .reload:
@@ -654,10 +657,9 @@ struct SessionListView: View {
             if let session = ordered[safe: index] {
                 splitSelection?.wrappedValue = .session(session)
             }
-        default:
-            return
+        case nil:
+            break
         }
-        nav.consume()
     }
 
     /// Resolve o deep-link pendente: se a sessão já está na lista, navega e limpa.
@@ -985,6 +987,11 @@ private struct HubStatusIndicator: View {
 /// expression in reasonable time" — erro real de build, não achismo). Como
 /// `ViewModifier` de tipo próprio, o corpo é checado à parte.
 private struct AppIntentListener: ViewModifier {
+    // Redeclarado de propósito: um `ViewModifier` não captura o
+    // `@EnvironmentObject` do pai (a `SessionListView` já tem o dela, linha
+    // acima na struct) — cada tipo que lê do ambiente precisa da sua própria
+    // propriedade. Não é duplicação pra "limpar"; sem esta linha o
+    // `.onChange(of: nav.intent)` abaixo não compila.
     @EnvironmentObject private var nav: NavigationState
     let handle: (AppIntent?) -> Void
 
