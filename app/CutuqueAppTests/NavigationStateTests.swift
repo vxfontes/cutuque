@@ -99,4 +99,42 @@ final class NavigationStateTests: XCTestCase {
             XCTAssertFalse(d.symbol.isEmpty)
         }
     }
+
+    // MARK: - consumeIfInterrupt (Task 15, correção do achado de testabilidade)
+    //
+    // `SessionDetailView` reduz seu `.onChange(of: nav.intent)` a fiação
+    // trivial que chama este método. A regra "só consome .interrupt, nunca em
+    // default:" é o que protege o vizinho (a lista de sessões, viva na outra
+    // coluna) de ter seus intents engolidos — por isso testada aqui, direto
+    // na NavigationState, sem qualquer hosting de View.
+
+    func testConsumeIfInterruptConsomeQuandoIntentEhInterrupt() {
+        let nav = NavigationState()
+        nav.send(.interrupt)
+
+        let consumiu = nav.consumeIfInterrupt()
+
+        XCTAssertTrue(consumiu)
+        XCTAssertNil(nav.intent)
+    }
+
+    func testConsumeIfInterruptNaoConsomeIntentDiferente() {
+        let nav = NavigationState()
+        nav.send(.moveCardLeft)
+
+        let consumiu = nav.consumeIfInterrupt()
+
+        XCTAssertFalse(consumiu)
+        XCTAssertEqual(nav.intent, .moveCardLeft, "intent de outro consumidor não pode ser engolido")
+    }
+
+    func testConsumeIfInterruptNaoConsomeIntentNil() {
+        let nav = NavigationState()
+        XCTAssertNil(nav.intent)
+
+        let consumiu = nav.consumeIfInterrupt()
+
+        XCTAssertFalse(consumiu)
+        XCTAssertNil(nav.intent)
+    }
 }

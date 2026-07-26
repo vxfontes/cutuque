@@ -291,14 +291,13 @@ struct SessionDetailView: View {
         .navigationTitle(displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         // ⌘. — abre a MESMA confirmação do botão de parar; no pipe-mode isso
-        // mata a sessão, então o atalho não pula o gate.
-        //
-        // Só consome o que trata: a lista de sessões está viva na outra coluna
-        // da split view e espera pelos intents dela.
-        .onChange(of: nav.intent) { _, intent in
-            guard intent == .interrupt else { return }
-            nav.consume()
-            confirmingInterrupt = true
+        // mata a sessão, então o atalho não pula o gate. A regra de "só
+        // consome .interrupt" vive em `NavigationState.consumeIfInterrupt()`
+        // (testada em NavigationStateTests.swift) — aqui é só fiação.
+        .onChange(of: nav.intent) { _, _ in
+            if nav.consumeIfInterrupt() {
+                confirmingInterrupt = true
+            }
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
