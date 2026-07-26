@@ -118,6 +118,9 @@ struct BoardView: View {
     @State private var showArchive = false
     @State private var searchText = ""
     @State private var searchTask: Task<Void, Never>?
+    // "Estou estreito AGORA?" — muda em runtime (Slide Over, Split View no
+    // mínimo, rotação). Nunca decide "sou iPad?" (isso é `isPad`, por idiom).
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     /// iPad de verdade — NÃO `horizontalSizeClass == .regular` (achado
     /// Important 2 da revisão: iPhone Plus/Pro Max em paisagem também reporta
@@ -127,6 +130,18 @@ struct BoardView: View {
     /// regressão no iPhone, proibida pela restrição global do plano). Mesmo
     /// idiom que escolhe a raiz do app em `CutuqueApp.swift`.
     private var isPad: Bool { BoardLayout.isPad(UIDevice.current.userInterfaceIdiom) }
+
+    /// Em Slide Over / Split View no mínimo a `NavigationSplitView` colapsa
+    /// numa pilha e o `BoardFilterList` (coluna do meio, dono dos filtros e
+    /// da busca) some de vista — só dá pra alcançar navegando pra trás. Ali,
+    /// mesmo no iPad, o `BoardView` precisa da própria FilterBar/busca, como
+    /// sempre foi no iPhone (achado da revisão da Task 16). No iPhone
+    /// `isPad` é sempre falso, então isto é sempre `true` — comportamento
+    /// preservado.
+    private var showsOwnFilterAndSearch: Bool {
+        BoardLayout.showsOwnFilterAndSearch(isPad: isPad,
+                                             horizontalSizeClassIsCompact: horizontalSizeClass == .compact)
+    }
 
     private var isSearching: Bool { !searchText.trimmingCharacters(in: .whitespaces).isEmpty }
 
@@ -141,13 +156,16 @@ struct BoardView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if isSearching && !isPad {
-                    // Compacto: a busca ainda toma a tela, como sempre foi.
+                if isSearching && showsOwnFilterAndSearch {
+                    // Compacto (iPhone, ou iPad em Slide Over/Split View no
+                    // mínimo): a busca ainda toma a tela, como sempre foi.
                     searchResultsView
                 } else {
                     VStack(spacing: 0) {
-                        // No iPad os filtros moram na coluna do meio.
-                        if !isPad {
+                        // No iPad largo os filtros moram na coluna do meio
+                        // (`BoardFilterList`); em Slide Over ela saiu de
+                        // vista, então a FilterBar própria volta.
+                        if showsOwnFilterAndSearch {
                             FilterBar(model: model)
                             Divider()
                         }
@@ -161,13 +179,16 @@ struct BoardView: View {
                     }
                 }
             }
-            // No iPad a busca já mora inteira na coluna do meio
+            // No iPad LARGO a busca já mora inteira na coluna do meio
             // (`BoardFilterList`) — manter esta aqui também deixaria DOIS
             // campos vivos escrevendo em `model.searchResults` ao mesmo
             // tempo, o de trás sobrescrevendo o da frente em silêncio, sem
             // nunca aparecer (achado Important 1 da revisão). No iPhone a
-            // busca continua exatamente como sempre foi.
-            .modifier(SearchableWhenCompact(enabled: !isPad, text: $searchText))
+            // busca continua exatamente como sempre foi. No iPad em Slide
+            // Over/Split View no mínimo o `BoardFilterList` colapsou pra
+            // trás na pilha — sem esta busca o board ficaria sem NENHUMA
+            // forma de buscar (achado da revisão da Task 16).
+            .modifier(SearchableWhenCompact(enabled: showsOwnFilterAndSearch, text: $searchText))
             .onChange(of: searchText) { _, q in
                 searchTask?.cancel()
                 searchTask = Task {
@@ -258,7 +279,13 @@ struct BoardView: View {
     /// a largura e ficam todas visíveis, que é o ponto de ter tela grande.
     private var boardScroller: some View {
         GeometryReader { geo in
-            let isRegular = isPad
+            // Largura MEDIDA, não idiom: em Slide Over ou Split View no
+            // mínimo o idiom continua `.pad`, mas `geo.size.width` cai abaixo
+            // dos 700 pt — as colunas precisam voltar a paginar como no
+            // iPhone (achado da revisão da Task 16; `isRegular = isPad`
+            // ignorava a largura que este próprio `GeometryReader` já mede).
+            let isRegular = BoardLayout.isRegularWidth(idiom: UIDevice.current.userInterfaceIdiom,
+                                                        measuredWidth: geo.size.width)
             let visibleColumns = BoardColumn.allCases.count + (model.encalhadas.isEmpty ? 0 : 1)
             let colWidth = BoardLayout.columnWidth(available: geo.size.width,
                                                    columns: visibleColumns,

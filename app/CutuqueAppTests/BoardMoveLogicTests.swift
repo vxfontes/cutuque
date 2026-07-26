@@ -126,4 +126,66 @@ final class BoardMoveLogicTests: XCTestCase {
     func testIPadEhPad() {
         XCTAssertTrue(BoardLayout.isPad(.pad))
     }
+
+    // MARK: largura medida (Task 16, achado: Slide Over/Split View no mínimo)
+    //
+    // `isRegular = isPad` ignorava a largura que o `GeometryReader` já media:
+    // num iPad em Slide Over (~320 pt) isso dava colunas de 260 pt sem
+    // paginação. `isRegularWidth` responde "estou estreito AGORA?" (muda em
+    // runtime) e não pode nunca virar `true` num idiom que não é `.pad`
+    // (isso continua sendo obrigação de `isPad`, por idiom).
+
+    func testIPadEmSlideOverVoltaAPaginar() {
+        // ~320 pt, idiom .pad: abaixo do limiar de 700, não é "regular".
+        XCTAssertFalse(BoardLayout.isRegularWidth(idiom: .pad, measuredWidth: 320))
+    }
+
+    func testIPadLargoContinuaDividindoAsColunas() {
+        // Split View largo / tela cheia: acima do limiar, comportamento
+        // regular preservado (nenhuma regressão no caminho já aceito).
+        XCTAssertTrue(BoardLayout.isRegularWidth(idiom: .pad, measuredWidth: 1024))
+    }
+
+    func testLimiarDos700PtEhInclusivoParaRegular() {
+        XCTAssertTrue(BoardLayout.isRegularWidth(idiom: .pad, measuredWidth: 700))
+        XCTAssertFalse(BoardLayout.isRegularWidth(idiom: .pad, measuredWidth: 699))
+    }
+
+    func testIPhoneNuncaEhRegularPorLarguraNemEmTelaGrande() {
+        // Idiom decide "sou iPad?" — iPhone nunca vira "regular" aqui, por
+        // maior que a largura medida seja (Pro Max em paisagem, p.ex.).
+        XCTAssertFalse(BoardLayout.isRegularWidth(idiom: .phone, measuredWidth: 1024))
+    }
+
+    func testColunaVoltaAPaginarQuandoLarguraMedidaEstreita() {
+        // Fim a fim: 320 pt medidos, 6 colunas — mesmo com idiom .pad, a
+        // função de paginação (`isRegular=false`) devolve os 86% do iPhone.
+        let isRegular = BoardLayout.isRegularWidth(idiom: .pad, measuredWidth: 320)
+        XCTAssertEqual(BoardLayout.columnWidth(available: 320, columns: 6, isRegular: isRegular),
+                       320 * 0.86, accuracy: 0.01)
+    }
+
+    // MARK: FilterBar/busca própria do BoardView (Task 16)
+    //
+    // Em Slide Over / Split View no mínimo a `NavigationSplitView` colapsa e
+    // o `BoardFilterList` (coluna do meio) sai de vista — só alcançável
+    // navegando pra trás. Ali o `BoardView` precisa da própria FilterBar e
+    // busca, como sempre foi no iPhone.
+
+    func testIPhoneSempreMostraAPropriaFilterBarEBusca() {
+        XCTAssertTrue(BoardLayout.showsOwnFilterAndSearch(isPad: false, horizontalSizeClassIsCompact: false))
+        XCTAssertTrue(BoardLayout.showsOwnFilterAndSearch(isPad: false, horizontalSizeClassIsCompact: true))
+    }
+
+    func testIPadLargoEscondeAPropriaFilterBarEBusca() {
+        // `BoardFilterList` está ao lado — duplicar aqui reproduziria a
+        // busca dupla (achado Important 1 da Task 13).
+        XCTAssertFalse(BoardLayout.showsOwnFilterAndSearch(isPad: true, horizontalSizeClassIsCompact: false))
+    }
+
+    func testIPadCompactoMostraAPropriaFilterBarEBusca() {
+        // Slide Over/Split View no mínimo: `BoardFilterList` colapsou pra
+        // trás na pilha — sem isto o board ficaria sem busca nenhuma.
+        XCTAssertTrue(BoardLayout.showsOwnFilterAndSearch(isPad: true, horizontalSizeClassIsCompact: true))
+    }
 }

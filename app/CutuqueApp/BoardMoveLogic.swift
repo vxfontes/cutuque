@@ -79,5 +79,38 @@ enum BoardLayout {
     /// `RootTabView`, raiz do iPhone, regredia). O mesmo idiom que escolhe a
     /// raiz do app em `CutuqueApp.swift` decide aqui — nunca muda em runtime,
     /// então rotação/Slide Over não trocam o layout no meio do caminho.
+    ///
+    /// Isto responde "sou iPad?" — decide ESTRUTURA (existe coluna de
+    /// filtros, a busca mora nela). NÃO decide layout/paginação: para "estou
+    /// estreito AGORA?" (que muda em runtime) ver `isRegularWidth` e
+    /// `showsOwnFilterAndSearch` abaixo.
     static func isPad(_ idiom: UIUserInterfaceIdiom) -> Bool { idiom == .pad }
+
+    /// Verdadeiro só quando o idiom é iPad E a largura MEDIDA já comporta
+    /// colunas lado a lado — regra dos 700 pt (mesmo limiar de
+    /// `PadLayout.expandThreshold`, mesmo espírito). Em Slide Over ou Split
+    /// View no mínimo (~320 pt) o idiom continua `.pad`, mas a largura
+    /// medida cai abaixo do limiar: as colunas voltam a paginar como no
+    /// iPhone (achado da Task 16 — `isRegular = isPad` ignorava a largura que
+    /// o próprio `GeometryReader` já media, dando colunas de 260 pt num
+    /// viewport de 320 pt, sem paginação). Ao contrário de `isPad(_:)`, isto
+    /// muda em runtime (rotação, arraste do divisor): é a resposta a "estou
+    /// estreito agora?", não a "sou iPad?".
+    static func isRegularWidth(idiom: UIUserInterfaceIdiom, measuredWidth: CGFloat) -> Bool {
+        isPad(idiom) && measuredWidth >= PadLayout.expandThreshold
+    }
+
+    /// No iPad, a `NavigationSplitView` de três colunas colapsa numa pilha de
+    /// coluna única quando `horizontalSizeClass` vira `.compact` (Slide Over,
+    /// Split View no mínimo): a coluna do meio (`BoardFilterList`, dona de
+    /// verdade dos filtros e da busca) sai de vista — só dá pra alcançar
+    /// navegando pra trás na pilha. Enquanto o `BoardView` (detalhe) for a
+    /// tela da frente sozinha, ele precisa da SUA PRÓPRIA barra de filtros e
+    /// busca, como sempre foi no iPhone. No iPad largo (`.regular`) o
+    /// `BoardFilterList` está ao lado — manter as duas buscas vivas ao mesmo
+    /// tempo reproduziria a busca dupla escrevendo em `searchResults` em
+    /// silêncio (achado Important 1 da revisão da Task 13).
+    static func showsOwnFilterAndSearch(isPad: Bool, horizontalSizeClassIsCompact: Bool) -> Bool {
+        !isPad || horizontalSizeClassIsCompact
+    }
 }
