@@ -206,6 +206,16 @@ final class BoardMoveLogicTests: XCTestCase {
         }
     }
 
+    // Os 3 testes abaixo (`IPadLargoComTodasAsColunasVisiveis`,
+    // `IPadCompacto`, `IPadDetailOnlyEmTelaCheiaRegular`) já estão cobertos,
+    // combinação a combinação, por `testTabelaVerdadeCompletaDosTresEixos`
+    // acima — são redundantes de propósito (Minor da rodada 3 da revisão):
+    // ficam como documentação nomeada dos 3 achados que motivaram cada eixo
+    // (rodada 1, rodada 2, e o caso "ao lado" que nunca quebrou), não porque
+    // agreguem cobertura nova. Se algum dia virarem manutenção morta, é
+    // seguro removê-los sem perder cobertura — a tabela-verdade sozinha já
+    // garante as 8 combinações.
+
     func testIPhoneSempreMostraAPropriaFilterBarEBuscaQualquerCombinacao() {
         // Com isPad=false o resultado tem que ser `true` por curto-circuito,
         // não importa o que os outros dois eixos digam — é a garantia de
@@ -244,5 +254,34 @@ final class BoardMoveLogicTests: XCTestCase {
         XCTAssertTrue(BoardLayout.showsOwnFilterAndSearch(isPad: true,
                                                            horizontalSizeClassIsCompact: false,
                                                            columnVisibilityIsDetailOnly: true))
+    }
+
+    // MARK: - `.focusSearch` mutuamente exclusivo (rodada 3 da revisão)
+
+    /// `BoardView` trata `.focusSearch` quando é dono
+    /// (`showsOwnFilterAndSearch` true); `BoardFilterList` (que só existe no
+    /// iPad, dentro do `RootSplitView`) trata exatamente quando NÃO é —
+    /// mesma função pura, um lado negando o outro. Trava aqui, em teste puro,
+    /// que os dois nunca concordam: nunca os dois tratam ao mesmo tempo (⌘F
+    /// focaria um campo invisível e comeria o intent do dono de verdade),
+    /// nunca os dois deixam passar (o intent travaria até outro resetar a
+    /// comparação do `Equatable`, já que `.onChange` só dispara na transição).
+    ///
+    /// O que isto NÃO prova: que `BoardView.swift` e `BoardFilterList.swift`
+    /// de fato chamam esta função com esses parâmetros e consomem só no ramo
+    /// correto — isso foi conferido por leitura de código (ver relatório),
+    /// não por este teste, que só trava o contrato da função pura em si.
+    func testExatamenteUmDosDoisConsumidoresTrataFocusSearchNoIPad() {
+        for compact in [false, true] {
+            for detailOnly in [false, true] {
+                let boardViewTrata = BoardLayout.showsOwnFilterAndSearch(
+                    isPad: true,
+                    horizontalSizeClassIsCompact: compact,
+                    columnVisibilityIsDetailOnly: detailOnly)
+                let boardFilterListTrata = !boardViewTrata
+                XCTAssertTrue(boardViewTrata != boardFilterListTrata,
+                              "exatamente um deve tratar: compact=\(compact) detailOnly=\(detailOnly)")
+            }
+        }
     }
 }

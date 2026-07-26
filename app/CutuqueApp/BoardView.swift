@@ -118,6 +118,10 @@ struct BoardView: View {
     @State private var showArchive = false
     @State private var searchText = ""
     @State private var searchTask: Task<Void, Never>?
+    // Foco do campo de busca própria, pra atender `.focusSearch` quando ESTA
+    // view é a dona (ver `showsOwnFilterAndSearch`) — rodada 3 da revisão da
+    // Task 16: antes disto o `⌘F` não tinha como focar nada aqui.
+    @FocusState private var searchFieldFocused: Bool
     // "Estou estreito AGORA?" — muda em runtime (Slide Over, Split View no
     // mínimo, rotação). Nunca decide "sou iPad?" (isso é `isPad`, por idiom).
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -200,6 +204,7 @@ struct BoardView: View {
             // trás na pilha — sem esta busca o board ficaria sem NENHUMA
             // forma de buscar (achado da revisão da Task 16).
             .modifier(SearchableWhenCompact(enabled: showsOwnFilterAndSearch, text: $searchText))
+            .modifier(SearchFocusWhenAvailable(focused: $searchFieldFocused))
             .onChange(of: searchText) { _, q in
                 searchTask?.cancel()
                 searchTask = Task {
@@ -208,9 +213,21 @@ struct BoardView: View {
                 }
             }
             // ⌘← / ⌘→ movem o card aberto no inspector — mesmo caminho otimista
-            // do arraste. Só consome o que trata (a coluna de filtros também
-            // escuta o intent e espera pelo ⌘F dela).
+            // do arraste. `.focusSearch` só é tratado aqui quando ESTA view é a
+            // dona da busca (`showsOwnFilterAndSearch`); do contrário quem foca
+            // é o `BoardFilterList` (coluna do meio) — os dois ramos usam o
+            // MESMO predicado, um negado do outro, então exatamente um trata e
+            // consome (achado da rodada 3 da revisão: consumir sem tratar
+            // travava o `⌘F` porque `AppIntent` só dispara `.onChange` na
+            // transição, e um `default: nav.consume()` engolia o intent sem
+            // ninguém focar o campo visível).
             .onChange(of: nav.intent) { _, intent in
+                if intent == .focusSearch {
+                    guard showsOwnFilterAndSearch else { return }
+                    searchFieldFocused = true
+                    nav.consume()
+                    return
+                }
                 let offset: Int
                 switch intent {
                 case .moveCardLeft:  offset = -1
@@ -867,6 +884,23 @@ private struct PagingWhenCompact: ViewModifier {
 /// existe mais, só a da coluna do meio (`BoardFilterList`) fica viva. É a
 /// correção do achado Important 1 (busca dupla no iPad escrevendo, as duas,
 /// no mesmo `model.searchResults`).
+/// `.searchFocused(_:)` só existe a partir do iOS 18 (checado contra o SDK: a
+/// sobrecarga de `FocusState<Bool>.Binding` está marcada `@available(iOS
+/// 18.0, ...)`), mas o `deploymentTarget` deste projeto é 17.0
+/// (`project.yml`). Em iOS 17 este modifier vira no-op: o `⌘F` ainda consome
+/// o intent certo — o que resolve o travamento da rodada 3 — só não empurra o
+/// teclado sozinho pro campo. Em iOS 18+ ele foca de verdade.
+private struct SearchFocusWhenAvailable: ViewModifier {
+    var focused: FocusState<Bool>.Binding
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.searchFocused(focused)
+        } else {
+            content
+        }
+    }
+}
+
 private struct SearchableWhenCompact: ViewModifier {
     let enabled: Bool
     @Binding var text: String
