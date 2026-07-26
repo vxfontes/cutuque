@@ -2684,12 +2684,14 @@ O atalho é emitido pela Task 11 e, até aqui, ninguém o consome — quem sabe 
 - Modify: `app/CutuqueApp/SessionDetailView.swift` (propriedades da `SessionDetailView`, `:194+`, e os modificadores do corpo)
 
 **Interfaces:**
-- Consumes: `NavigationState`, `AppIntent.interrupt` (Task 5); `SessionDetailViewModel.interrupt()` (`SessionDetailView.swift:113`).
+- Consumes: `NavigationState`, `AppIntent.interrupt` (Task 5); `confirmingInterrupt` (`SessionDetailView.swift:215`).
 - Produces: nenhuma API nova.
 
 - [ ] **Step 1: Escutar o intent no chat**
 
-Em `SessionDetailView`, acrescentar às propriedades:
+O atalho **abre a mesma confirmação do botão**, não chama `model.interrupt()` direto. O gate existe de propósito: no pipe-mode o "parar" **mata** a sessão (decisão #18, card `6b74500a1fd9a1f2`), e um atalho de teclado é ainda mais fácil de disparar sem querer que um botão.
+
+Em `SessionDetailView`, acrescentar às propriedades (junto de `@EnvironmentObject private var router`, `:198`):
 
 ```swift
     @EnvironmentObject private var nav: NavigationState
@@ -2698,16 +2700,17 @@ Em `SessionDetailView`, acrescentar às propriedades:
 e, junto dos outros modificadores do corpo (depois de `.navigationBarTitleDisplayMode(.inline)`):
 
 ```swift
-        // ⌘. — mesmo caminho do botão de parar. Só consome o que trata: a lista
-        // de sessões está viva na outra coluna e espera pelos intents dela.
+        // ⌘. — abre a MESMA confirmação do botão de parar; no pipe-mode isso
+        // mata a sessão, então o atalho não pula o gate.
+        //
+        // Só consome o que trata: a lista de sessões está viva na outra coluna
+        // da split view e espera pelos intents dela.
         .onChange(of: nav.intent) { _, intent in
             guard intent == .interrupt else { return }
             nav.consume()
-            Task { await model.interrupt() }
+            confirmingInterrupt = true
         }
 ```
-
-Confirme o nome da propriedade do view model nesta struct (`model` no `@StateObject` do `init(session:)`) e use o mesmo.
 
 - [ ] **Step 2: Compilar**
 
@@ -2717,7 +2720,8 @@ Expected: exit 0.
 - [ ] **Step 3: Aceite**
 
 No `Cutuque iPad 13` com teclado físico, uma sessão rodando aberta no chat:
-- `⌘.` para o agente e mostra o mesmo aviso do botão de parar (`"pausada"` no tmux, `"encerrada"` no pipe — ver `interrupt()` em `:113`);
+- `⌘.` abre a confirmação de parar; confirmando, dá o mesmo resultado do botão (`"pausada"` no tmux, `"encerrada"` no pipe — ver `interrupt()` em `:113`);
+- cancelar a confirmação não para nada;
 - `⌘.` com o **Board** aberto: nada acontece, sem crash;
 - `⌘.` com o chat aberto **e** a lista de sessões visível ao lado: o chat recebe — a lista não engole o atalho.
 
