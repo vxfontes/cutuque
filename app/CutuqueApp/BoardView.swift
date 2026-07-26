@@ -85,7 +85,8 @@ private extension Array where Element: Hashable {
 // MARK: - Board estilo Trello (colunas horizontais com swipe)
 
 struct BoardView: View {
-    @StateObject private var model = BoardModel()
+    // Injetado pelo app: a coluna de filtros (iPad) precisa do MESMO modelo.
+    @EnvironmentObject private var model: BoardModel
     @State private var selected: BoardTask?
     @State private var showCloseWeekConfirm = false
     @State private var showArchive = false
@@ -567,6 +568,8 @@ struct BoardTaskDetailView: View {
 // MARK: - Arquivo semanal (mês > semana, pt-BR)
 
 struct ArchiveView: View {
+    var embedded: Bool = false
+    var selection: Binding<BoardTask?>?
     @Environment(\.dismiss) private var dismiss
     @State private var weeks: [ArchivedWeek] = []
     @State private var loading = true
