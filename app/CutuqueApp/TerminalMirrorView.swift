@@ -207,6 +207,13 @@ struct TerminalMirrorView: View {
                 model.resize(cols: cols, rows: rows)
                 model.start()
             }
+            .onKeyPress(phases: .down) { press in
+                guard let key = TerminalKeyboard.tmuxKey(for: press.key.character,
+                                                         modifiers: press.modifiers)
+                else { return .ignored }
+                Task { await model.sendKey(key) }
+                return .handled
+            }
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
@@ -359,6 +366,7 @@ struct TerminalMirrorView: View {
         }
         .buttonStyle(.plain)
         .disabled(delta < 0 ? fontPtStored <= fontMin : fontPtStored >= fontMax)
+        .keyboardShortcut(delta < 0 ? "-" : "+", modifiers: .command)
     }
 
     private func keyButton(_ label: String, _ key: String, tint: Color = .secondary) -> some View {
@@ -405,6 +413,7 @@ struct TerminalMirrorView: View {
                 }
             }
             .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty || model.sending)
+            .keyboardShortcut(.return, modifiers: .command)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
