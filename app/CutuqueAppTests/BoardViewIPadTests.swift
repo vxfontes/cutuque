@@ -7,6 +7,11 @@ import XCTest
 /// inspector. O resto (GeometryReader, `.inspector`, paginação condicional) é
 /// estrutura de SwiftUI sem lógica pura pra isolar em XCTest; o critério de
 /// aceite real é o passo manual no simulador (Step 8 do brief).
+///
+/// A decisão "iPad vs. iPhone" que discrimina busca dupla/paginação/FilterBar
+/// (achados Important 1 e 2 da rodada de correção 1) foi extraída como função
+/// pura — `BoardLayout.isPad(_:)` — e está coberta em `BoardMoveLogicTests`,
+/// não aqui.
 @MainActor
 final class BoardViewIPadTests: XCTestCase {
 
@@ -25,14 +30,5 @@ final class BoardViewIPadTests: XCTestCase {
     func testBoardTaskDetailViewOnCloseDefaultNilContinuaComoSheet() {
         let view = BoardTaskDetailView(task: task(), model: BoardModel())
         XCTAssertNil(view.onClose)
-    }
-
-    /// `FilterBar`/`FilterMenu` viram não-private pra o `BoardFilterList`
-    /// (coluna do meio do iPad, arquivo separado) reusar a linha de filtro —
-    /// aqui simulamos o mesmo tipo de acesso cross-file que ele faz.
-    func testFilterBarEFilterMenuSaoAcessiveisForaDoArquivo() {
-        let model = BoardModel()
-        _ = FilterBar(model: model)
-        _ = FilterMenu(label: "Ambiente", selection: .constant("all"), options: [])
     }
 }
