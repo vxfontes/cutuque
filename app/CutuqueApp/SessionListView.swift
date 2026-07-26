@@ -630,26 +630,29 @@ struct SessionListView: View {
                           session: DiscoveredSession(id: target, cwd: session.cwd ?? "",
                                                      title: namer.displayTitle(for: session)))
             }
-            if let splitSelection {
-                // iPad: o push vira seleção; o detalhe reage sozinho.
-                splitSelection.wrappedValue = entry.map { .live($0) } ?? .session(session)
-            } else if let entry {
-                // Sessão do tmux: o push abre o TERMINAL AO VIVO, não o detalhe
-                // (que fica vazio para sessões externas — bug antigo).
-                selectedLive = entry
-            } else if path.last?.id != session.id {
-                path.append(session)
-            }
+            apply(SessionNavigationLogic.deepLink(
+                session: session, tmuxEntry: entry, embedded: isEmbedded, pathTopID: path.last?.id))
             router.pendingSessionID = nil
         }
     }
 
     /// Navega pra uma sessão do jeito que o modo atual entende.
     private func go(to session: Session) {
-        if let splitSelection {
-            splitSelection.wrappedValue = .session(session)
-        } else if path.last?.id != session.id {
+        apply(SessionNavigationLogic.goTo(session: session, embedded: isEmbedded, pathTopID: path.last?.id))
+    }
+
+    /// Executa a decisão pura de `SessionNavigationLogic` — o único lugar que
+    /// toca `splitSelection`/`selectedLive`/`path` (o "I/O" da navegação).
+    private func apply(_ target: SessionNavigationTarget?) {
+        switch target {
+        case .selection(let selection):
+            splitSelection?.wrappedValue = selection
+        case .liveSheet(let entry):
+            selectedLive = entry
+        case .push(let session):
             path.append(session)
+        case nil:
+            break
         }
     }
 
