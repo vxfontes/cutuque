@@ -230,13 +230,6 @@ struct TerminalMirrorView: View {
             .onChange(of: isActive) { _, active in
                 if active { model.start() } else { model.stop() }
             }
-            .onKeyPress(phases: .down) { press in
-                guard let key = TerminalKeyboard.tmuxKey(for: press.key.character,
-                                                         modifiers: press.modifiers)
-                else { return .ignored }
-                Task { await model.sendKey(key) }
-                return .handled
-            }
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
@@ -419,6 +412,21 @@ struct TerminalMirrorView: View {
                 .background(Color.secondary.opacity(0.15), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                // O TextField é UIKit por baixo (UITextField) e consome ⎋/⇥/setas
+                // internamente (mover cursor, navegar campos) antes que o evento
+                // suba pro ancestral SwiftUI — por isso o onKeyPress precisa estar
+                // pendurado NELE, e não na VStack externa: a view focada tem
+                // prioridade na cadeia de onKeyPress e intercepta antes do
+                // comportamento default do controle rodar. É também o único
+                // elemento focável desta tela, então mover (em vez de duplicar)
+                // não perde nenhum caso que já funcionava.
+                .onKeyPress(phases: .down) { press in
+                    guard let key = TerminalKeyboard.tmuxKey(for: press.key.character,
+                                                             modifiers: press.modifiers)
+                    else { return .ignored }
+                    Task { await model.sendKey(key) }
+                    return .handled
+                }
 
             Button {
                 let text = input
