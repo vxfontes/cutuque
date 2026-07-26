@@ -51,11 +51,20 @@ targets:
         # exceção por domínio) antes da App Store (Fase 5+).
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        # iPad suporta as quatro orientações — girar é caso de primeira classe no
+        # design (a split view existe justamente pra rotação não remontar a árvore).
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vxfontes.cutuque
         SWIFT_VERSION: "5.9"
-        TARGETED_DEVICE_FAMILY: "1"
+        # "1,2" = iPhone + iPad. O widget acompanha o app: uma Live Activity de
+        # extension declarada só como iPhone não aparece no iPad.
+        TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - target: CutuqueWidgets
@@ -105,4 +114,6 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vxfontes.cutuque.widgets
         SWIFT_VERSION: "5.9"
-        TARGETED_DEVICE_FAMILY: "1"
+        # "1,2" = iPhone + iPad. O widget acompanha o app: uma Live Activity de
+        # extension declarada só como iPhone não aparece no iPad.
+        TARGETED_DEVICE_FAMILY: "1,2"
