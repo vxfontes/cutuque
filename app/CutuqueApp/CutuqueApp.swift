@@ -12,12 +12,30 @@ struct CutuqueApp: App {
     @AppStorage(AppThemeKeys.accent) private var accentRaw = AppAccent.blue.rawValue
     // Fase da cena: informa o hub foreground/background (suprime push com o app aberto).
     @Environment(\.scenePhase) private var scenePhase
+    // Estado de navegação do iPad. Mora aqui (e não na RootSplitView) porque a
+    // cena `Commands` dos atalhos ⌘ precisa alcançá-lo.
+    @StateObject private var nav = NavigationState()
+    // Board compartilhado: no iPad a coluna de filtros e o kanban são views
+    // diferentes olhando o mesmo modelo.
+    @StateObject private var board = BoardModel()
 
     var body: some Scene {
         WindowGroup {
-            // Raiz = TabView com bottom bar (Sessões / Board).
-            RootTabView()
+            // A raiz é escolhida por IDIOM, não por classe de tamanho. Idiom
+            // nunca muda em tempo de execução: o `if` roda uma vez e a árvore
+            // jamais é remontada. Classe de tamanho mudaria (iPhone Pro Max em
+            // paisagem é `.regular`) e trocar a raiz derrubaria o espelho do
+            // tmux — é exatamente o que a decisão #19 evita.
+            Group {
+                if UIDevice.current.userInterfaceIdiom == .pad {
+                    RootSplitView()
+                } else {
+                    RootTabView()
+                }
+            }
             .environmentObject(router)
+            .environmentObject(nav)
+            .environmentObject(board)
             .tint((AppAccent(rawValue: accentRaw) ?? .blue).color)
             .preferredColorScheme((AppColorScheme(rawValue: colorSchemeRaw) ?? .system).scheme)
             // Deep-link da Live Activity: cutuque://session/<id> abre a sessão.
