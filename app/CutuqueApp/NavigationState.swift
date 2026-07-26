@@ -86,4 +86,18 @@ final class NavigationState: ObservableObject {
 
     func send(_ intent: AppIntent) { self.intent = intent }
     func consume() { intent = nil }
+
+    /// Zera o intent SE (e só se) for `.interrupt`, e diz se consumiu.
+    ///
+    /// A lista de sessões e o detalhe do chat vivem ao mesmo tempo em colunas
+    /// diferentes da split view do iPad: um consumidor que zerasse o intent
+    /// em `default:` engoliria atalhos destinados ao vizinho. Por isso a
+    /// disciplina de "só chama `consume()` quando reconhece o caso" vive aqui,
+    /// testável direto, e não dentro de um `.onChange` de View.
+    @discardableResult
+    func consumeIfInterrupt() -> Bool {
+        guard intent == .interrupt else { return false }
+        consume()
+        return true
+    }
 }
