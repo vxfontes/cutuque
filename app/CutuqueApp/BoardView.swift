@@ -30,6 +30,32 @@ final class BoardModel: ObservableObject {
         do { try await api.moveBoardTask(id: task.id, column: column.rawValue); await load() }
         catch { errorText = "Falha ao mover o card." }
     }
+
+    /// Arraste: move na hora, na lista local, e só então fala com o hub. Sem
+    /// isto o card voltaria visivelmente pra origem antes de reaparecer no
+    /// destino — o board não tem WebSocket, toda ação recarrega tudo.
+    func drop(_ task: BoardTask, on target: BoardDropTarget) async {
+        guard let plan = BoardMoveLogic.plan(for: task, target: target) else { return }
+        let snapshot = tasks
+        tasks = BoardMoveLogic.apply(plan, to: tasks, id: task.id)
+        do {
+            switch plan {
+            case .move(let column):
+                try await api.moveBoardTask(id: task.id, column: column.rawValue)
+            case .markEncalhada:
+                try await api.setBoardEncalhada(id: task.id, true)
+            }
+            await load()
+        } catch {
+            tasks = snapshot
+            errorText = "Não consegui mover o card — ele voltou pro lugar."
+        }
+    }
+
+    /// Acha o card pelo id (o arraste carrega só o id, que é o que `String`
+    /// sabe transferir sem conformidade nova).
+    func task(id: String) -> BoardTask? { tasks.first { $0.id == id } }
+
     func markEncalhada(_ task: BoardTask) async {
         do { try await api.setBoardEncalhada(id: task.id, true); await load() }
         catch { errorText = "Falha ao marcar como encalhada." }
@@ -87,6 +113,7 @@ private extension Array where Element: Hashable {
 struct BoardView: View {
     // Injetado pelo app: a coluna de filtros (iPad) precisa do MESMO modelo.
     @EnvironmentObject private var model: BoardModel
+    @EnvironmentObject private var nav: NavigationState
     @State private var selected: BoardTask?
     @State private var showCloseWeekConfirm = false
     @State private var showArchive = false
@@ -122,6 +149,28 @@ struct BoardView: View {
                     try? await Task.sleep(for: .milliseconds(250))
                     if !Task.isCancelled { await model.search(q) }
                 }
+            }
+            // ⌘← / ⌘→ movem o card aberto no inspector — mesmo caminho otimista
+            // do arraste. Só consome o que trata (a coluna de filtros também
+            // escuta o intent e espera pelo ⌘F dela).
+            .onChange(of: nav.intent) { _, intent in
+                let offset: Int
+                switch intent {
+                case .moveCardLeft:  offset = -1
+                case .moveCardRight: offset = 1
+                case .reload:
+                    Task { await model.load() }
+                    nav.consume()
+                    return
+                default:
+                    return
+                }
+                nav.consume()
+                guard let task = selected,
+                      let current = BoardColumn(rawValue: task.column),
+                      let destination = BoardMoveLogic.adjacentColumn(from: current, offset: offset)
+                else { return }
+                Task { await model.drop(task, on: .column(destination)) }
             }
             .navigationTitle("Cutuque Board")
             .navigationBarTitleDisplayMode(.inline)
@@ -179,12 +228,22 @@ struct BoardView: View {
                 HStack(alignment: .top, spacing: 12) {
                     if !model.encalhadas.isEmpty {
                         BoardColumnCard(title: "Encalhadas", count: model.encalhadas.count,
-                                        alert: true, tasks: model.encalhadas, width: colWidth) { selected = $0 }
+                                        alert: true, tasks: model.encalhadas, width: colWidth,
+                                        target: .encalhadas,
+                                        onDrop: { id in
+                                            guard let t = model.task(id: id) else { return }
+                                            Task { await model.drop(t, on: .encalhadas) }
+                                        }) { selected = $0 }
                     }
                     ForEach(BoardColumn.allCases) { column in
                         let items = model.inColumn(column)
                         BoardColumnCard(title: column.label, count: items.count,
-                                        alert: false, tasks: items, width: colWidth) { selected = $0 }
+                                        alert: false, tasks: items, width: colWidth,
+                                        target: .column(column),
+                                        onDrop: { id in
+                                            guard let t = model.task(id: id) else { return }
+                                            Task { await model.drop(t, on: .column(column)) }
+                                        }) { selected = $0 }
                     }
                 }
                 .padding(.horizontal, 12)
@@ -291,7 +350,10 @@ private struct BoardColumnCard: View {
     let alert: Bool
     let tasks: [BoardTask]
     let width: CGFloat
+    let target: BoardDropTarget
+    let onDrop: (String) -> Void
     let onTap: (BoardTask) -> Void
+    @State private var isTargeted = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -341,6 +403,16 @@ private struct BoardColumnCard: View {
                 .stroke(alert ? Color.red.opacity(0.45) : Color(.separator).opacity(0.4), lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 14))
+        .dropDestination(for: String.self) { ids, _ in
+            guard let id = ids.first else { return false }
+            onDrop(id)
+            return true
+        } isTargeted: { isTargeted = $0 }
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color.accentColor, lineWidth: isTargeted ? 2.5 : 0)
+        )
+        .animation(.easeOut(duration: 0.12), value: isTargeted)
     }
 }
 
@@ -389,6 +461,8 @@ struct BoardCardRow: View {
             task.isEncalhada ? Color.red.opacity(0.5) : Color(.separator).opacity(0.5), lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .contentShape(Rectangle())
+        // Card arquivado é só leitura — não arrasta.
+        .modifier(DraggableCard(id: task.id, enabled: task.archived != true))
     }
 
     static let rel: RelativeDateTimeFormatter = {
@@ -662,5 +736,15 @@ struct ArchiveView: View {
             return "\(day.string(from: s)) – \(day.string(from: e)) de \(eMon)"
         }
         return "\(day.string(from: s)) de \(sMon) – \(day.string(from: e)) de \(eMon)"
+    }
+}
+
+/// `.draggable` muda o tipo da view, então não dá pra aplicá-lo condicionalmente
+/// inline. Card arquivado passa direto, sem virar fonte de arraste.
+private struct DraggableCard: ViewModifier {
+    let id: String
+    let enabled: Bool
+    func body(content: Content) -> some View {
+        if enabled { content.draggable(id) } else { content }
     }
 }
