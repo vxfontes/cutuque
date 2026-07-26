@@ -138,6 +138,68 @@ final class NavigationStateTests: XCTestCase {
         XCTAssertNil(nav.intent)
     }
 
+    // MARK: - consumeSessionListIntent (Task 11, correção do achado de testabilidade)
+    //
+    // `SessionListView.handleAppIntent` reduz seu `.onChange(of: nav.intent)`
+    // a fiação trivial em cima deste método. A lista de sessões e o painel
+    // de detalhe vivem ao mesmo tempo, em colunas diferentes da split view
+    // do iPad — os dois escutam `nav.intent`. Sem travar aqui a regra "só
+    // consome o que reconheço", um refactor que trocasse o `default: return`
+    // da View por um `consume()` passaria a suíte inteira e engoliria em
+    // silêncio o ⌘. (Task 15) e o ⌘←/⌘→ (Task 14), que não são desta lista.
+
+    func testConsumeSessionListIntentConsomeNewSession() {
+        let nav = NavigationState()
+        nav.send(.newSession)
+
+        let acao = nav.consumeSessionListIntent()
+
+        XCTAssertEqual(acao, .newSession)
+        XCTAssertNil(nav.intent)
+    }
+
+    func testConsumeSessionListIntentConsomeReload() {
+        let nav = NavigationState()
+        nav.send(.reload)
+
+        let acao = nav.consumeSessionListIntent()
+
+        XCTAssertEqual(acao, .reload)
+        XCTAssertNil(nav.intent)
+    }
+
+    func testConsumeSessionListIntentConsomeSelectSession() {
+        let nav = NavigationState()
+        nav.send(.selectSession(index: 3))
+
+        let acao = nav.consumeSessionListIntent()
+
+        XCTAssertEqual(acao, .selectSession(index: 3))
+        XCTAssertNil(nav.intent)
+    }
+
+    func testConsumeSessionListIntentNaoConsomeIntentDeOutroDono() {
+        let nav = NavigationState()
+
+        // .interrupt é da SessionDetailView (Task 15).
+        nav.send(.interrupt)
+        XCTAssertNil(nav.consumeSessionListIntent())
+        XCTAssertEqual(nav.intent, .interrupt, "intent de outro consumidor não pode ser engolido")
+
+        // .moveCardLeft é do board (Task 14).
+        nav.send(.moveCardLeft)
+        XCTAssertNil(nav.consumeSessionListIntent())
+        XCTAssertEqual(nav.intent, .moveCardLeft, "intent de outro consumidor não pode ser engolido")
+    }
+
+    func testConsumeSessionListIntentNaoConsomeIntentNil() {
+        let nav = NavigationState()
+        XCTAssertNil(nav.intent)
+
+        XCTAssertNil(nav.consumeSessionListIntent())
+        XCTAssertNil(nav.intent)
+    }
+
     /// Card aberto no inspector do board (Task 13) — alimentado também pela
     /// busca da coluna do meio, que fica num arquivo separado do `BoardView`
     /// e por isso precisa de um estado compartilhado pra abrir o card nele.
