@@ -4,7 +4,7 @@ import UIKit
 // MARK: - ViewModel
 
 /// Uma sessão que está rodando AGORA numa máquina (poll do /machines/{m}/live).
-struct LiveEntry: Identifiable, Equatable {
+struct LiveEntry: Identifiable, Equatable, Hashable {
     let machine: String
     let session: DiscoveredSession
     var id: String { session.id }
