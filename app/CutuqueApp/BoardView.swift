@@ -111,58 +111,31 @@ private extension Array where Element: Hashable {
 // MARK: - Board estilo Trello (colunas horizontais com swipe)
 
 struct BoardView: View {
-    // Injetado pelo app: a coluna de filtros (iPad) precisa do MESMO modelo.
+    // Injetado pelo app — mesmo modelo em iPhone e iPad.
     @EnvironmentObject private var model: BoardModel
     @EnvironmentObject private var nav: NavigationState
     @State private var showCloseWeekConfirm = false
     @State private var showArchive = false
     @State private var searchText = ""
     @State private var searchTask: Task<Void, Never>?
-    // Foco do campo de busca própria, pra atender `.focusSearch` quando ESTA
-    // view é a dona (ver `showsOwnFilterAndSearch`) — rodada 3 da revisão da
-    // Task 16: antes disto o `⌘F` não tinha como focar nada aqui.
+    // Foco do campo de busca própria, pra atender `.focusSearch` — a
+    // `BoardView` é a única dona de filtros e busca agora (coluna do meio
+    // apagada; ver decisão da usuária no brief da correção de layout).
     @FocusState private var searchFieldFocused: Bool
-    // "Estou estreito AGORA?" — muda em runtime (Slide Over, Split View no
-    // mínimo, rotação). Nunca decide "sou iPad?" (isso é `isPad`, por idiom).
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     // Idiom: nunca muda em runtime (mesmo valor que escolhe a raiz do app em
-    // `CutuqueApp.swift`). Lido uma vez aqui e reaproveitado por `isPad` e
-    // pelo `boardScroller` — nada de ler `UIDevice.current.userInterfaceIdiom`
-    // duas vezes soltas pela view.
+    // `CutuqueApp.swift`). Só alimenta a paginação por swipe do
+    // `boardScroller` (via `BoardLayout.isRegularWidth`) — filtros e busca
+    // agora são sempre da `BoardView`, em qualquer idiom, já que a coluna de
+    // filtros do meio (`BoardFilterList`) foi removida e não sobrou nenhum
+    // outro predicado de estrutura que dependesse do idiom aqui.
     private var idiom: UIUserInterfaceIdiom { UIDevice.current.userInterfaceIdiom }
-
-    /// iPad de verdade — NÃO `horizontalSizeClass == .regular` (achado
-    /// Important 2 da revisão: iPhone Plus/Pro Max em paisagem também reporta
-    /// `.regular`, e isso fazia o `BoardView` dentro do `RootTabView`, raiz do
-    /// iPhone, esconder a FilterBar sem `BoardFilterList` pra substituí-la,
-    /// esconder os resultados de busca e desligar a paginação por swipe — uma
-    /// regressão no iPhone, proibida pela restrição global do plano). Mesmo
-    /// idiom que escolhe a raiz do app em `CutuqueApp.swift`.
-    private var isPad: Bool { BoardLayout.isPad(idiom) }
-
-    /// O `BoardFilterList` (coluna do meio, dono dos filtros e da busca) some
-    /// de vista em três situações independentes — Slide Over/Split View no
-    /// mínimo (`horizontalSizeClass == .compact`), OU a regra dos 700 pt
-    /// escondendo sidebar+conteúdo (`nav.columnVisibility == .detailOnly`,
-    /// que dispara até em tela cheia `.regular`: um iPad de 11" em retrato
-    /// normal já tem coluna de detalhe abaixo de 700 pt — achado da rodada 2
-    /// da revisão da Task 16, reabrindo por um gatilho mais comum que o
-    /// Slide Over que motivou a task). Em qualquer uma delas, e mesmo no
-    /// iPad, o `BoardView` precisa da própria FilterBar/busca, como sempre
-    /// foi no iPhone. No iPhone `isPad` é sempre falso, então isto é sempre
-    /// `true` — comportamento preservado.
-    private var showsOwnFilterAndSearch: Bool {
-        BoardLayout.showsOwnFilterAndSearch(isPad: isPad,
-                                             horizontalSizeClassIsCompact: horizontalSizeClass == .compact,
-                                             columnVisibilityIsDetailOnly: nav.columnVisibility == .detailOnly)
-    }
 
     private var isSearching: Bool { !searchText.trimmingCharacters(in: .whitespaces).isEmpty }
 
-    // No iPad a busca da coluna do meio (BoardFilterList) também precisa
-    // conseguir abrir o card — por isso o estado mora no NavigationState
-    // compartilhado, não num @State local desta view.
+    // Estado do card selecionado mora no NavigationState compartilhado (não
+    // num @State local) porque também é lido pela regra dos 700 pt / abertura
+    // via deep link no iPad — não é exclusivo desta view.
     private var selected: BoardTask? {
         get { nav.boardSelection }
         nonmutating set { nav.boardSelection = newValue }
@@ -171,19 +144,16 @@ struct BoardView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if isSearching && showsOwnFilterAndSearch {
-                    // Compacto (iPhone, ou iPad em Slide Over/Split View no
-                    // mínimo): a busca ainda toma a tela, como sempre foi.
+                if isSearching {
+                    // A busca sempre toma a tela quando há termo digitado —
+                    // única dona da busca agora é a `BoardView`, em qualquer
+                    // idiom (a coluna de filtros do meio foi removida; a
+                    // decisão da usuária foi "filtros sempre em cima").
                     searchResultsView
                 } else {
                     VStack(spacing: 0) {
-                        // No iPad largo os filtros moram na coluna do meio
-                        // (`BoardFilterList`); em Slide Over ela saiu de
-                        // vista, então a FilterBar própria volta.
-                        if showsOwnFilterAndSearch {
-                            FilterBar(model: model)
-                            Divider()
-                        }
+                        FilterBar(model: model)
+                        Divider()
                         if model.isLoading && model.tasks.isEmpty {
                             Spacer(); ProgressView(); Spacer()
                         } else if model.tasks.isEmpty, let err = model.errorText {
@@ -194,16 +164,17 @@ struct BoardView: View {
                     }
                 }
             }
-            // No iPad LARGO a busca já mora inteira na coluna do meio
-            // (`BoardFilterList`) — manter esta aqui também deixaria DOIS
-            // campos vivos escrevendo em `model.searchResults` ao mesmo
-            // tempo, o de trás sobrescrevendo o da frente em silêncio, sem
-            // nunca aparecer (achado Important 1 da revisão). No iPhone a
-            // busca continua exatamente como sempre foi. No iPad em Slide
-            // Over/Split View no mínimo o `BoardFilterList` colapsou pra
-            // trás na pilha — sem esta busca o board ficaria sem NENHUMA
-            // forma de buscar (achado da revisão da Task 16).
-            .modifier(SearchableWhenCompact(enabled: showsOwnFilterAndSearch, text: $searchText))
+            // Único campo de busca do board agora — a coluna de filtros do
+            // meio (`BoardFilterList`, que também escrevia em
+            // `model.searchResults`) foi removida, então não existe mais o
+            // risco de dois campos vivos escrevendo no mesmo
+            // `searchResults` em silêncio (achado Important 1 da revisão da
+            // Task 13). Sem dono concorrente, o gate condicional
+            // (`SearchableWhenCompact`) não fazia mais sentido — `.searchable`
+            // direto, sempre ativo, é o mesmo comportamento que o iPhone já
+            // tinha (lá o gate já era sempre `true`).
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always),
+                        prompt: "Buscar título, descrição, comentários…")
             .modifier(SearchFocusWhenAvailable(focused: $searchFieldFocused))
             .onChange(of: searchText) { _, q in
                 searchTask?.cancel()
@@ -213,14 +184,12 @@ struct BoardView: View {
                 }
             }
             // ⌘← / ⌘→ movem o card aberto no inspector — mesmo caminho otimista
-            // do arraste. `.focusSearch` só é tratado aqui quando ESTA view é a
-            // dona da busca (`showsOwnFilterAndSearch`); do contrário quem foca
-            // é o `BoardFilterList` (coluna do meio) — os dois ramos usam o
-            // MESMO predicado, um negado do outro, então exatamente um trata e
-            // consome (achado da rodada 3 da revisão: consumir sem tratar
-            // travava o `⌘F` porque `AppIntent` só dispara `.onChange` na
-            // transição, e um `default: nav.consume()` engolia o intent sem
-            // ninguém focar o campo visível).
+            // do arraste. `.focusSearch` agora é sempre tratado e sempre
+            // consumido aqui: a `BoardView` é a única dona da busca (a coluna
+            // de filtros do meio, que antes podia ser a outra dona, foi
+            // removida) — não há mais ramo concorrente que possa deixar de
+            // focar depois de consumir (o que travaria o próximo ⌘F idêntico,
+            // já que `AppIntent` só dispara `.onChange` na transição).
             //
             // Observa `nav.intentEvent` (envelope com `seq`), não `nav.intent`
             // cru: ⌘←/⌘← seguidos sem consumo no meio mandam o MESMO
@@ -230,7 +199,6 @@ struct BoardView: View {
             .onChange(of: nav.intentEvent) { _, event in
                 let intent = event.intent
                 if intent == .focusSearch {
-                    guard showsOwnFilterAndSearch else { return }
                     searchFieldFocused = true
                     nav.consume()
                     return
@@ -885,12 +853,6 @@ private struct PagingWhenCompact: ViewModifier {
     }
 }
 
-/// Mesmo precedente do `PagingWhenCompact`: `.searchable` muda o tipo
-/// concreto da view, então não dá pra condicionar inline com ternário. No
-/// iPad este modifier some por completo — a busca da coluna de detalhe não
-/// existe mais, só a da coluna do meio (`BoardFilterList`) fica viva. É a
-/// correção do achado Important 1 (busca dupla no iPad escrevendo, as duas,
-/// no mesmo `model.searchResults`).
 /// `.searchFocused(_:)` só existe a partir do iOS 18 (checado contra o SDK: a
 /// sobrecarga de `FocusState<Bool>.Binding` está marcada `@available(iOS
 /// 18.0, ...)`), mas o `deploymentTarget` deste projeto é 17.0
@@ -908,15 +870,3 @@ private struct SearchFocusWhenAvailable: ViewModifier {
     }
 }
 
-private struct SearchableWhenCompact: ViewModifier {
-    let enabled: Bool
-    @Binding var text: String
-    func body(content: Content) -> some View {
-        if enabled {
-            content.searchable(text: $text, placement: .navigationBarDrawer(displayMode: .always),
-                                prompt: "Buscar título, descrição, comentários…")
-        } else {
-            content
-        }
-    }
-}

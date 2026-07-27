@@ -74,16 +74,18 @@ enum BoardLayout {
     /// Verdadeiro só no iPad. `horizontalSizeClass == .regular` NÃO serve pra
     /// discriminar isto — iPhone Plus/Pro Max em paisagem também reporta
     /// `.regular`, e usar sizeClass aqui fazia esses aparelhos perderem a
-    /// FilterBar, a busca cheia de tela e a paginação por swipe (achado
-    /// Important 2 da revisão da Task 13: o `BoardView` dentro do
-    /// `RootTabView`, raiz do iPhone, regredia). O mesmo idiom que escolhe a
-    /// raiz do app em `CutuqueApp.swift` decide aqui — nunca muda em runtime,
-    /// então rotação/Slide Over não trocam o layout no meio do caminho.
+    /// busca cheia de tela e a paginação por swipe (achado Important 2 da
+    /// revisão da Task 13: o `BoardView` dentro do `RootTabView`, raiz do
+    /// iPhone, regredia). O mesmo idiom que escolhe a raiz do app em
+    /// `CutuqueApp.swift` decide aqui — nunca muda em runtime, então
+    /// rotação/Slide Over não trocam o layout no meio do caminho.
     ///
-    /// Isto responde "sou iPad?" — decide ESTRUTURA (existe coluna de
-    /// filtros, a busca mora nela). NÃO decide layout/paginação: para "estou
-    /// estreito AGORA?" (que muda em runtime) ver `isRegularWidth` e
-    /// `showsOwnFilterAndSearch` abaixo.
+    /// Isto responde "sou iPad?". NÃO decide layout/paginação: para "estou
+    /// estreito AGORA?" (que muda em runtime) ver `isRegularWidth` abaixo.
+    /// Filtros e busca não dependem mais deste predicado — a `BoardView` é a
+    /// única dona, em qualquer idiom, desde que a coluna de filtros do meio
+    /// (`BoardFilterList`) foi removida ("filtros sempre em cima", decisão da
+    /// usuária na correção de layout pós-Task 16).
     static func isPad(_ idiom: UIUserInterfaceIdiom) -> Bool { idiom == .pad }
 
     /// Verdadeiro só quando o idiom é iPad E a largura MEDIDA já comporta
@@ -98,56 +100,5 @@ enum BoardLayout {
     /// estreito agora?", não a "sou iPad?".
     static func isRegularWidth(idiom: UIUserInterfaceIdiom, measuredWidth: CGFloat) -> Bool {
         isPad(idiom) && measuredWidth >= PadLayout.expandThreshold
-    }
-
-    /// A pergunta certa não é "estou compacto?" — é "o `BoardFilterList`
-    /// (coluna do meio, dona de verdade dos filtros e da busca) está visível
-    /// ao lado do `BoardView` agora?". Três eixos, independentes, e faltando
-    /// QUALQUER um deles o `BoardFilterList` sai de vista:
-    ///
-    /// 1. idiom `.pad` — só existe coluna de filtros no iPad (estrutura,
-    ///    nunca muda em runtime).
-    /// 2. `horizontalSizeClass != .compact` — a `NavigationSplitView` não
-    ///    colapsou numa pilha de coluna única (Slide Over, Split View no
-    ///    mínimo). Achado da rodada 1 da revisão da Task 16.
-    /// 3. `columnVisibility != .detailOnly` — a regra dos 700 pt
-    ///    (`NavigationState.applyWidthRule`, Task 7) não escondeu
-    ///    sidebar+conteúdo. Ela colapsa sempre que a coluna de DETALHE mede
-    ///    menos de 700 pt — e isso acontece até em tela cheia `.regular`,
-    ///    sem Split View nenhum: um iPad de 11" em retrato normal, três
-    ///    colunas, tem só ~554 pt de coluna de detalhe (ver
-    ///    `TerminalGeometryTests.swift`). Achado da rodada 2 da revisão: o
-    ///    board reabre o MESMO bug por este terceiro eixo, num gatilho mais
-    ///    comum que o Slide Over que motivou a task — e sem saída, porque só
-    ///    o `expandButton` de sessão chama `toggleColumns()`, o board não
-    ///    tem botão equivalente.
-    ///
-    /// Faltando qualquer um dos três, o `BoardView` precisa da SUA PRÓPRIA
-    /// barra de filtros e busca, como sempre foi no iPhone — senão o board
-    /// fica sem NENHUMA forma de filtrar ou buscar. No iPad com os três
-    /// eixos a favor (largo, colunas todas visíveis) manter as duas buscas
-    /// vivas ao mesmo tempo reproduziria a busca dupla escrevendo em
-    /// `searchResults` em silêncio (achado Important 1 da revisão da Task 13).
-    static func showsOwnFilterAndSearch(isPad: Bool,
-                                         horizontalSizeClassIsCompact: Bool,
-                                         columnVisibilityIsDetailOnly: Bool) -> Bool {
-        !isPad || horizontalSizeClassIsCompact || columnVisibilityIsDetailOnly
-    }
-
-    /// O outro lado do contrato de `.focusSearch` mutuamente exclusivo: quem
-    /// trata é `BoardFilterList` exatamente quando `BoardView` NÃO trata a
-    /// própria busca — mesmo predicado de `showsOwnFilterAndSearch`, negado,
-    /// com nome próprio pra não deixar a negação implícita espalhada por
-    /// `BoardFilterList.swift`.
-    ///
-    /// Sem `isPad`: `BoardFilterList` só é instanciado dentro do
-    /// `RootSplitView`, que só é montado no ramo `.pad` de `CutuqueApp.swift`
-    /// — `isPad` já é sempre `true` ali, então a assinatura nem oferece o
-    /// parâmetro (evita a chance de alguém passar `false` por engano).
-    static func filterListHandlesFocusSearch(horizontalSizeClassIsCompact: Bool,
-                                              columnVisibilityIsDetailOnly: Bool) -> Bool {
-        !showsOwnFilterAndSearch(isPad: true,
-                                  horizontalSizeClassIsCompact: horizontalSizeClassIsCompact,
-                                  columnVisibilityIsDetailOnly: columnVisibilityIsDetailOnly)
     }
 }
