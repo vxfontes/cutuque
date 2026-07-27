@@ -27,6 +27,33 @@ struct RootSplitView: View {
     /// `applyLayoutRuleIfNeeded()`.
     @State private var lastKnownSize: CGSize?
 
+    /// Se a `NavigationSplitView` já terminou a primeira montagem. Enquanto
+    /// for `false`, `applyLayoutRuleIfNeeded()` não escreve nada.
+    ///
+    /// Mexer em `columnVisibility` durante a primeira montagem não funciona: a
+    /// split view RESPONDE escrevendo de volta no binding. Medido no
+    /// simulador, não deduzido — em retrato o log mostrava a nossa escrita
+    /// `all -> doubleColumn` e, 36 ms depois, `doubleColumn -> all` sem
+    /// nenhuma chamada nossa no meio, e o iPad abria em TRÊS colunas. Depois
+    /// de montada ela aceita: girar pra paisagem e voltar pro retrato aplicava
+    /// `.doubleColumn` e o valor grudava, sem escrita de volta nenhuma.
+    ///
+    /// Duas saídas foram testadas na tela antes desta e as duas pioraram, por
+    /// isso ficam registradas aqui:
+    ///
+    /// - **Reafirmar** `.doubleColumn` depois da escrita de volta deixava o
+    ///   ESTADO certo (log confirmando) e a TELA errada: três trocas de
+    ///   visibilidade em 39 ms faziam a coluna da esquerda renderizar vazia.
+    ///   Com `Transaction.disablesAnimations` também.
+    /// - **Filtrar o binding** (descartar a escrita de volta) divergia o layout
+    ///   interno dela do nosso estado: ela mantinha a sidebar apresentada por
+    ///   cima e a lista de destinos aparecia DUAS vezes.
+    ///
+    /// A diferença entre as duas e o caminho que funciona não é o valor final
+    /// — é quantas vezes ele muda. Esperar a montagem dá UMA transição, a
+    /// mesma da rotação.
+    @State private var splitViewDidSettle = false
+
     /// `retrato = altura > largura`, lida do tamanho do próprio split view —
     /// não de `UIDevice.current.orientation` (devolve `.unknown`/`.faceUp` e
     /// exige notificação) nem de `horizontalSizeClass` (num iPad em tela
@@ -91,6 +118,18 @@ struct RootSplitView: View {
         .onChange(of: router.pendingSessionID) { _, id in
             if id != nil { nav.destination = .sessions }
         }
+        // Libera a regra de layout só depois da primeira montagem da split
+        // view (ver `splitViewDidSettle`). O `.task` já roda depois do
+        // primeiro render; o `yield` cede mais uma volta do runloop pra ela
+        // assentar antes de a gente escrever. Como o `.background` acima já
+        // mediu o tamanho nesse meio tempo, a chamada aqui é o que aplica a
+        // regra pela primeira vez — o guard de chave em
+        // `applyLayoutRuleIfNeeded()` garante que seja uma vez só.
+        .task {
+            await Task.yield()
+            splitViewDidSettle = true
+            applyLayoutRuleIfNeeded()
+        }
     }
 
     /// Único ponto que chama `nav.applyLayoutRule` — os dois `.onChange`
@@ -102,8 +141,13 @@ struct RootSplitView: View {
     /// colapsar a coluna e isso mudar `geo.size` de novo, a segunda entrada
     /// com a mesma chave já encontra o guard fechado — sem laço, sem
     /// reaplicar, sem sobrescrever a escolha manual da usuária.
+    ///
+    /// O `splitViewDidSettle` na frente é o que mantém a regra fora da
+    /// primeira montagem (ver a propriedade). Antes dela a medição já chega e
+    /// a chave já é a definitiva, mas escrever ali não pega — quem aplica a
+    /// primeira vez é o `.task` acima.
     private func applyLayoutRuleIfNeeded() {
-        guard lastKnownSize != nil,
+        guard splitViewDidSettle, lastKnownSize != nil,
               LayoutRuleGate.shouldApply(appliedFor: layoutRuleAppliedFor, key: layoutRuleKey)
         else { return }
         layoutRuleAppliedFor = layoutRuleKey
