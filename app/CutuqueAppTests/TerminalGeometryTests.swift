@@ -38,18 +38,13 @@ final class TerminalGeometryTests: XCTestCase {
         XCTAssertEqual(TerminalGeometry.defaultFontPt(isPad: true), 13)
     }
 
-    func testRegraDos700Pt() {
-        XCTAssertTrue(PadLayout.startsExpanded(detailWidth: 554))   // 11" em 3 colunas
-        XCTAssertTrue(PadLayout.startsExpanded(detailWidth: 699))
-        XCTAssertFalse(PadLayout.startsExpanded(detailWidth: 700))  // limite é inclusivo pra cima
-        XCTAssertFalse(PadLayout.startsExpanded(detailWidth: 806))  // 13" em 3 colunas
-    }
-
-    func testLarguraZeroNaoDecideNada() {
-        // Antes do primeiro layout a largura é 0; quem chama precisa ignorar,
-        // mas a função não pode responder "expandido" por acidente.
-        XCTAssertFalse(PadLayout.startsExpanded(detailWidth: 0))
-    }
+    // `PadLayout.startsExpanded(detailWidth:)` (a antiga "regra dos 700 pt"
+    // que decidia o colapso da split view pela largura medida) foi removida
+    // na tarefa que trocou o critério pra orientação — ver
+    // `NavigationState.applyLayoutRule` e `WidthRuleGateTests`.
+    // `PadLayout.expandThreshold` continua existindo: `BoardLayout.isRegularWidth`
+    // (`BoardMoveLogic.swift`) ainda o usa pra decidir a barra de filtros
+    // própria do board, um cálculo diferente e não tocado por esta tarefa.
 
     // fontMin/fontMax vieram da Task 3 sem consumidor: a TerminalMirrorView
     // (Task 9) é quem passa a usar os dois nos limites do A−/A+.

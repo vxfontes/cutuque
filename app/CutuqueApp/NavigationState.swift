@@ -95,23 +95,45 @@ final class NavigationState: ObservableObject {
     @Published private(set) var intentEvent = IntentEvent(seq: 0, intent: nil)
     private var intentSeq = 0
 
-    /// O que está no detalhe agora disputa largura? Board sempre; sessão só
-    /// quando está mostrando o terminal.
-    var wantsWidth: Bool {
-        destination == .board || (destination == .sessions && paneMode == .terminal)
+    /// O que está no detalhe, nesta orientação, "quer" a coluna toda pra si —
+    /// substitui a antiga regra dos 700 pt (largura medida). `paneMode` NÃO
+    /// entra mais aqui: o colapso em retrato vale pro painel inteiro, seja
+    /// chat ou terminal (decisão explícita da usuária — "Chat continua o
+    /// padrão, só o layout muda").
+    ///
+    /// - Board: sempre, nas duas orientações — a coluna do meio dele está
+    ///   sendo removida numa tarefa paralela (ver `RootSplitView`), e um
+    ///   kanban espremido na coluna do meio mostra menos de duas colunas por
+    ///   vez de qualquer forma.
+    /// - Sessões: só em retrato E com uma sessão escolhida — é aí que o
+    ///   painel (tela cheia) precisa da coluna toda; em paisagem as três
+    ///   colunas cabem, e sem seleção não há o que colapsar pra.
+    /// - Arquivo: nunca — fora do escopo desta correção, mantém o
+    ///   comportamento de sempre (nunca disputou largura).
+    func wantsWidth(isPortrait: Bool) -> Bool {
+        switch destination {
+        case .board:
+            return true
+        case .sessions:
+            return isPortrait && selection != nil
+        case .archive:
+            return false
+        }
     }
 
     func toggleColumns() {
         columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
     }
 
-    /// Aplica a regra dos 700 pt. Chamada UMA vez por entrada em destino/painel
-    /// (ver `RootSplitView`): depois disso a escolha do ⤡ é da usuária e vale
-    /// até ela trocar de destino.
-    func applyWidthRule(detailWidth: CGFloat) {
-        columnVisibility = (wantsWidth && PadLayout.startsExpanded(detailWidth: detailWidth))
-            ? .detailOnly
-            : .all
+    /// Aplica a regra de layout: orientação (e, pra Sessões, se há seleção)
+    /// decide `columnVisibility` — substitui a antiga regra dos 700 pt.
+    /// Chamada UMA vez por entrada em destino/seleção/orientação (ver
+    /// `RootSplitView`): depois disso a escolha do ⤡ é da usuária e vale até
+    /// a chave mudar de novo. Função pura de estado — não lê geometria por
+    /// dentro, pra continuar testável sem hosting de View (ver a
+    /// tabela-verdade em `NavigationStateTests`).
+    func applyLayoutRule(isPortrait: Bool) {
+        columnVisibility = wantsWidth(isPortrait: isPortrait) ? .detailOnly : .all
     }
 
     /// Publica o intent E o envelope (`intentEvent`) com `seq` incrementado —

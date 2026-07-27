@@ -13,24 +13,6 @@ final class NavigationStateTests: XCTestCase {
         XCTAssertNil(nav.selection)
     }
 
-    func testChatNaoDisputaLargura() {
-        let nav = NavigationState()
-        nav.destination = .sessions
-        nav.paneMode = .chat
-        XCTAssertFalse(nav.wantsWidth)
-    }
-
-    func testTerminalEBoardDisputamLargura() {
-        let nav = NavigationState()
-        nav.destination = .sessions
-        nav.paneMode = .terminal
-        XCTAssertTrue(nav.wantsWidth)
-
-        nav.destination = .board
-        nav.paneMode = .chat
-        XCTAssertTrue(nav.wantsWidth)
-    }
-
     func testExpandirEhReversivel() {
         let nav = NavigationState()
         nav.toggleColumns()
@@ -39,26 +21,86 @@ final class NavigationStateTests: XCTestCase {
         XCTAssertEqual(nav.columnVisibility, .all)
     }
 
-    func testRegraDe700AbreExpandidoNoDetalheEstreito() {
+    // MARK: - applyLayoutRule (Tarefa B: orientação decide o layout, no lugar
+    // da largura medida — regra dos 700 pt aposentada)
+    //
+    // Tabela-verdade pedida pela usuária, hardcoded aqui (nunca derivada de
+    // `applyLayoutRule`/`wantsWidth` — comparar f(x) com uma reescrita de f
+    // é tautologia, achado já registrado neste projeto):
+    //
+    // | Destino / estado                  | Retrato      | Paisagem |
+    // |------------------------------------|--------------|----------|
+    // | Sessões, nenhuma sessão escolhida  | .all         | .all     |
+    // | Sessões, uma sessão escolhida      | .detailOnly  | .all     |
+    // | Board                              | .detailOnly  | .detailOnly |
+    //
+    // `paneMode` não participa: trocar Chat↔Terminal não pode mexer em
+    // `columnVisibility` (decisão explícita da usuária).
+
+    private func makeSelection() -> DetailSelection {
+        .live(LiveEntry(machine: "mac1", session: DiscoveredSession(id: "s1", cwd: "/tmp", title: "t")))
+    }
+
+    func testSessoesSemSelecaoRetratoFicaAll() {
         let nav = NavigationState()
-        nav.destination = .board
-        nav.applyWidthRule(detailWidth: 554)
+        nav.destination = .sessions
+        nav.selection = nil
+        nav.applyLayoutRule(isPortrait: true)
+        XCTAssertEqual(nav.columnVisibility, .all)
+    }
+
+    func testSessoesSemSelecaoPaisagemFicaAll() {
+        let nav = NavigationState()
+        nav.destination = .sessions
+        nav.selection = nil
+        nav.applyLayoutRule(isPortrait: false)
+        XCTAssertEqual(nav.columnVisibility, .all)
+    }
+
+    func testSessoesComSelecaoRetratoColapsaDetailOnly() {
+        let nav = NavigationState()
+        nav.destination = .sessions
+        nav.selection = makeSelection()
+        nav.applyLayoutRule(isPortrait: true)
         XCTAssertEqual(nav.columnVisibility, .detailOnly)
     }
 
-    func testRegraDe700MantemTresColunasNoDetalheLargo() {
+    func testSessoesComSelecaoPaisagemFicaAllComTresColunas() {
         let nav = NavigationState()
-        nav.destination = .board
-        nav.applyWidthRule(detailWidth: 806)
+        nav.destination = .sessions
+        nav.selection = makeSelection()
+        nav.applyLayoutRule(isPortrait: false)
         XCTAssertEqual(nav.columnVisibility, .all)
     }
 
-    func testRegraDe700NaoExpandeODestinoQueNaoPedeLargura() {
+    func testBoardRetratoColapsaDetailOnly() {
+        let nav = NavigationState()
+        nav.destination = .board
+        nav.applyLayoutRule(isPortrait: true)
+        XCTAssertEqual(nav.columnVisibility, .detailOnly)
+    }
+
+    func testBoardPaisagemTambemColapsaDetailOnly() {
+        let nav = NavigationState()
+        nav.destination = .board
+        nav.applyLayoutRule(isPortrait: false)
+        XCTAssertEqual(nav.columnVisibility, .detailOnly)
+    }
+
+    /// `paneMode` saiu da decisão: mesmo destino/seleção/orientação,
+    /// trocar Chat↔Terminal não pode mudar o resultado.
+    func testPaneModeNaoParticipaMaisDaDecisao() {
         let nav = NavigationState()
         nav.destination = .sessions
+        nav.selection = makeSelection()
+
         nav.paneMode = .chat
-        nav.applyWidthRule(detailWidth: 400)   // estreitíssimo, mas é chat
-        XCTAssertEqual(nav.columnVisibility, .all)
+        nav.applyLayoutRule(isPortrait: true)
+        XCTAssertEqual(nav.columnVisibility, .detailOnly)
+
+        nav.paneMode = .terminal
+        nav.applyLayoutRule(isPortrait: true)
+        XCTAssertEqual(nav.columnVisibility, .detailOnly)
     }
 
     func testIntentEhConsumidoUmaVezSo() {
