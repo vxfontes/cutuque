@@ -376,6 +376,73 @@ struct ArchivedWeek: Identifiable, Decodable, Equatable {
     var id: String { label }
 }
 
+/// Uma semana candidata a receber o próximo fechamento (`GET /board/close-options`).
+struct WeekOption: Decodable, Equatable {
+    let label: String            // ex.: "2026-W30"
+    let start: String            // "2026-07-20"
+    let end: String              // "2026-07-26"
+    let count: Int               // quantos JÁ estão arquivados nessa semana
+}
+
+/// As opções do fechamento manual. `last` nil = não há escolha a fazer (só a
+/// semana do relógio existe), e o fechamento vira o confirmar de sempre.
+struct CloseOptions: Decodable, Equatable {
+    let current: WeekOption
+    let last: WeekOption?
+    let pending: Int             // concluídos na fila pra sair do board
+}
+
+/// A semana escrita como intervalo em português ("20 – 26 de jul"), do jeito
+/// que o arquivo e o popup de fechamento mostram. Datas em "yyyy-MM-dd".
+enum WeekRangeFormat {
+    static func text(start: String, end: String) -> String {
+        let s = parse(start), e = parse(end)
+        let day = DateFormatter(); day.locale = Locale(identifier: "pt_BR"); day.dateFormat = "d"
+        let mon = DateFormatter(); mon.locale = Locale(identifier: "pt_BR"); mon.dateFormat = "MMM"
+        let sMon = mon.string(from: s).replacingOccurrences(of: ".", with: "")
+        let eMon = mon.string(from: e).replacingOccurrences(of: ".", with: "")
+        let cal = Calendar.current
+        if cal.component(.month, from: s) == cal.component(.month, from: e) {
+            return "\(day.string(from: s)) – \(day.string(from: e)) de \(eMon)"
+        }
+        return "\(day.string(from: s)) de \(sMon) – \(day.string(from: e)) de \(eMon)"
+    }
+
+    static func parse(_ s: String) -> Date {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"
+        return f.date(from: s) ?? Date(timeIntervalSince1970: 0)
+    }
+}
+
+/// O texto do popup de fechamento. Fica fora da view pra poder ser testado —
+/// e é o mesmo texto do dashboard, pra iPhone, iPad e web falarem igual.
+enum CloseWeekPrompt {
+    static func title(_ opts: CloseOptions?) -> String {
+        opts?.last == nil ? "Fechar a semana agora?" : "Onde arquivar?"
+    }
+
+    static func message(_ opts: CloseOptions?) -> String {
+        // Fila vazia: fechar ainda vale (é o que marca os encalhados), mas dizer
+        // "0 concluídos vão sair do board" só confunde.
+        if let o = opts, o.pending == 0 {
+            return "Nada concluído na fila. Fechar agora só marca como encalhados os to-dos que nunca começaram."
+        }
+        let alvo = opts.map { "\($0.pending) concluído\($0.pending == 1 ? "" : "s")" } ?? "Os cards concluídos"
+        guard opts?.last != nil else {
+            return "\(alvo) serão arquivados e saem do board; to-dos antigos não iniciados viram encalhados. Normalmente acontece sozinho no domingo 23:59."
+        }
+        return "\(alvo) vão sair do board. Se este trabalho é da virada de madrugada, junte na semana que acabou em vez de abrir uma nova."
+    }
+
+    static func juntarLabel(_ last: WeekOption) -> String {
+        "Juntar em \(WeekRangeFormat.text(start: last.start, end: last.end)) (\(last.count))"
+    }
+
+    static func novaLabel(_ current: WeekOption) -> String {
+        "Criar semana nova (\(WeekRangeFormat.text(start: current.start, end: current.end)))"
+    }
+}
+
 /// Colunas do quadro, na ordem do fluxo (igual ao hub).
 enum BoardColumn: String, CaseIterable, Identifiable {
     case aFazer = "a_fazer"

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - Temas do terminal
 
@@ -89,10 +90,13 @@ final class TerminalMirrorModel: ObservableObject {
     func start() {
         guard pollTask == nil else { return }
         pollTask = Task { [weak self] in
+            var pacer = PollPacer()
             while !Task.isCancelled {
                 guard let self else { return }
-                await self.refresh()
-                try? await Task.sleep(for: .seconds(1.5))
+                let changed = await self.refresh()
+                let interval = pacer.interval
+                pacer.record(changed: changed, elapsed: interval.seconds)
+                try? await Task.sleep(for: interval)
             }
         }
     }
@@ -123,10 +127,13 @@ final class TerminalMirrorModel: ObservableObject {
     }
 
     /// Só atualiza (e re-renderiza) quando a tela realmente muda — evita
-    /// re-parsear ANSI à toa a cada poll.
-    private func refresh() async {
+    /// re-parsear ANSI à toa a cada poll. Devolve se houve diff, para o pacer.
+    @discardableResult
+    private func refresh() async -> Bool {
         let s = await api.tmuxScreen(machine: machine, target: target)
-        if !s.isEmpty && s != screen { screen = s }
+        guard !s.isEmpty, s != screen else { return false }
+        screen = s
+        return true
     }
 
     /// Digita a mensagem no terminal ao vivo (send-keys + Enter).
@@ -166,6 +173,15 @@ struct TerminalMirrorView: View {
     let machine: String
     let target: String
     let title: String
+    /// Falso quando o espelho está na hierarquia mas escondido (o painel está
+    /// no Chat). Para o poll sem desmontar a view — desmontar dispararia o
+    /// `restoreSize()`, que só deve rodar ao fechar a sessão de verdade.
+    var isActive: Bool = true
+    /// Falso quando embutida no `SessionDetailPane` do iPad, que passa a ser
+    /// a ÚNICA fonte de `.navigationTitle` (ver `OwnedNavigationTitle.swift`).
+    /// Default `true` preserva o iPhone, que monta esta view sozinha e nunca
+    /// passa nada aqui.
+    var ownsNavigationTitle: Bool = true
 
     @StateObject private var model: TerminalMirrorModel
     @Environment(\.dismiss) private var dismiss
@@ -177,52 +193,125 @@ struct TerminalMirrorView: View {
 
     // Tamanho da fonte, ajustável (A−/A+). Menor = mais colunas = a TUI do claude
     // renderiza mais larga (parecida com o PC); maior = mais legível.
-    @AppStorage("cutuque.terminalFont") private var fontPtStored: Double = 10
+    // Duas chaves: o tamanho bom no iPhone (10 pt, 393 pt de largura) é miúdo
+    // demais num painel de iPad, e vice-versa. Cada plataforma lembra o seu.
+    @AppStorage("cutuque.terminalFont") private var fontPhone: Double = 10
+    @AppStorage("cutuque.terminalFont.pad") private var fontPad: Double = 13
+    private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
+    private var fontPtStored: Double {
+        get { isPad ? fontPad : fontPhone }
+        nonmutating set { if isPad { fontPad = newValue } else { fontPhone = newValue } }
+    }
     private var fontPt: CGFloat { CGFloat(fontPtStored) }
-    private let fontMin = 5.0
-    private let fontMax = 22.0
+    private let fontMin = TerminalGeometry.fontMin
+    private let fontMax = TerminalGeometry.fontMax
 
-    init(machine: String, target: String, title: String) {
+    /// Segura a rajada de resize do arraste do divisor do Split View.
+    @State private var resizeDebouncer = ResizeDebouncer()
+
+    /// Tamanho do VIEWPORT do terminal — a `ScrollView`, não o painel inteiro.
+    /// Medido pelo `.background` de `terminal`, o que dispensa descontar as
+    /// barras de teclas e de input por estimativa (era a constante
+    /// `verticalChrome = 120`): elas simplesmente ficam fora do retângulo
+    /// medido.
+    @State private var viewport: CGSize = .zero
+
+    /// Largura de um caractere e altura de uma linha, medidas pela `ruler`.
+    /// `nil` até a primeira medição — enquanto isso não se pede resize nenhum
+    /// ao tmux, porque um palpite aqui é exatamente o que esta mudança veio
+    /// tirar (ver `TerminalGeometry`).
+    @State private var metrics: TerminalGeometry.TextMetrics?
+
+    /// Colunas e linhas que cabem AGORA, ou `nil` enquanto falta medição.
+    private var grid: (cols: Int, rows: Int)? {
+        guard let metrics, metrics.isUsable, viewport.width > 0, viewport.height > 0
+        else { return nil }
+        return (TerminalGeometry.columns(width: viewport.width, metrics: metrics),
+                TerminalGeometry.rows(height: viewport.height, metrics: metrics))
+    }
+
+    /// Identidade do `.task` que dispara o resize. O caso sem medição precisa
+    /// de um valor PRÓPRIO (não `"0x0"`, que poderia colidir com uma grade
+    /// real de piso) só pra o `.task` reentrar quando a medida chegar.
+    private var resizeKey: String {
+        guard let grid else { return "sem-medida" }
+        return "\(grid.cols)x\(grid.rows)"
+    }
+
+    init(machine: String, target: String, title: String, isActive: Bool = true,
+         ownsNavigationTitle: Bool = true) {
         self.machine = machine
         self.target = target
         self.title = title
+        self.isActive = isActive
+        self.ownsNavigationTitle = ownsNavigationTitle
         _model = StateObject(wrappedValue: TerminalMirrorModel(machine: machine, target: target))
     }
 
     var body: some View {
-        GeometryReader { geo in
-            // 0.62 ≈ largura/altura do SF Mono, com folga pra a linha do claude
-            // NÃO re-quebrar no app (o que deixava o layout "zicado").
-            let cols = max(30, Int((geo.size.width - 16) / (fontPt * 0.62)))
-            // Reserva só o mínimo (barras) para dar o MÁXIMO de linhas ao pane:
-            // fonte menor → muito mais linhas → o claude mostra mais da conversa
-            // de uma vez (mais contexto), além do PageUp pra subir mais ainda.
-            let rows = max(20, Int((geo.size.height - 120) / (fontPt * 1.28)))
-            VStack(spacing: 0) {
-                terminal
-                keyBar
-                inputBar
-            }
-            .task(id: "\(cols)x\(rows)") {
-                model.resize(cols: cols, rows: rows)
-                model.start()
-            }
+        VStack(spacing: 0) {
+            terminal
+            keyBar
+            inputBar
         }
-        .navigationTitle(title)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) { themeMenu }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(role: .destructive) {
-                    confirmingKill = true
-                } label: {
-                    Image(systemName: "xmark.circle")
+        // Antes havia um `GeometryReader` embrulhando este `VStack` só pra ler
+        // a altura do painel INTEIRO e dela subtrair um chute de 120 pt pras
+        // duas barras. Agora quem mede é o `.background` do próprio
+        // `terminal` (a `ScrollView`), então não sobra nada pra estimar — e o
+        // `GeometryReader`, que participava do layout, sai da árvore.
+        .task(id: resizeKey) {
+            if let grid {
+                resizeDebouncer.schedule(cols: grid.cols, rows: grid.rows) { c, r in
+                    model.resize(cols: c, rows: r)
                 }
-                .tint(.red)
-                .accessibilityLabel("Encerrar sessão do tmux")
+            }
+            if isActive { model.start() }
+        }
+        .onChange(of: isActive) { _, active in
+            if active { model.start() } else { model.stop() }
+        }
+        // Título de navegação: só quando esta view é dona dele (iPhone,
+        // sozinha). Embutida no `SessionDetailPane` do iPad ela recebe
+        // `ownsNavigationTitle: false` e não contribui NADA ao
+        // `.navigationTitle` — nem uma string vazia — porque o pane é a
+        // única fonte (ver `OwnedNavigationTitle.swift`): duas views
+        // simultaneamente montadas competindo pelo mesmo preference key,
+        // mesmo que uma delas mande `""`, ainda é uma disputa cujo vencedor
+        // depende de composição interna do SwiftUI, não de garantia nossa.
+        //
+        // Toolbar: gate no CONTEÚDO (não no modificador em si) — não é
+        // `if/else` na árvore de views, então não remonta nada (decisão
+        // #19). Sem isto, o painel Chat|Terminal do iPad (que mantém as duas
+        // views vivas ao mesmo tempo, ver `SessionDetailPane`) tinha o X
+        // vermelho de "Encerrar sessão do tmux" tocável na toolbar mesmo com
+        // o Chat em foco — `.toolbar` compõe as contribuições de TODAS as
+        // views montadas, e `.opacity`/`.allowsHitTesting` não alcançam a
+        // barra de navegação.
+        .ownedNavigationTitle(title, owns: ownsNavigationTitle)
+        .toolbar {
+            if isActive {
+                ToolbarItem(placement: .topBarTrailing) { themeMenu }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(role: .destructive) {
+                        confirmingKill = true
+                    } label: {
+                        Image(systemName: "xmark.circle")
+                    }
+                    .tint(.red)
+                    .accessibilityLabel("Encerrar sessão do tmux")
+                }
             }
         }
         .onDisappear {
+            // Cancela QUALQUER resize debounced ainda pendente antes de
+            // parar o poll e restaurar o tamanho. Sem isto: arrastar o
+            // divisor e trocar de sessão nos ~300ms seguintes deixava o
+            // resize atrasado disparar DEPOIS do restoreSize() — o pane no
+            // Mac ficava com o tamanho errado (a troca de sessão usa
+            // `.id(selection)`, que destrói este painel e roda este
+            // onDisappear na hora). stop()/restoreSize() continuam na
+            // mesma ordem de sempre — só o cancel() entra, antes dos dois.
+            resizeDebouncer.cancel()
             model.stop()
             model.restoreSize()
         }
@@ -272,8 +361,11 @@ struct TerminalMirrorView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 10)
+                    // Os mesmos valores que `TerminalGeometry.columns/rows`
+                    // descontam — lidos de lá, não redigitados aqui, pra não
+                    // poderem divergir em silêncio.
+                    .padding(.horizontal, TerminalGeometry.horizontalTextPadding)
+                    .padding(.vertical, TerminalGeometry.verticalTextPadding)
                 Color.clear.frame(height: 1).id("bottom")
             }
             .onChange(of: model.screen) { _, _ in
@@ -285,6 +377,11 @@ struct TerminalMirrorView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(theme.bg)
+            // As duas medições que substituem os antigos números mágicos. Vão
+            // em `.background` de propósito: background não altera o tamanho
+            // de quem o hospeda, então medir aqui não realimenta o layout.
+            .background(viewportReader)
+            .background(alignment: .topLeading) { ruler }
             // Rolar o HISTÓRICO da conversa do claude (a TUI usa tela alternada,
             // sem scrollback no tmux): PageUp/PageDown pedem pro claude rolar a
             // própria view — igualzinho ao scroll no PC.
@@ -296,6 +393,41 @@ struct TerminalMirrorView: View {
                 .padding(.trailing, 10)
             }
         }
+    }
+
+    /// Mede o viewport do terminal. Mesmo padrão do `RootSplitView`:
+    /// `.background(GeometryReader { Color.clear })`, que lê a geometria sem
+    /// participar do layout.
+    private var viewportReader: some View {
+        GeometryReader { geo in
+            Color.clear.onChange(of: geo.size, initial: true) { _, size in
+                viewport = size
+            }
+        }
+    }
+
+    /// A régua: uma linha de verdade, na fonte de verdade, medida pelo próprio
+    /// SwiftUI. É o que substitui as razões 0.62/1.28 — ver o cabeçalho de
+    /// `TerminalGeometry` pra por que uma razão fixa não dá conta.
+    ///
+    /// `.fixedSize()` é obrigatório: dentro de um `.background` a proposta de
+    /// tamanho é a do terminal, e sem ele os 100 caracteres quebrariam em
+    /// várias linhas — a medida sairia com a largura do painel e a altura de
+    /// um parágrafo. Com ele, o `Text` usa o tamanho ideal: uma linha só.
+    private var ruler: some View {
+        Text(String(repeating: "M", count: TerminalGeometry.sampleLength))
+            .font(.system(size: fontPt, design: .monospaced))
+            .fixedSize()
+            .background(
+                GeometryReader { geo in
+                    Color.clear.onChange(of: geo.size, initial: true) { _, size in
+                        if let measured = TerminalGeometry.TextMetrics(sampleSize: size) {
+                            metrics = measured
+                        }
+                    }
+                }
+            )
+            .hidden()
     }
 
     private func scrollChevron(_ symbol: String, _ key: String) -> some View {
@@ -359,6 +491,7 @@ struct TerminalMirrorView: View {
         }
         .buttonStyle(.plain)
         .disabled(delta < 0 ? fontPtStored <= fontMin : fontPtStored >= fontMax)
+        .keyboardShortcut(delta < 0 ? "-" : "+", modifiers: .command)
     }
 
     private func keyButton(_ label: String, _ key: String, tint: Color = .secondary) -> some View {
@@ -388,6 +521,21 @@ struct TerminalMirrorView: View {
                 .background(Color.secondary.opacity(0.15), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                // O TextField é UIKit por baixo (UITextField) e consome ⎋/⇥/setas
+                // internamente (mover cursor, navegar campos) antes que o evento
+                // suba pro ancestral SwiftUI — por isso o onKeyPress precisa estar
+                // pendurado NELE, e não na VStack externa: a view focada tem
+                // prioridade na cadeia de onKeyPress e intercepta antes do
+                // comportamento default do controle rodar. É também o único
+                // elemento focável desta tela, então mover (em vez de duplicar)
+                // não perde nenhum caso que já funcionava.
+                .onKeyPress(phases: .down) { press in
+                    guard let key = TerminalKeyboard.tmuxKey(for: press.key.character,
+                                                             modifiers: press.modifiers)
+                    else { return .ignored }
+                    Task { await model.sendKey(key) }
+                    return .handled
+                }
 
             Button {
                 let text = input
@@ -405,6 +553,7 @@ struct TerminalMirrorView: View {
                 }
             }
             .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty || model.sending)
+            .keyboardShortcut(.return, modifiers: .command)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -419,6 +568,47 @@ struct TerminalMirrorView: View {
 struct LiveDetailView: View {
     let entry: LiveEntry
     @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        LiveInfoList(entry: entry)
+            .navigationTitle("Sessão ao vivo")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { Button("Fechar") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Label("ao vivo", systemImage: "dot.radiowaves.left.and.right")
+                        .labelStyle(.iconOnly).foregroundStyle(.green)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                NavigationLink {
+                    TerminalMirrorView(machine: entry.machine, target: entry.id, title: entry.session.title)
+                } label: {
+                    Label("Abrir terminal ao vivo", systemImage: "terminal")
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .padding()
+                .background(.ultraThinMaterial)
+            }
+    }
+}
+
+/// O CORPO das informações de uma sessão viva — título, máquina, pane e a
+/// árvore de pastas — sem barra de navegação, sem botão e sem `dismiss`.
+///
+/// Nasceu de dentro do `LiveDetailView` acima quando o iPad passou a mostrar as
+/// mesmas informações ("no ao vivo do tmux nao ta abrindo as informações como
+/// temos no iphone"). Lá elas continuam num sheet com "Fechar" e o botão de
+/// abrir o terminal; aqui, num painel de split view com um seletor
+/// `Info | Terminal`. Só o miolo é comum, então só o miolo mora aqui — a
+/// alternativa (parametrizar o `LiveDetailView` com flags de "mostra toolbar?",
+/// "mostra botão?") deixaria uma view fingindo ser duas.
+struct LiveInfoList: View {
+    let entry: LiveEntry
 
     var body: some View {
         List {
@@ -441,29 +631,6 @@ struct LiveDetailView: View {
                 }
                 .padding(.vertical, 2)
             }
-        }
-        .navigationTitle("Sessão ao vivo")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) { Button("Fechar") { dismiss() } }
-            ToolbarItem(placement: .topBarTrailing) {
-                Label("ao vivo", systemImage: "dot.radiowaves.left.and.right")
-                    .labelStyle(.iconOnly).foregroundStyle(.green)
-            }
-        }
-        .safeAreaInset(edge: .bottom) {
-            NavigationLink {
-                TerminalMirrorView(machine: entry.machine, target: entry.id, title: entry.session.title)
-            } label: {
-                Label("Abrir terminal ao vivo", systemImage: "terminal")
-                    .fontWeight(.semibold)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 4)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .padding()
-            .background(.ultraThinMaterial)
         }
     }
 

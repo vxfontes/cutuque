@@ -196,6 +196,17 @@ struct SessionDetailView: View {
     @ObservedObject private var namer = SessionNamesStore.shared
     // Router p/ navegar ao detalhe da nova sessão ao relançar de uma encerrada.
     @EnvironmentObject private var router: Router
+    @EnvironmentObject private var nav: NavigationState
+    /// Falso quando esta view está viva na hierarquia mas escondida atrás do
+    /// terminal (painel Chat|Terminal do iPad, `SessionDetailPane`, decisão
+    /// #19). Default `true` preserva o iPhone, que só monta um painel por
+    /// vez e nunca chama isto com `false`.
+    var isActive: Bool = true
+    /// Falso quando embutida no `SessionDetailPane` do iPad, que passa a ser
+    /// a ÚNICA fonte de `.navigationTitle` (ver `OwnedNavigationTitle.swift`).
+    /// Default `true` preserva o iPhone, que monta esta view sozinha e nunca
+    /// passa nada aqui.
+    var ownsNavigationTitle: Bool = true
     @State private var draft = ""
     @State private var showScrollToBottom = false
     @State private var renaming = false
@@ -218,8 +229,10 @@ struct SessionDetailView: View {
     // a VStack externa, essa sim, empurra a barra pra cima normalmente.
     @FocusState private var inputFocused: Bool
 
-    init(session: Session) {
+    init(session: Session, isActive: Bool = true, ownsNavigationTitle: Bool = true) {
         _model = StateObject(wrappedValue: SessionDetailViewModel(session: session))
+        self.isActive = isActive
+        self.ownsNavigationTitle = ownsNavigationTitle
     }
 
     /// Título a exibir (apelido local, se houver, senão o original).
@@ -287,26 +300,63 @@ struct SessionDetailView: View {
             // texto lança uma nova tarefa na mesma máquina (relançar).
             interactionBar
         }
-        .navigationTitle(displayTitle)
-        .navigationBarTitleDisplayMode(.inline)
+        // Título de navegação: só quando esta view é dona dele (mesmo
+        // mecanismo do `TerminalMirrorView`, ver `OwnedNavigationTitle.swift`)
+        // — embutida no `SessionDetailPane` do iPad ela recebe
+        // `ownsNavigationTitle: false` e não contribui NADA ao
+        // `.navigationTitle`, nem uma string vazia: duas views montadas ao
+        // mesmo tempo (decisão #19) competindo pelo mesmo preference key,
+        // mesmo com uma delas em `""`, ainda dependeria de composição
+        // interna do SwiftUI pra decidir o vencedor. O pane passa a ser a
+        // única fonte, computada a partir de `showsChat`.
+        //
+        // Toolbar: gate no CONTEÚDO, não no modificador em si — mesmo motivo.
+        .ownedNavigationTitle(displayTitle, owns: ownsNavigationTitle)
+        // Sobe o título ao vivo (apelido + `model.session.title`, que
+        // acompanha `session_updated`/`snapshot`) pro `SessionDetailPane`
+        // via `LiveChatTitleKey` — ver o comentário lá pra por quê:
+        // `nav.selection` é um snapshot congelado de propósito, e o pane não
+        // pode mais ler `.navigationTitle` desta view (rodada 2), então sem
+        // este canal o título do chat no iPad ficaria preso no valor de
+        // quando a sessão foi selecionada. Único escritor desta chave —
+        // `TerminalMirrorView` nunca grava nela — então não há concorrência
+        // pra decidir vencedor.
+        .preference(key: LiveChatTitleKey.self, value: displayTitle)
+        // ⌘. — abre a MESMA confirmação do botão de parar; no pipe-mode isso
+        // mata a sessão, então o atalho não pula o gate. A regra de "só
+        // consome .interrupt" vive em `NavigationState.consumeIfInterrupt()`
+        // (testada em NavigationStateTests.swift) — aqui é só fiação.
+        //
+        // Observa `nav.intentEvent`, não `nav.intent` cru: dois ⌘. seguidos
+        // sem ninguém consumir no meio mandam o MESMO `AppIntent`, e
+        // `.onChange` só dispara na mudança de valor — sem o `seq` do
+        // envelope o segundo ⌘. ficaria mudo (achado Critical da revisão
+        // final). `consumeIfInterrupt()` continua lendo `nav.intent`.
+        .onChange(of: nav.intentEvent) { _, _ in
+            if nav.consumeIfInterrupt() {
+                confirmingInterrupt = true
+            }
+        }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button {
-                        showingDetails = true
+            if isActive {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button {
+                            showingDetails = true
+                        } label: {
+                            Label("Detalhes", systemImage: "info.circle")
+                        }
+                        Button {
+                            renameText = namer.customName(for: model.session.id) ?? model.session.title
+                            renaming = true
+                        } label: {
+                            Label("Renomear", systemImage: "pencil")
+                        }
                     } label: {
-                        Label("Detalhes", systemImage: "info.circle")
+                        Image(systemName: "ellipsis.circle")
                     }
-                    Button {
-                        renameText = namer.customName(for: model.session.id) ?? model.session.title
-                        renaming = true
-                    } label: {
-                        Label("Renomear", systemImage: "pencil")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
+                    .accessibilityLabel("Mais opções")
                 }
-                .accessibilityLabel("Mais opções")
             }
         }
         .sheet(isPresented: $showingDetails) {

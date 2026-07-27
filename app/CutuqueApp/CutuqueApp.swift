@@ -6,18 +6,36 @@ struct CutuqueApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     // Router de deep-link compartilhado (mesma instância usada pelo PushManager).
     @StateObject private var router = Router.shared
+    // Estado de navegação do iPad. Mora aqui (e não na view raiz) porque a cena
+    // `.commands` abaixo precisa alcançá-lo para emitir os atalhos ⌘ (Task 11).
+    @StateObject private var nav = NavigationState()
     // Aparência (modo claro/escuro) + tema de cor, aplicados na raiz. @AppStorage
     // observa as chaves — mudou nos ajustes, re-aplica aqui na hora.
     @AppStorage(AppThemeKeys.colorScheme) private var colorSchemeRaw = AppColorScheme.system.rawValue
     @AppStorage(AppThemeKeys.accent) private var accentRaw = AppAccent.blue.rawValue
     // Fase da cena: informa o hub foreground/background (suprime push com o app aberto).
     @Environment(\.scenePhase) private var scenePhase
+    // Board compartilhado: no iPad a coluna de filtros e o kanban são views
+    // diferentes olhando o mesmo modelo.
+    @StateObject private var board = BoardModel()
 
     var body: some Scene {
         WindowGroup {
-            // Raiz = TabView com bottom bar (Sessões / Board).
-            RootTabView()
+            // A raiz é escolhida por IDIOM, não por classe de tamanho. Idiom
+            // nunca muda em tempo de execução: o `if` roda uma vez e a árvore
+            // jamais é remontada. Classe de tamanho mudaria (iPhone Pro Max em
+            // paisagem é `.regular`) e trocar a raiz derrubaria o espelho do
+            // tmux — é exatamente o que a decisão #19 evita.
+            Group {
+                if UIDevice.current.userInterfaceIdiom == .pad {
+                    RootSplitView()
+                } else {
+                    RootTabView()
+                }
+            }
             .environmentObject(router)
+            .environmentObject(nav)
+            .environmentObject(board)
             .tint((AppAccent(rawValue: accentRaw) ?? .blue).color)
             .preferredColorScheme((AppColorScheme(rawValue: colorSchemeRaw) ?? .system).scheme)
             // Deep-link da Live Activity: cutuque://session/<id> abre a sessão.
@@ -32,6 +50,7 @@ struct CutuqueApp: App {
                 await PushManager.shared.requestAuthorization()
             }
         }
+        .commands { CutuqueCommands(nav: nav) }
         .onChange(of: scenePhase) { _, phase in
             ForegroundReporter.shared.update(phase)
         }

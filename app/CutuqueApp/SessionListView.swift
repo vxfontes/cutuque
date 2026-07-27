@@ -4,7 +4,7 @@ import UIKit
 // MARK: - ViewModel
 
 /// Uma sessão que está rodando AGORA numa máquina (poll do /machines/{m}/live).
-struct LiveEntry: Identifiable, Equatable {
+struct LiveEntry: Identifiable, Equatable, Hashable {
     let machine: String
     let session: DiscoveredSession
     var id: String { session.id }
@@ -256,10 +256,19 @@ final class SessionListViewModel: ObservableObject {
 
 struct SessionListView: View {
     @StateObject private var model = SessionListViewModel()
+    /// Quando não-nil, a lista roda embutida na coluna `content` de uma
+    /// `NavigationSplitView` (iPad): não cria `NavigationStack` própria e
+    /// publica a escolha aqui em vez de empurrar na pilha. Nil = iPhone, tudo
+    /// exatamente como sempre foi.
+    var splitSelection: Binding<DetailSelection?>?
+    private var isEmbedded: Bool { splitSelection != nil }
     // Apelidos locais das sessões (só no app).
     @ObservedObject private var namer = SessionNamesStore.shared
     // Router de deep-link vindo de uma notificação (Fase 4).
     @EnvironmentObject private var router: Router
+    // Estado de navegação do iPad — consumido aqui só pelos atalhos ⌘ que
+    // precisam da lista carregada (Task 11): ⌘N e ⌘1…⌘9.
+    @EnvironmentObject private var nav: NavigationState
     @State private var showingNew = false
     @State private var showingDiscover = false
     @State private var showingSettings = false
@@ -419,184 +428,237 @@ struct SessionListView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            List {
-                liveServerSections
-                needsYouSection
-                activeSection
-                concludedSection
-                subagentsSection
-            }
-            .listStyle(.insetGrouped)
-            // Destino único para navegação por valor (NavigationLink) e por push (path).
-            .navigationDestination(for: Session.self) { session in
-                SessionDetailView(session: session)
-            }
-            .overlay {
-                if !model.didInitialLoad {
-                    ProgressView().controlSize(.large)
-                } else if model.sessions.isEmpty && liveNotTracked.isEmpty {
-                    emptyState
-                }
-            }
-            .navigationTitle("Sessões")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        showingStatus = true
-                    } label: {
-                        HubStatusIndicator(status: model.hubStatus)
-                    }
-                    // .plain preserva a cor (verde/vermelho) do ícone; sem isso o
-                    // tint do botão pinta a bolinha de branco.
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Status do hub")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button {
-                            showingNew = true
-                        } label: {
-                            Label("Nova tarefa", systemImage: "plus")
+        // O `.modifier` do atalho ⌘ (Task 11) fica FORA da cadeia gigante de
+        // `bodyContent` de propósito: colado direto nela, o type-checker do
+        // Swift não fecha a conta ("unable to type-check this expression in
+        // reasonable time" — erro real de build). Em compensação, quebrar a
+        // expressão em duas (esta e `bodyContent`) resolve.
+        bodyContent
+            .modifier(AppIntentListener(handle: handleAppIntent))
+    }
+
+    private var bodyContent: some View {
+        Group {
+            if isEmbedded {
+                listCore
+            } else {
+                NavigationStack(path: $path) {
+                    listCore
+                        // Destino único p/ NavigationLink e p/ push programático.
+                        .navigationDestination(for: Session.self) { session in
+                            SessionDetailView(session: session)
                         }
-                        Button {
-                            showingDiscover = true
-                        } label: {
-                            Label("Continuar sessão do Mac", systemImage: "macbook.and.iphone")
-                        }
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .accessibilityLabel("Nova tarefa ou continuar sessão")
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+            }
+        }
+        // A partir daqui vêm todos os `.sheet`, `.confirmationDialog`, `.alert`,
+        // `.task` e `.onChange` que valem nos dois modos e apresentam igual de
+        // fora da NavigationStack (ou de fora do embed, no iPad).
+        .sheet(isPresented: $showingNew) {
+            NewSessionView { session in
+                // Sucesso: fecha a sheet e navega pro detalhe da sessão criada.
+                showingNew = false
+                go(to: session)
+            }
+        }
+        .sheet(isPresented: $showingDiscover) {
+            DiscoverSessionsView { session in
+                // Adotou: fecha a sheet e navega pro detalhe (continua a conversa).
+                showingDiscover = false
+                go(to: session)
+            }
+        }
+        .sheet(isPresented: $showingSettings) {
+            HubSettingsView()
+        }
+        .sheet(isPresented: $showingHistory) {
+            HistoryView()
+        }
+        .sheet(item: $selectedLive) { entry in
+            NavigationStack {
+                LiveDetailView(entry: entry)
+            }
+        }
+        .sheet(isPresented: $showingStatus) {
+            HubStatusView(sessions: model.sessions, live: model.liveSessions)
+        }
+        // Encerrar server (kill-server) — destrutivo, confirma antes.
+        .confirmationDialog(
+            "Encerrar o server \(serverToKill?.name ?? "")?",
+            isPresented: Binding(get: { serverToKill != nil }, set: { if !$0 { serverToKill = nil } }),
+            presenting: serverToKill
+        ) { target in
+            Button("Encerrar server", role: .destructive) {
+                model.killServer(machine: target.machine, socket: target.socket)
+            }
+            Button("Cancelar", role: .cancel) {}
+        } message: { target in
+            Text("Fecha TODOS os panes/Claudes do server \(target.name) de uma vez.")
+        }
+        // Limpar concluídas — destrutivo, confirma antes.
+        .confirmationDialog(
+            "Limpar as concluídas?",
+            isPresented: $confirmingClear,
+            titleVisibility: .visible
+        ) {
+            Button("Limpar \(concludedOthers.count)", role: .destructive) {
+                model.clearConcluded()
+            }
+            Button("Cancelar", role: .cancel) {}
+        } message: {
+            Text("Apaga da lista todas as sessões concluídas (não afeta o transcript no Mac).")
+        }
+        .confirmationDialog(
+            "Limpar os subagentes?",
+            isPresented: $confirmingClearSubagents,
+            titleVisibility: .visible
+        ) {
+            Button("Limpar \(subagents.count)", role: .destructive) {
+                model.clearSubagents()
+            }
+            Button("Cancelar", role: .cancel) {}
+        } message: {
+            Text("Apaga da lista todos os subagentes (não afeta o transcript no Mac).")
+        }
+        .alert(
+            "Renomear sessão",
+            isPresented: Binding(
+                get: { renameTarget != nil },
+                set: { if !$0 { renameTarget = nil } }
+            ),
+            presenting: renameTarget
+        ) { session in
+            TextField("Nome", text: $renameText)
+            Button("Salvar") {
+                namer.setName(renameText, for: session.id)
+                renameTarget = nil
+            }
+            Button("Cancelar", role: .cancel) { renameTarget = nil }
+        } message: { _ in
+            Text("Só muda o nome aqui no app; não afeta a sessão real.")
+        }
+        .refreshable {
+            await model.refresh()
+            await model.refreshLive()
+        }
+        .task {
+            await model.refresh()
+            model.startLiveUpdates()
+            model.startLivePolling()
+            resolveDeepLink() // pode haver um push pendente antes da lista carregar
+        }
+        .onDisappear {
+            model.stopLiveUpdates()
+            model.stopLivePolling()
+        }
+        // Deep-link do push: quando o Router aponta uma sessão, navega até ela.
+        .onChange(of: router.pendingSessionID) { _, _ in resolveDeepLink() }
+        // A sessão do push pode chegar só depois da lista carregar via WS/REST.
+        .onChange(of: model.sessions) { _, _ in resolveDeepLink() }
+        // Ao fechar a sheet de nova tarefa, resolve um deep-link que tenha
+        // chegado enquanto ela estava aberta (evita navegar por baixo dela).
+        .onChange(of: showingNew) { _, isShowing in
+            if !isShowing { resolveDeepLink() }
+        }
+        .onChange(of: showingDiscover) { _, isShowing in
+            if !isShowing { resolveDeepLink() }
+        }
+    }
+
+    /// A lista em si, com título e toolbar. Nos dois modos é a mesma coisa; o
+    /// que muda é ter ou não uma NavigationStack em volta.
+    @ViewBuilder private var listCore: some View {
+        List(selection: splitSelection) {
+            liveServerSections
+            needsYouSection
+            activeSection
+            concludedSection
+            subagentsSection
+        }
+        .listStyle(.insetGrouped)
+        .overlay {
+            if !model.didInitialLoad {
+                ProgressView().controlSize(.large)
+            } else if model.sessions.isEmpty && liveNotTracked.isEmpty {
+                emptyState
+            }
+        }
+        .navigationTitle("Sessões")
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    showingStatus = true
+                } label: {
+                    HubStatusIndicator(status: model.hubStatus)
+                }
+                // .plain preserva a cor (verde/vermelho) do ícone; sem isso o
+                // tint do botão pinta a bolinha de branco.
+                .buttonStyle(.plain)
+                .accessibilityLabel("Status do hub")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
                     Button {
-                        showingHistory = true
+                        showingNew = true
                     } label: {
-                        Image(systemName: "clock.arrow.circlepath")
+                        Label("Nova tarefa", systemImage: "plus")
                     }
-                    .accessibilityLabel("Histórico de sessões")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        showingSettings = true
+                        showingDiscover = true
                     } label: {
-                        Image(systemName: "gearshape")
+                        Label("Continuar sessão do Mac", systemImage: "macbook.and.iphone")
                     }
-                    .accessibilityLabel("Ajustes do hub")
+                } label: {
+                    Image(systemName: "plus")
                 }
+                .accessibilityLabel("Nova tarefa ou continuar sessão")
             }
-            .sheet(isPresented: $showingNew) {
-                NewSessionView { session in
-                    // Sucesso: fecha a sheet e navega pro detalhe da sessão criada.
-                    showingNew = false
-                    path.append(session)
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showingHistory = true
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
                 }
+                .accessibilityLabel("Histórico de sessões")
             }
-            .sheet(isPresented: $showingDiscover) {
-                DiscoverSessionsView { session in
-                    // Adotou: fecha a sheet e navega pro detalhe (continua a conversa).
-                    showingDiscover = false
-                    if path.last?.id != session.id {
-                        path.append(session)
-                    }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showingSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
                 }
+                .accessibilityLabel("Ajustes do hub")
             }
-            .sheet(isPresented: $showingSettings) {
-                HubSettingsView()
+        }
+    }
+
+    /// Trata só `.newSession`, `.reload` e `.selectSession` — os demais casos
+    /// (board, terminal, interrupt...) são de outros consumidores.
+    ///
+    /// A decisão "reconheço ou não" NÃO mora aqui: é
+    /// `nav.consumeSessionListIntent()` (`NavigationState.swift`) quem só
+    /// consome o intent quando é um dos três que a lista trata, e devolve a
+    /// ação equivalente. Isso é testado direto na `NavigationState`, sem
+    /// hospedar esta View em teste — aqui embaixo é só fiação (o "I/O": abrir
+    /// a sheet, disparar o refresh, tocar `splitSelection`).
+    ///
+    /// Chamada pelo `AppIntentListener` (fim do arquivo) via `body`, não
+    /// direto na cadeia de `bodyContent` — ver o comentário lá.
+    private func handleAppIntent(_: AppIntent?) {
+        switch nav.consumeSessionListIntent() {
+        case .newSession:
+            showingNew = true
+        case .reload:
+            Task { await model.refresh(); await model.refreshLive() }
+        case .selectSession(let index):
+            // ⌘1…⌘9 na ordem em que a lista aparece: precisa de você, ao
+            // vivo, depois as demais ativas.
+            let ordered = needsYou + activeOthers
+            if let session = ordered[safe: index] {
+                splitSelection?.wrappedValue = .session(session)
             }
-            .sheet(isPresented: $showingHistory) {
-                HistoryView()
-            }
-            .sheet(item: $selectedLive) { entry in
-                NavigationStack {
-                    LiveDetailView(entry: entry)
-                }
-            }
-            .sheet(isPresented: $showingStatus) {
-                HubStatusView(sessions: model.sessions, live: model.liveSessions)
-            }
-            // Encerrar server (kill-server) — destrutivo, confirma antes.
-            .confirmationDialog(
-                "Encerrar o server \(serverToKill?.name ?? "")?",
-                isPresented: Binding(get: { serverToKill != nil }, set: { if !$0 { serverToKill = nil } }),
-                presenting: serverToKill
-            ) { target in
-                Button("Encerrar server", role: .destructive) {
-                    model.killServer(machine: target.machine, socket: target.socket)
-                }
-                Button("Cancelar", role: .cancel) {}
-            } message: { target in
-                Text("Fecha TODOS os panes/Claudes do server \(target.name) de uma vez.")
-            }
-            // Limpar concluídas — destrutivo, confirma antes.
-            .confirmationDialog(
-                "Limpar as concluídas?",
-                isPresented: $confirmingClear,
-                titleVisibility: .visible
-            ) {
-                Button("Limpar \(concludedOthers.count)", role: .destructive) {
-                    model.clearConcluded()
-                }
-                Button("Cancelar", role: .cancel) {}
-            } message: {
-                Text("Apaga da lista todas as sessões concluídas (não afeta o transcript no Mac).")
-            }
-            .confirmationDialog(
-                "Limpar os subagentes?",
-                isPresented: $confirmingClearSubagents,
-                titleVisibility: .visible
-            ) {
-                Button("Limpar \(subagents.count)", role: .destructive) {
-                    model.clearSubagents()
-                }
-                Button("Cancelar", role: .cancel) {}
-            } message: {
-                Text("Apaga da lista todos os subagentes (não afeta o transcript no Mac).")
-            }
-            .alert(
-                "Renomear sessão",
-                isPresented: Binding(
-                    get: { renameTarget != nil },
-                    set: { if !$0 { renameTarget = nil } }
-                ),
-                presenting: renameTarget
-            ) { session in
-                TextField("Nome", text: $renameText)
-                Button("Salvar") {
-                    namer.setName(renameText, for: session.id)
-                    renameTarget = nil
-                }
-                Button("Cancelar", role: .cancel) { renameTarget = nil }
-            } message: { _ in
-                Text("Só muda o nome aqui no app; não afeta a sessão real.")
-            }
-            .refreshable {
-                await model.refresh()
-                await model.refreshLive()
-            }
-            .task {
-                await model.refresh()
-                model.startLiveUpdates()
-                model.startLivePolling()
-                resolveDeepLink() // pode haver um push pendente antes da lista carregar
-            }
-            .onDisappear {
-                model.stopLiveUpdates()
-                model.stopLivePolling()
-            }
-            // Deep-link do push: quando o Router aponta uma sessão, navega até ela.
-            .onChange(of: router.pendingSessionID) { _, _ in resolveDeepLink() }
-            // A sessão do push pode chegar só depois da lista carregar via WS/REST.
-            .onChange(of: model.sessions) { _, _ in resolveDeepLink() }
-            // Ao fechar a sheet de nova tarefa, resolve um deep-link que tenha
-            // chegado enquanto ela estava aberta (evita navegar por baixo dela).
-            .onChange(of: showingNew) { _, isShowing in
-                if !isShowing { resolveDeepLink() }
-            }
-            .onChange(of: showingDiscover) { _, isShowing in
-                if !isShowing { resolveDeepLink() }
-            }
+        case nil:
+            break
         }
     }
 
@@ -606,19 +668,34 @@ struct SessionListView: View {
     private func resolveDeepLink() {
         guard !showingNew, !showingDiscover, let id = router.pendingSessionID else { return }
         if let session = model.sessions.first(where: { $0.id == id }) {
-            if let target = session.tmuxTarget {
-                // Sessão do tmux: o push abre o TERMINAL AO VIVO correspondente,
-                // não o detalhe (que fica vazio para sessões externas — bug antigo
-                // de "cair numa página sem mensagem nenhuma").
-                selectedLive = LiveEntry(
-                    machine: session.machine,
-                    session: DiscoveredSession(id: target, cwd: session.cwd ?? "", title: namer.displayTitle(for: session))
-                )
-            } else if path.last?.id != session.id {
-                // Sessão orquestrada pelo app (sem tmux): abre o detalhe/chat normal.
-                path.append(session)
+            let entry = session.tmuxTarget.map { target in
+                LiveEntry(machine: session.machine,
+                          session: DiscoveredSession(id: target, cwd: session.cwd ?? "",
+                                                     title: namer.displayTitle(for: session)))
             }
+            apply(SessionNavigationLogic.deepLink(
+                session: session, tmuxEntry: entry, embedded: isEmbedded, pathTopID: path.last?.id))
             router.pendingSessionID = nil
+        }
+    }
+
+    /// Navega pra uma sessão do jeito que o modo atual entende.
+    private func go(to session: Session) {
+        apply(SessionNavigationLogic.goTo(session: session, embedded: isEmbedded, pathTopID: path.last?.id))
+    }
+
+    /// Executa a decisão pura de `SessionNavigationLogic` — o único lugar que
+    /// toca `splitSelection`/`selectedLive`/`path` (o "I/O" da navegação).
+    private func apply(_ target: SessionNavigationTarget?) {
+        switch target {
+        case .selection(let selection):
+            splitSelection?.wrappedValue = selection
+        case .liveSheet(let entry):
+            selectedLive = entry
+        case .push(let session):
+            path.append(session)
+        case nil:
+            break
         }
     }
 
@@ -634,33 +711,41 @@ struct SessionListView: View {
     }
 
     private func liveRow(_ entry: LiveEntry) -> some View {
-        let color = liveColor(entry)
-        return Button {
-            selectedLive = entry
-        } label: {
-            HStack(spacing: 12) {
-                // Cor do tema enquanto roda, verde quando concluiu.
-                LivePulse(color: color)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.session.title)
-                        .font(.body)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    HStack(spacing: 4) {
-                        Image(systemName: machineSymbol(entry.machine))
-                        Text(entry.session.folderName)
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                }
-                Spacer(minLength: 8)
-                Image(systemName: "terminal").foregroundStyle(color)
+        Group {
+            if isEmbedded {
+                liveRowLabel(entry)
+                    .tag(DetailSelection.live(entry))
+            } else {
+                Button { selectedLive = entry } label: { liveRowLabel(entry) }
+                    .buttonStyle(.plain)
             }
-            .padding(.vertical, 2)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+    }
+
+    /// O visual da linha ao vivo, sem o gesto — compartilhado pelos dois modos.
+    private func liveRowLabel(_ entry: LiveEntry) -> some View {
+        let color = liveColor(entry)
+        return HStack(spacing: 12) {
+            // Cor do tema enquanto roda, verde quando concluiu.
+            LivePulse(color: color)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.session.title)
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Image(systemName: machineSymbol(entry.machine))
+                    Text(entry.session.folderName)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "terminal").foregroundStyle(color)
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
     }
 
     /// Estado da sessão viva. Fonte da verdade é o estado LIDO DO TERMINAL pelo
@@ -683,16 +768,23 @@ struct SessionListView: View {
     private func needsYouRow(_ session: Session) -> some View {
         Group {
             if let target = session.tmuxTarget {
-                Button {
-                    selectedLive = LiveEntry(
-                        machine: session.machine,
-                        session: DiscoveredSession(id: target, cwd: session.cwd ?? "", title: namer.displayTitle(for: session))
-                    )
-                } label: {
+                let entry = LiveEntry(
+                    machine: session.machine,
+                    session: DiscoveredSession(id: target, cwd: session.cwd ?? "",
+                                               title: namer.displayTitle(for: session)))
+                if isEmbedded {
                     SessionRow(session: session, title: namer.displayTitle(for: session))
-                        .contentShape(Rectangle())
+                        .tag(DetailSelection.live(entry))
+                } else {
+                    Button { selectedLive = entry } label: {
+                        SessionRow(session: session, title: namer.displayTitle(for: session))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
+            } else if isEmbedded {
+                SessionRow(session: session, title: namer.displayTitle(for: session))
+                    .tag(DetailSelection.session(session))
             } else {
                 NavigationLink(value: session) {
                     SessionRow(session: session, title: namer.displayTitle(for: session))
@@ -712,8 +804,15 @@ struct SessionListView: View {
     }
 
     private func sessionLink(_ session: Session) -> some View {
-        NavigationLink(value: session) {
-            SessionRow(session: session, title: namer.displayTitle(for: session))
+        Group {
+            if isEmbedded {
+                SessionRow(session: session, title: namer.displayTitle(for: session))
+                    .tag(DetailSelection.session(session))
+            } else {
+                NavigationLink(value: session) {
+                    SessionRow(session: session, title: namer.displayTitle(for: session))
+                }
+            }
         }
         .contextMenu {
             Button {
@@ -877,5 +976,43 @@ private struct HubStatusIndicator: View {
         case .online:  return "hub online"
         case .offline: return "hub offline"
         }
+    }
+}
+
+// MARK: - Atalhos ⌘ (Task 11)
+
+/// `.onChange(of: nav.intentEvent)` isolado num `ViewModifier` concreto: colado
+/// direto na cadeia gigante de modificadores de `bodyContent`, o
+/// type-checker do Swift não fecha a conta ("unable to type-check this
+/// expression in reasonable time" — erro real de build, não achismo). Como
+/// `ViewModifier` de tipo próprio, o corpo é checado à parte.
+private struct AppIntentListener: ViewModifier {
+    // Redeclarado de propósito: um `ViewModifier` não captura o
+    // `@EnvironmentObject` do pai (a `SessionListView` já tem o dela, linha
+    // acima na struct) — cada tipo que lê do ambiente precisa da sua própria
+    // propriedade. Não é duplicação pra "limpar"; sem esta linha o
+    // `.onChange(of: nav.intentEvent)` abaixo não compila.
+    @EnvironmentObject private var nav: NavigationState
+    let handle: (AppIntent?) -> Void
+
+    // Observa `nav.intentEvent` (envelope com `seq`), não `nav.intent` cru:
+    // ⌘N/⌘R/⌘1…⌘9 repetidos sem consumo no meio mandam o MESMO `AppIntent`,
+    // e sem o `seq` o `.onChange` ficaria mudo no segundo envio (achado
+    // Critical da revisão final — ver `NavigationState.IntentEvent`).
+    // `handle` ignora o parâmetro mesmo (lê `nav.consumeSessionListIntent()`
+    // por dentro), então só a origem do evento muda aqui.
+    func body(content: Content) -> some View {
+        content.onChange(of: nav.intentEvent) { _, event in handle(event.intent) }
+    }
+}
+
+// MARK: - Índice seguro (⌘1…⌘9)
+
+// Sem `private`: precisa ser visível de `CutuqueAppTests` (⌘5 numa lista de 3
+// sessões simplesmente não faz nada, sem crash — coberto por teste unitário).
+extension Array {
+    /// Índice que não estoura — fora dos limites (ou negativo) devolve nil.
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }
