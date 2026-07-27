@@ -59,18 +59,36 @@ Para falar com um IP arbitrário na rede do próprio usuário, `NSAllowsArbitrar
 
 Levantado em 2026-07-27, depois de um `Adicionar para revisão` falhar com o erro
 genérico **"Ocorreu um erro. Tente novamente mais tarde."** — o ASC valida tudo de
-uma vez e não diz o que faltou. Eram quatro seções em branco:
+uma vez e **não diz o que faltou** enquanto houver mais de uma pendência. Só depois
+que as quatro primeiras foram preenchidas é que ele nomeou a quinta. São **cinco**:
 
-- [ ] **URL da Política de Privacidade** (Privacidade do app) — obrigatória, precisa
-      ser pública. Usar o `PRIVACY.md` na raiz do repo:
+- [x] **URL da Política de Privacidade** (Privacidade do app) — obrigatória, precisa
+      ser pública. Usada a `PRIVACY.md` na raiz do repo:
       `https://github.com/vxfontes/cutuque/blob/master/PRIVACY.md`
-- [ ] **Privacy Nutrition Label** (Privacidade do app) — declarar **"Data Not
-      Collected"**, consistente com o `PrivacyInfo.xcprivacy`.
-- [ ] **Classificações etárias** (Informações do app) — responder o questionário;
-      tudo "Nenhum".
-- [ ] **Preço e disponibilidade** (Preços e disponibilidade) — definir preço e em
-      quais países. O método de distribuição **não pode ser alterado depois de
-      aprovado**.
+- [x] **Privacy Nutrition Label** (Privacidade do app) — **"Dados não coletados"**,
+      consistente com o `PrivacyInfo.xcprivacy`. Precisa ser **publicada** (botão
+      próprio) — salvar não basta.
+- [x] **Classificações etárias** (Informações do app) — questionário respondido tudo
+      "Nenhum"/"Não" → **4+** (Livre no Brasil).
+- [x] **Preço e disponibilidade** — **Grátis**, todos os países (175). O método de
+      distribuição **não pode ser alterado depois de aprovado**.
+- [x] **Direitos de conteúdo** (Informações do app → Informações gerais) — a quinta,
+      que só aparece com nome depois das outras quatro. O app não contém conteúdo de
+      terceiros.
+
+**Enviado para revisão em 2026-07-27** (2.2.0, build 14).
+
+## Conferir o que foi de fato para dentro do build
+
+Sem precisar instalar o TestFlight: o `.xcarchive` guarda o binário exato que subiu.
+
+```sh
+ARCH=~/Library/Developer/Xcode/Archives/<data>/<nome>.xcarchive
+plutil -p "$ARCH/Products/Applications/CutuqueApp.app/Info.plist" | grep -E 'CFBundle(Version|ShortVersionString)'
+strings -a "$ARCH/Products/Applications/CutuqueApp.app/CutuqueApp" | grep -o -E 'desktop-win|windows' | sort | uniq -c
+```
+
+Foi assim que o build 14 (2.2.0) se confirmou com `windows` e **zero** `desktop-win`.
 
 ## Notas de revisão (colar em Revisão de apps → Notas)
 
@@ -93,7 +111,7 @@ uma vez e não diz o que faltou. Eram quatro seções em branco:
 
 ## Checklist antes de enviar
 
-- [ ] Resolver o item de ATS acima.
+- [x] Resolver o item de ATS acima (decidido: manter e justificar).
 - [ ] Conta Apple Developer ativa; App ID `com.vxfontes.cutuque` (+ `.watchkitapp`,
       `.widgets`) registrado com as capabilities: Push Notifications, App Groups
       (se usados), Time-Sensitive Notifications.
@@ -102,7 +120,8 @@ uma vez e não diz o que faltou. Eram quatro seções em branco:
       (a mesma chave `.p8` normalmente vale para sandbox e produção).
 - [ ] Build de release assinado (distribution) e arquivado (Xcode → Archive).
 - [ ] Screenshots por dispositivo exigido (iPhone 6.9" e 6.5"; Apple Watch).
-- [ ] Preencher os metadados e a Privacy Nutrition Label (abaixo).
+- [x] Preencher os metadados e a Privacy Nutrition Label (abaixo).
+- [x] Notas de revisão preenchidas (em inglês, com o parágrafo do ATS).
 - [ ] TestFlight interno antes do release público (recomendado).
 
 ## Metadados (rascunho para o App Store Connect)
