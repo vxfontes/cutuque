@@ -190,11 +190,28 @@ struct APIClient {
 
     /// Fecha a semana manualmente (arquiva concluídos + marca encalhados).
     /// `POST /board/close` — EXIGE token (só a mantenedora, via app/dashboard).
-    func closeWeek() async throws {
-        var request = URLRequest(url: baseURL.appendingPathComponent("board").appendingPathComponent("close"))
+    /// `week` vazio = a semana do relógio; preenchido, arquiva NAQUELE rótulo —
+    /// é como o trabalho da madrugada de segunda entra na semana que acabou.
+    func closeWeek(week: String = "") async throws {
+        var comps = URLComponents(url: baseURL.appendingPathComponent("board").appendingPathComponent("close"),
+                                  resolvingAgainstBaseURL: false)!
+        if !week.isEmpty { comps.queryItems = [URLQueryItem(name: "week", value: week)] }
+        var request = URLRequest(url: comps.url!)
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         try await send(request)
+    }
+
+    /// As semanas candidatas a receber o fechamento. `GET /board/close-options`
+    /// — mesmo dono do fechamento, mesmo token.
+    func closeOptions() async throws -> CloseOptions {
+        var request = URLRequest(url: baseURL.appendingPathComponent("board").appendingPathComponent("close-options"))
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder.cutuque.decode(CloseOptions.self, from: data)
     }
 
     /// Apaga um card do quadro. `DELETE /board/tasks/{id}` — EXIGE token (só a

@@ -249,7 +249,10 @@ struct RootSplitView: View {
                                        description: Text("A conversa e o terminal aparecem aqui."))
             }
         case .board:
-            BoardView()
+            // `embedded`: sem `NavigationStack` próprio aqui dentro — numa
+            // coluna da split view a barra dele é engolida e título, busca,
+            // recarregar e o menu "⋯" somem (ver `BoardView.embedded`).
+            BoardView(embedded: true)
         case .archive:
             if let task = nav.archiveSelection {
                 ArchivedTaskPane(task: task)
@@ -323,10 +326,18 @@ struct DestinationSidebar: View {
 /// Card arquivado no painel de detalhe (só leitura).
 struct ArchivedTaskPane: View {
     let task: BoardTask
+    @EnvironmentObject private var nav: NavigationState
     @StateObject private var readOnlyModel = BoardModel()
 
+    /// `onClose` zerando a seleção é o que faz o card FECHAR aqui. Sem ele o
+    /// detalhe caía no `dismiss()` do ambiente — que numa coluna de split view
+    /// não tem o que dispensar, então o botão era decorativo (relatado pela
+    /// Vanessa: "o botão de fechar do card do arquivo semanal não ta
+    /// fechando"). No iPhone o mesmo detalhe é um sheet e o `dismiss()`
+    /// sempre funcionou, que é por que o furo demorou a aparecer.
     var body: some View {
-        BoardTaskDetailView(task: task, model: readOnlyModel, readOnly: true)
+        BoardTaskDetailView(task: task, model: readOnlyModel, readOnly: true,
+                            onClose: { nav.archiveSelection = nil })
     }
 }
 

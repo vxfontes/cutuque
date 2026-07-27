@@ -11,6 +11,7 @@ final class BoardModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorText: String?
     @Published var searchResults: [BoardTask] = []
+    @Published var closeOptions: CloseOptions?
 
     // Filtros (E), espelham o dashboard web.
     @Published var filterGroup = "all"
@@ -68,9 +69,15 @@ final class BoardModel: ObservableObject {
         do { try await api.deleteBoardTask(id: task.id); await load() }
         catch { errorText = "Falha ao apagar o card." }
     }
-    func closeWeek() async {
-        do { try await api.closeWeek(); await load() }
+    func closeWeek(week: String = "") async {
+        do { try await api.closeWeek(week: week); closeOptions = nil; await load() }
         catch { errorText = "Falha ao fechar a semana." }
+    }
+
+    /// Busca ONDE dá pra arquivar antes de perguntar. Falha de rede não trava o
+    /// fechamento: sem opções, o popup vira o confirmar de sempre.
+    func loadCloseOptions() async {
+        closeOptions = try? await api.closeOptions()
     }
     func search(_ q: String) async {
         let term = q.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -111,6 +118,20 @@ private extension Array where Element: Hashable {
 // MARK: - Board estilo Trello (colunas horizontais com swipe)
 
 struct BoardView: View {
+    /// `true` quando o board já vive dentro de uma coluna da
+    /// `NavigationSplitView` do iPad — e aí ele NÃO cria `NavigationStack`
+    /// próprio. Mesmo parâmetro (e mesmo motivo) da `ArchiveView`.
+    ///
+    /// O motivo é um achado de tela: **um `NavigationStack` aninhado numa
+    /// coluna da split view tem a barra engolida pelo iPadOS**. Título, campo
+    /// de busca, botão de recarregar e o menu "⋯" (Arquivo semanal / Fechar
+    /// semana) existiam, eram montados, e não chegavam à tela — sobrava só o
+    /// espaço vazio deles ("tem muito espaço vago aqui por cima"). Ou seja:
+    /// não era só espaço morto, eram quatro controles inalcançáveis no iPad.
+    /// Sem o stack aninhado, os modificadores vão pra barra da própria coluna
+    /// e aparecem. Mesma família do `.inspector` que não renderiza a barra do
+    /// `NavigationStack` que apresenta (ver `BoardTaskDetailView`).
+    var embedded: Bool = false
     // Injetado pelo app — mesmo modelo em iPhone e iPad.
     @EnvironmentObject private var model: BoardModel
     @EnvironmentObject private var nav: NavigationState
@@ -142,7 +163,57 @@ struct BoardView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        if embedded {
+            boardContent
+        } else {
+            NavigationStack {
+                boardContent
+                    .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always),
+                                prompt: "Buscar título, descrição, comentários…")
+                    .modifier(SearchFocusWhenAvailable(focused: $searchFieldFocused))
+            }
+        }
+    }
+
+    /// A busca do iPad, larga, na posição principal da barra — desenho da
+    /// usuária: "nem precisa estar escrito cutuque board, pode deixar a busca
+    /// full size com os dois botoes da direita".
+    ///
+    /// É um campo próprio, não `.searchable`, e de propósito: com
+    /// `placement: .toolbar` o iPadOS entrega um capsule estreito ENCOSTADO na
+    /// direita, com os botões à esquerda dele — o contrário do pedido
+    /// (verificado na tela). Aqui o custo de trocar é baixo porque a busca
+    /// deste board já era toda nossa: o texto é debounced em 250 ms, vai pra
+    /// `model.search`, e `isSearching` é quem troca o conteúdo. Do
+    /// `.searchable` só se perde o "Cancelar" do sistema, substituído pelo ✕.
+    ///
+    /// O iPhone continua com `.searchable` na gaveta, intocado.
+    private var padSearchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            TextField("Buscar título, descrição, comentários…", text: $searchText)
+                .textFieldStyle(.plain)
+                .focused($searchFieldFocused)
+                .submitLabel(.search)
+            if !searchText.isEmpty {
+                Button { searchText = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Limpar busca")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(Color(.tertiarySystemFill), in: Capsule())
+        .frame(minWidth: 320, idealWidth: 640, maxWidth: 640)
+    }
+
+    @ViewBuilder private var boardContent: some View {
             Group {
                 if isSearching {
                     // A busca sempre toma a tela quando há termo digitado —
@@ -173,9 +244,11 @@ struct BoardView: View {
             // (`SearchableWhenCompact`) não fazia mais sentido — `.searchable`
             // direto, sempre ativo, é o mesmo comportamento que o iPhone já
             // tinha (lá o gate já era sempre `true`).
-            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always),
-                        prompt: "Buscar título, descrição, comentários…")
-            .modifier(SearchFocusWhenAvailable(focused: $searchFieldFocused))
+            //
+            // No iPad o `.searchable` some daqui: quem monta a busca é
+            // `padSearchField`, na posição principal da barra. Ver o comentário
+            // dele. O `.searchable` do iPhone vive no `body`, junto do
+            // `NavigationStack` que só existe lá.
             .onChange(of: searchText) { _, q in
                 searchTask?.cancel()
                 searchTask = Task {
@@ -221,9 +294,14 @@ struct BoardView: View {
                 else { return }
                 Task { await model.drop(task, on: .column(destination)) }
             }
-            .navigationTitle("Cutuque Board")
+            // Sem título no iPad: a coluna do lado já diz "Board" e o espaço é
+            // da busca. No iPhone o título fica onde sempre esteve.
+            .navigationTitle(embedded ? "" : "Cutuque Board")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                if embedded {
+                    ToolbarItem(placement: .principal) { padSearchField }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { Task { await model.load() } } label: { Image(systemName: "arrow.clockwise") }
                         .accessibilityLabel("Recarregar")
@@ -236,7 +314,8 @@ struct BoardView: View {
                             Label("Arquivo semanal", systemImage: "archivebox")
                         }
                         Button {
-                            showCloseWeekConfirm = true
+                            // Pergunta ONDE arquivar — precisa das opções antes.
+                            Task { await model.loadCloseOptions(); showCloseWeekConfirm = true }
                         } label: {
                             Label("Fechar semana", systemImage: "calendar.badge.checkmark")
                         }
@@ -246,11 +325,20 @@ struct BoardView: View {
                     .accessibilityLabel("Mais ações")
                 }
             }
-            .alert("Fechar a semana agora?", isPresented: $showCloseWeekConfirm) {
+            .alert(CloseWeekPrompt.title(model.closeOptions), isPresented: $showCloseWeekConfirm) {
                 Button("Cancelar", role: .cancel) {}
-                Button("Fechar semana", role: .destructive) { Task { await model.closeWeek() } }
+                if let last = model.closeOptions?.last {
+                    Button(CloseWeekPrompt.juntarLabel(last)) {
+                        Task { await model.closeWeek(week: last.label) }
+                    }
+                    Button(CloseWeekPrompt.novaLabel(model.closeOptions!.current), role: .destructive) {
+                        Task { await model.closeWeek(week: model.closeOptions!.current.label) }
+                    }
+                } else {
+                    Button("Fechar semana", role: .destructive) { Task { await model.closeWeek() } }
+                }
             } message: {
-                Text("Os concluídos serão arquivados e saem do board; to-dos antigos não iniciados viram encalhados. Normalmente acontece sozinho no domingo 23:59.")
+                Text(CloseWeekPrompt.message(model.closeOptions))
             }
             .inspector(isPresented: Binding(get: { selected != nil },
                                             set: { if !$0 { selected = nil } })) {
@@ -267,15 +355,14 @@ struct BoardView: View {
             .sheet(isPresented: $showArchive) {
                 ArchiveView()
             }
-        }
-        // Board "ao vivo": recarrega ao aparecer e a cada 12s, refletindo o que os
-        // agentes fazem sem precisar de refresh manual.
-        .task {
-            while !Task.isCancelled {
-                await model.load()
-                try? await Task.sleep(for: .seconds(12))
+            // Board "ao vivo": recarrega ao aparecer e a cada 12s, refletindo o que os
+            // agentes fazem sem precisar de refresh manual.
+            .task {
+                while !Task.isCancelled {
+                    await model.load()
+                    try? await Task.sleep(for: .seconds(12))
+                }
             }
-        }
     }
 
     /// No iPhone (e no iPad em Slide Over/Split View no mínimo) as colunas
@@ -603,16 +690,18 @@ struct BoardTaskDetailView: View {
     /// Cabeçalho com título e ✕, DENTRO do conteúdo — não numa toolbar.
     ///
     /// Existe porque o `.inspector` do iPadOS não renderiza a barra de
-    /// navegação do `NavigationStack` que ele apresenta: o botão "Fechar" do
-    /// `.toolbar` abaixo existe, é montado, e simplesmente não chega à tela.
+    /// navegação do `NavigationStack` que ele apresenta: o botão "Fechar" de
+    /// um `.toolbar` ali é montado e simplesmente não chega à tela.
     /// Verificado no simulador do iPad — o card abria sem título, sem ✕ e sem
     /// gesto de saída, e não havia como fechá-lo. No iPhone o mesmo detalhe é
     /// um sheet, a barra aparece e o "Fechar" sempre funcionou; por isso o
     /// furo passou despercebido até a Vanessa testar no iPad.
     ///
-    /// Só entra quando `onClose != nil`, que é exatamente o caso do inspector
-    /// (os outros dois usos — sheet do arquivo semanal e `ArchivedTaskPane` na
-    /// coluna de detalhe — passam `nil` e ficam como estavam).
+    /// Só entra quando `onClose != nil`, que são os dois casos iPad: o
+    /// inspector do board e o `ArchivedTaskPane` na coluna de detalhe do
+    /// Arquivo (ali o "Fechar" da toolbar chamava `dismiss()`, que numa coluna
+    /// de split view não tem o que dispensar — o botão era morto). O sheet do
+    /// arquivo semanal, no iPhone, passa `nil` e fica como sempre foi.
     private var inspectorHeader: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(live.title)
@@ -632,8 +721,28 @@ struct BoardTaskDetailView: View {
         .padding(.vertical, 14)
     }
 
+    /// `onClose != nil` é exatamente o caso iPad — inspector do board ou
+    /// coluna de detalhe do Arquivo. Nos dois a barra de um `NavigationStack`
+    /// aninhado é engolida (ver `inspectorHeader`), então ele não entra: seria
+    /// uma faixa vazia no topo do card, e o "Fechar" dela nunca chegaria à
+    /// tela. Quem fecha é o ✕ do `inspectorHeader`. No iPhone, sheet e
+    /// `NavigationStack` de sempre.
     var body: some View {
-        NavigationStack {
+        if onClose != nil {
+            content
+        } else {
+            NavigationStack {
+                content
+                    .navigationTitle(live.title)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) { Button("Fechar") { close() } }
+                    }
+            }
+        }
+    }
+
+    @ViewBuilder private var content: some View {
             VStack(spacing: 0) {
                 if onClose != nil {
                     inspectorHeader
@@ -641,16 +750,12 @@ struct BoardTaskDetailView: View {
                 }
                 detailList
             }
-            .navigationTitle(live.title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Fechar") { close() } } }
             .alert("Apagar card?", isPresented: $showDeleteConfirm) {
                 Button("Cancelar", role: .cancel) {}
                 Button("Apagar", role: .destructive) { Task { await model.delete(live); close() } }
             } message: {
                 Text("\"\(live.title)\" será apagado. Esta ação não pode ser desfeita.")
             }
-        }
     }
 
     private var detailList: some View {
@@ -863,16 +968,7 @@ struct ArchiveView: View {
         return s.prefix(1).uppercased() + s.dropFirst()
     }
     private static func range(_ wk: ArchivedWeek) -> String {
-        let s = parse(wk.start), e = parse(wk.end)
-        let day = DateFormatter(); day.locale = Locale(identifier: "pt_BR"); day.dateFormat = "d"
-        let mon = DateFormatter(); mon.locale = Locale(identifier: "pt_BR"); mon.dateFormat = "MMM"
-        let sMon = mon.string(from: s).replacingOccurrences(of: ".", with: "")
-        let eMon = mon.string(from: e).replacingOccurrences(of: ".", with: "")
-        let cal = Calendar.current
-        if cal.component(.month, from: s) == cal.component(.month, from: e) {
-            return "\(day.string(from: s)) – \(day.string(from: e)) de \(eMon)"
-        }
-        return "\(day.string(from: s)) de \(sMon) – \(day.string(from: e)) de \(eMon)"
+        WeekRangeFormat.text(start: wk.start, end: wk.end)
     }
 }
 
