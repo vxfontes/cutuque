@@ -82,16 +82,20 @@ final class NavigationState: ObservableObject {
     /// Card aberto no inspector do board (também alimentado pela busca).
     @Published var boardSelection: BoardTask?
     @Published var intent: AppIntent?
-    /// O que os consumidores editáveis (`SessionListView`, `SessionDetailView`,
-    /// `BoardView`) devem observar em `.onChange` — não `intent` cru (ver
-    /// `IntentEvent`). Propriedade IRMÃ de `intent`, não substituta: o
-    /// `BoardFilterList` (outra correção em voo, arquivo que esta tarefa não
-    /// toca) continua observando `intent` cru direto. Seu único intent
-    /// (`.focusSearch`) é imune ao defeito de `.onChange` mudo porque quem
-    /// manda `.focusSearch` (`CutuqueCommands`) sempre força
-    /// `destination = .board` antes, garantindo um consumidor montado — logo
-    /// `.focusSearch` nunca fica parado sem consumo, e há sempre um `nil`
-    /// intermediário entre dois envios seguidos (ver `RootSplitView.contentColumn`).
+    /// O que TODO consumidor observa em `.onChange` — nunca `intent` cru (ver
+    /// `IntentEvent`). São os três: `SessionListView`, `SessionDetailView` e
+    /// `BoardView`.
+    ///
+    /// `intent` continua existindo como o **payload** que `consume()` zera e
+    /// que `consumeIfInterrupt()` lê; `intentEvent` é o **gatilho**, com um
+    /// `seq` que muda a cada envio. A separação existe porque `AppIntent` é
+    /// `Equatable` e `.onChange` só dispara na transição: dois envios idênticos
+    /// seguidos sem consumo no meio (dois `⌘.`, dois `⌘←`) deixariam o segundo
+    /// mudo pra sempre sem o `seq`.
+    ///
+    /// Houve um período em que `BoardFilterList` observava `intent` cru e as
+    /// duas coisas coexistiam como mecanismos paralelos. Esse arquivo foi
+    /// removido junto com a coluna de filtros — sobrou um mecanismo só.
     @Published private(set) var intentEvent = IntentEvent(seq: 0, intent: nil)
     private var intentSeq = 0
 
@@ -101,10 +105,9 @@ final class NavigationState: ObservableObject {
     /// chat ou terminal (decisão explícita da usuária — "Chat continua o
     /// padrão, só o layout muda").
     ///
-    /// - Board: sempre, nas duas orientações — a coluna do meio dele está
-    ///   sendo removida numa tarefa paralela (ver `RootSplitView`), e um
-    ///   kanban espremido na coluna do meio mostra menos de duas colunas por
-    ///   vez de qualquer forma.
+    /// - Board: sempre, nas duas orientações — ele não tem mais coluna do meio
+    ///   (os filtros voltaram pro topo do kanban), e um kanban espremido numa
+    ///   coluna do meio mostraria menos de duas colunas por vez.
     /// - Sessões: só em retrato E com uma sessão escolhida — é aí que o
     ///   painel (tela cheia) precisa da coluna toda; em paisagem as três
     ///   colunas cabem, e sem seleção não há o que colapsar pra.

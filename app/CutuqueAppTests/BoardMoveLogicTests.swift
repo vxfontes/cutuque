@@ -113,7 +113,7 @@ final class BoardMoveLogicTests: XCTestCase {
     // `horizontalSizeClass == .regular` NÃO é "iPad": iPhone Plus/Pro Max em
     // paisagem também reporta `.regular`. `BoardView` (raiz do iPhone dentro
     // do `RootTabView`) e a busca duplicada da coluna de detalhe (que
-    // sobrescrevia em silêncio a busca de `BoardFilterList` no iPad) dependem
+    // sobrescrevia em silêncio a busca da coluna de filtros, hoje removida) dependem
     // desta MESMA decisão — travando-a aqui, pura, sem hospedar view.
 
     func testIPhoneNuncaEhPadNenhumSizeClass() {

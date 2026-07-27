@@ -3,8 +3,11 @@ import XCTest
 @testable import CutuqueApp
 
 /// Cobre o contrato mínimo, testável fora do simulador, da Task 13: colunas
-/// lado a lado no iPad, filtros na coluna do meio e o detalhe do card virando
-/// inspector. O resto (GeometryReader, `.inspector`, paginação condicional) é
+/// lado a lado no iPad e o detalhe do card virando inspector. A Task 13
+/// também punha os filtros numa coluna do meio (`BoardFilterList`) — isso foi
+/// desfeito depois, a pedido da Vanessa: os filtros voltaram pro topo do
+/// kanban, nas duas orientações. O resto (GeometryReader, `.inspector`,
+/// paginação condicional) é
 /// estrutura de SwiftUI sem lógica pura pra isolar em XCTest; o critério de
 /// aceite real é o passo manual no simulador (Step 8 do brief).
 ///
