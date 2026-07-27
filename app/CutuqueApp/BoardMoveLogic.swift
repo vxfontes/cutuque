@@ -88,9 +88,19 @@ enum BoardLayout {
     /// usuária na correção de layout pós-Task 16).
     static func isPad(_ idiom: UIUserInterfaceIdiom) -> Bool { idiom == .pad }
 
+    /// Abaixo disto o kanban não comporta colunas lado a lado (elas ficariam
+    /// com ~110 pt, com título de card quebrando em três linhas) e volta a
+    /// paginar no swipe, como no iPhone.
+    ///
+    /// Este número já foi compartilhado com a antiga "regra dos 700 pt" da
+    /// split view, que decidia o colapso das colunas por largura medida. Essa
+    /// regra virou orientação e o limiar migrou pra cá: hoje ele responde uma
+    /// pergunta só — "cabe kanban em colunas nesta largura?" — e pode mudar
+    /// sem afetar mais nada.
+    static let columnPagingThreshold: CGFloat = 700
+
     /// Verdadeiro só quando o idiom é iPad E a largura MEDIDA já comporta
-    /// colunas lado a lado — regra dos 700 pt (mesmo limiar de
-    /// `PadLayout.expandThreshold`, mesmo espírito). Em Slide Over ou Split
+    /// colunas lado a lado. Em Slide Over ou Split
     /// View no mínimo (~320 pt) o idiom continua `.pad`, mas a largura
     /// medida cai abaixo do limiar: as colunas voltam a paginar como no
     /// iPhone (achado da Task 16 — `isRegular = isPad` ignorava a largura que
@@ -99,6 +109,6 @@ enum BoardLayout {
     /// muda em runtime (rotação, arraste do divisor): é a resposta a "estou
     /// estreito agora?", não a "sou iPad?".
     static func isRegularWidth(idiom: UIUserInterfaceIdiom, measuredWidth: CGFloat) -> Bool {
-        isPad(idiom) && measuredWidth >= PadLayout.expandThreshold
+        isPad(idiom) && measuredWidth >= columnPagingThreshold
     }
 }

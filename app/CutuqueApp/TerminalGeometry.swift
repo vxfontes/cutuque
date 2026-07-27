@@ -30,14 +30,11 @@ enum TerminalGeometry {
     static func defaultFontPt(isPad: Bool) -> Double { isPad ? 13 : 10 }
 }
 
-/// Regras de largura da versão iPad, comuns a board e terminal.
-enum PadLayout {
-    /// Abaixo disto o painel de detalhe é estreito demais pras duas superfícies
-    /// largas: o board fica com coluna de ~110 pt e o terminal cai abaixo das
-    /// 80 colunas clássicas. Usado por `BoardLayout.isRegularWidth` (a barra de
-    /// filtros/busca própria do board, ver `BoardMoveLogic.swift`) — NÃO decide
-    /// mais o colapso da split view do iPad: isso agora é por orientação (ver
-    /// `NavigationState.applyLayoutRule`, que substituiu a antiga
-    /// `PadLayout.startsExpanded(detailWidth:)`).
-    static let expandThreshold: CGFloat = 700
-}
+// Aqui morava `enum PadLayout`, com o limiar de 700 pt que decidia o colapso da
+// split view do iPad ("regra dos 700 pt"). Essa regra foi substituída por
+// orientação (`NavigationState.applyLayoutRule`) e o enum ficou com um único
+// membro, usado por um único consumidor num assunto diferente — a paginação de
+// colunas do kanban. O limiar foi pra junto desse consumidor, como
+// `BoardLayout.columnPagingThreshold` (`BoardMoveLogic.swift`). Não há mais
+// nenhuma constante de largura compartilhada entre board e terminal: os dois
+// números são independentes e podem divergir sem se afetarem.

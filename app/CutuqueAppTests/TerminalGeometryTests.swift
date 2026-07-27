@@ -38,13 +38,14 @@ final class TerminalGeometryTests: XCTestCase {
         XCTAssertEqual(TerminalGeometry.defaultFontPt(isPad: true), 13)
     }
 
-    // `PadLayout.startsExpanded(detailWidth:)` (a antiga "regra dos 700 pt"
-    // que decidia o colapso da split view pela largura medida) foi removida
-    // na tarefa que trocou o critério pra orientação — ver
-    // `NavigationState.applyLayoutRule` e `WidthRuleGateTests`.
-    // `PadLayout.expandThreshold` continua existindo: `BoardLayout.isRegularWidth`
-    // (`BoardMoveLogic.swift`) ainda o usa pra decidir a barra de filtros
-    // própria do board, um cálculo diferente e não tocado por esta tarefa.
+    // O `enum PadLayout` inteiro saiu deste arquivo. Ele guardava a "regra dos
+    // 700 pt", que decidia o colapso da split view pela largura medida; o
+    // critério virou orientação (`NavigationState.applyLayoutRule`, coberto em
+    // `LayoutRuleGateTests`). Sobrou um único consumidor do limiar, e num
+    // assunto diferente: `BoardLayout.isRegularWidth` decide se o kanban mostra
+    // colunas lado a lado ou volta a paginar no swipe. O número foi junto com
+    // ele, como `BoardLayout.columnPagingThreshold` (`BoardMoveLogic.swift`) —
+    // board e terminal não compartilham mais nenhuma constante de largura.
 
     // fontMin/fontMax vieram da Task 3 sem consumidor: a TerminalMirrorView
     // (Task 9) é quem passa a usar os dois nos limites do A−/A+.

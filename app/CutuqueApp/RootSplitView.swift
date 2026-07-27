@@ -97,7 +97,7 @@ struct RootSplitView: View {
     /// acima (tamanho medido mudando de verdade, ou destino/seleção mudando
     /// sem que a orientação mude por si só) convergem aqui pra não duplicar
     /// o guard. `LayoutRuleGate.shouldApply` é a decisão pura (testada em
-    /// `WidthRuleGateTests`, sem hosting de View); aqui só decide COMO: marca
+    /// `LayoutRuleGateTests`, sem hosting de View); aqui só decide COMO: marca
     /// `layoutRuleAppliedFor` ANTES de chamar `nav`, então se a própria regra
     /// colapsar a coluna e isso mudar `geo.size` de novo, a segunda entrada
     /// com a mesma chave já encontra o guard fechado — sem laço, sem
@@ -206,7 +206,7 @@ struct ArchivedTaskPane: View {
 
 /// Decide SE a regra de layout (`NavigationState.applyLayoutRule`) deve
 /// rodar agora — extraída do `RootSplitView` pra ser testável sem hosting de
-/// View (`WidthRuleGateTests`). Renomeado de `WidthRuleGate` (regra dos 700
+/// View (`LayoutRuleGateTests`). Renomeado de `WidthRuleGate` (regra dos 700
 /// pt): a decisão em si (guard de chave) não mudou, só o que vai na `key` —
 /// antes destino+painel, agora destino+orientação+seleção.
 ///

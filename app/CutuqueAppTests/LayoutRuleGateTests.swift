@@ -5,11 +5,12 @@ import XCTest
 /// (orientação decide `columnVisibility`, ver `NavigationState.applyLayoutRule`)
 /// rodar UMA vez por chave, pra que a usuária apertar o ⤡ (expandir/recolher
 /// manual) não seja desfeito no frame seguinte, e reaplicar quando
-/// destino/seleção/orientação mudam de fato. Renomeado de `WidthRuleGate`
+/// destino/seleção/orientação mudam de fato. O tipo (e este arquivo) foi
+/// renomeado de `WidthRuleGate`
 /// (regra dos 700 pt): mesmo guard, chave nova (destino-orientação-seleção
 /// no lugar de destino-painel). Todo valor esperado abaixo foi escrito à
 /// mão — nenhum é derivado do próprio `shouldApply`.
-final class WidthRuleGateTests: XCTestCase {
+final class LayoutRuleGateTests: XCTestCase {
 
     /// Primeira entrada nesta chave (`appliedFor == nil`): aplica.
     func testSemChaveAplicadaAindaAplica() {
