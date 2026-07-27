@@ -84,7 +84,8 @@ struct RootSplitView: View {
         case .sessions:
             SessionListView(splitSelection: $nav.selection)
         case .board:
-            BoardFilterList()
+            ContentUnavailableView("Board", systemImage: "rectangle.split.3x1",
+                                   description: Text("Os filtros ficam no topo do board."))
         case .archive:
             ArchiveView(embedded: true, selection: $nav.archiveSelection)
         }
