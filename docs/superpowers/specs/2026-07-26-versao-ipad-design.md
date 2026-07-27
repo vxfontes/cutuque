@@ -97,30 +97,57 @@ faz `stop()` + `restoreSize()` não dispara. Trocar a raiz entre `TabView` e
 derrubaria o espelho do tmux, redimensionaria o pane remoto e perderia a rolagem
 do chat a cada rotação.
 
-### Orientação
+### Orientação decide o layout
 
-Comportamento nativo do `NavigationSplitView`: em paisagem as três colunas ficam
-visíveis; em retrato a sidebar recolhe e volta pelo botão ☰. Não há código de
-orientação — é o padrão do componente.
+> **Corrigido em 26/07/2026, depois da revisão da Vanessa.** A versão original
+> desta seção dizia que não haveria código de orientação e que o layout sairia
+> de uma regra de largura medida (700 pt). Isso foi erro de tradução do pedido:
+> a largura é um *proxy* de orientação e erra no aparelho pequeno — um iPad de
+> 11" **em paisagem** tem detalhe em torno de 554 pt e colapsava **deitado**,
+> exatamente o contrário do pedido. A regra de 700 pt está descrita mais abaixo
+> só como registro histórico do raciocínio de colunas do terminal.
+
+Quem decide `columnVisibility` é a **orientação**, não a largura:
+
+| Destino / estado | Retrato | Paisagem |
+|---|---|---|
+| Sessões, nenhuma escolhida | três colunas | três colunas |
+| Sessões, uma escolhida | **tela cheia** (`.detailOnly`) | três colunas |
+| Board | **tela cheia** | **tela cheia** |
+
+O painel de sessão abre em **Chat** por padrão nos dois casos; a orientação muda
+só o colapso, não o conteúdo. O ⤡ (e o `⌘⌃F`) continuam recolhendo e expandindo
+manualmente a qualquer momento, e a escolha manual vale até mudar o destino, a
+sessão escolhida ou a orientação.
+
+A orientação é lida como proporção da própria janela
+(`.background(GeometryReader { Color.clear … })`, `retrato = altura > largura`).
+Nem `UIDevice.current.orientation` (devolve `.unknown`/`.faceUp`) nem
+`horizontalSizeClass` (é `.regular` nas duas orientações num iPad em tela cheia)
+serviriam. De brinde isso acerta o Slide Over por construção: janela alta e
+estreita lê como retrato e abre em tela cheia.
+
+Isto **não** contradiz a decisão de não trocar a raiz por orientação:
+`columnVisibility` é estado, não estrutura. Mudá-lo anima colunas; não remonta
+árvore nenhuma, e o espelho do tmux não cai na rotação.
 
 A pedida original era `TabView` em retrato e `NavigationSplitView` em paisagem.
 Foi substituída por esta forma depois de discutido o custo de remontagem.
 Acrescentar uma tab bar só em retrato continua possível depois, como mudança
 isolada, sem mexer na raiz.
 
-### Regra de largura (vale para board e terminal)
+### Registro histórico: a regra de largura (700 pt)
+
+_Substituída pela regra de orientação acima. Fica aqui porque a aritmética de
+colunas do terminal continua válida e explica as escolhas de fonte._
 
 Ambas as superfícies largas sofrem no 11". O kanban em detalhe de ~554 pt fica
 com ~110 pt por coluna (título de card quebrando em três linhas), e o terminal
 com a fonte nova cai abaixo das 80 colunas clássicas.
 
-**Regra única:** quando o detalhe seria menor que **700 pt**, os destinos que
-precisam de largura — Board e Terminal — abrem já expandidos
-(`columnVisibility = .detailOnly`). Acima disso, abrem em três colunas.
-
-Na prática: iPad 11" abre expandido, iPad 13" abre em três colunas. O app escolhe
-apenas o **primeiro** estado; o botão ⤡ recolhe e expande a qualquer momento, e a
-escolha manual vale até trocar de destino.
+A regra era: quando o detalhe seria menor que **700 pt**, Board e Terminal
+abriam já expandidos. O defeito é que ela lê tamanho de aparelho onde o pedido
+falava de orientação.
 
 ## Terminal
 
@@ -199,7 +226,10 @@ alvo atual não sobe.
 
 ## Board
 
-Kanban ocupa toda a largura ao lado da sidebar. Filtros na coluna do meio.
+Kanban ocupa toda a largura, com os **filtros numa barra no topo** — nas duas
+orientações, como no iPhone. Não há coluna do meio dedicada a filtros: a versão
+original desta seção tinha uma (`BoardFilterList`), removida em 26/07/2026 a
+pedido da Vanessa. A sidebar volta pelo ☰ da toolbar (ou `⌘⌃F`).
 Detalhe do card em `.inspector()` (iOS 17) no lugar de `sheet`.
 
 ### Semântica do arrastar
