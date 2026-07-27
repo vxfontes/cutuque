@@ -62,28 +62,66 @@ final class SessionDetailPaneLogicTests: XCTestCase {
         XCTAssertEqual(result?.title, "apelido")
     }
 
-    // MARK: - correctedPaneMode
+    // MARK: - entryPaneMode
 
-    /// Seleção com os dois painéis disponíveis nunca força nada — o usuário
+    /// Sessão do registry com os dois painéis: nunca força nada — o usuário
     /// decide livremente entre chat e terminal.
     func testComOsDoisPaineisNaoForcaNada() {
-        XCTAssertNil(SessionDetailPaneLogic.correctedPaneMode(hasChat: true, hasTerminal: true, current: .chat))
-        XCTAssertNil(SessionDetailPaneLogic.correctedPaneMode(hasChat: true, hasTerminal: true, current: .terminal))
+        XCTAssertNil(SessionDetailPaneLogic.entryPaneMode(
+            hasChat: true, hasTerminal: true, hasInfo: false, current: .chat))
+        XCTAssertNil(SessionDetailPaneLogic.entryPaneMode(
+            hasChat: true, hasTerminal: true, hasInfo: false, current: .terminal))
     }
 
-    /// Sem chat (ex.: entrada `.live` sem sessão do registry correspondente,
-    /// hipoteticamente) só pode mostrar terminal — se já está em terminal,
-    /// nada muda; se está em chat, força a correção.
+    /// Sem chat e sem info (hipotético: só terminal) só pode mostrar terminal.
     func testSemChatForcaTerminal() {
-        XCTAssertEqual(SessionDetailPaneLogic.correctedPaneMode(hasChat: false, hasTerminal: true, current: .chat), .terminal)
-        XCTAssertNil(SessionDetailPaneLogic.correctedPaneMode(hasChat: false, hasTerminal: true, current: .terminal))
+        XCTAssertEqual(SessionDetailPaneLogic.entryPaneMode(
+            hasChat: false, hasTerminal: true, hasInfo: false, current: .chat), .terminal)
+        XCTAssertNil(SessionDetailPaneLogic.entryPaneMode(
+            hasChat: false, hasTerminal: true, hasInfo: false, current: .terminal))
     }
 
     /// Sem terminal (sessão fora do tmux) só pode mostrar chat — mesma lógica
     /// espelhada.
     func testSemTerminalForcaChat() {
-        XCTAssertEqual(SessionDetailPaneLogic.correctedPaneMode(hasChat: true, hasTerminal: false, current: .terminal), .chat)
-        XCTAssertNil(SessionDetailPaneLogic.correctedPaneMode(hasChat: true, hasTerminal: false, current: .chat))
+        XCTAssertEqual(SessionDetailPaneLogic.entryPaneMode(
+            hasChat: true, hasTerminal: false, hasInfo: false, current: .terminal), .chat)
+        XCTAssertNil(SessionDetailPaneLogic.entryPaneMode(
+            hasChat: true, hasTerminal: false, hasInfo: false, current: .chat))
+    }
+
+    /// O pedido da usuária: entrada ao vivo abre nas INFORMAÇÕES, como no
+    /// iPhone — mesmo vindo do terminal de outra sessão. `paneMode` é estado
+    /// compartilhado, então sem isto a sessão ao vivo herdaria o painel da
+    /// anterior e cairia direto no terminal, que é justamente o que ela
+    /// reclamou.
+    func testEntradaAoVivoAbreNasInformacoes() {
+        XCTAssertEqual(SessionDetailPaneLogic.entryPaneMode(
+            hasChat: false, hasTerminal: true, hasInfo: true, current: .terminal), .info)
+        XCTAssertEqual(SessionDetailPaneLogic.entryPaneMode(
+            hasChat: false, hasTerminal: true, hasInfo: true, current: .chat), .info)
+    }
+
+    /// Já nas informações, nada a corrigir — a função não pode devolver um
+    /// valor "igual ao atual", senão o `onAppear` do pane escreveria em
+    /// `nav.paneMode` a cada montagem à toa.
+    func testJaNasInformacoesNaoForcaNada() {
+        XCTAssertNil(SessionDetailPaneLogic.entryPaneMode(
+            hasChat: false, hasTerminal: true, hasInfo: true, current: .info))
+    }
+
+    /// O caminho de volta: sessão do registry NÃO tem informações ao vivo, e
+    /// um `.info` herdado de uma entrada ao vivo anterior viraria um painel
+    /// vazio. Cai pro chat.
+    func testInfoHerdadoNumaSessaoDoRegistryViraChat() {
+        XCTAssertEqual(SessionDetailPaneLogic.entryPaneMode(
+            hasChat: true, hasTerminal: true, hasInfo: false, current: .info), .chat)
+        XCTAssertEqual(SessionDetailPaneLogic.entryPaneMode(
+            hasChat: true, hasTerminal: false, hasInfo: false, current: .info), .chat)
+        // E numa seleção só-terminal (sem chat, sem info) o herdado vira
+        // terminal, não chat.
+        XCTAssertEqual(SessionDetailPaneLogic.entryPaneMode(
+            hasChat: false, hasTerminal: true, hasInfo: false, current: .info), .terminal)
     }
 
     // MARK: - paneTitle

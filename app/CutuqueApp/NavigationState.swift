@@ -33,8 +33,21 @@ enum DetailSelection: Hashable {
     case live(LiveEntry)
 }
 
+/// Qual painel o detalhe mostra. Nem toda seleção tem os três: uma sessão do
+/// registry tem `chat` (e `terminal`, se rodar dentro do tmux); uma entrada ao
+/// vivo do tmux tem `info` e `terminal`. Quem concilia é
+/// `SessionDetailPaneLogic.entryPaneMode`.
+///
+/// `info` chegou depois, com o iPad: no iPhone tocar numa sessão ao vivo abre
+/// primeiro uma tela de informações (`LiveDetailView`) e o terminal vem de um
+/// botão dela. O iPad pulava direto pro terminal — "no ao vivo do tmux nao ta
+/// abrindo as informações como temos no iphone". Aqui as informações não são
+/// uma tela antes, são um dos painéis do seletor: dá pra ir e voltar sem
+/// derrubar o espelho, que é o que também resolve o "botao de fechar o
+/// terminal" (ele continua montado e inativo — o tmux do outro lado nem fica
+/// sabendo).
 enum PaneMode: String, CaseIterable {
-    case chat, terminal
+    case chat, terminal, info
 }
 
 /// Ações disparadas por atalho de teclado que precisam do contexto de uma view

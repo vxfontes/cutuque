@@ -23,14 +23,35 @@ enum SessionDetailPaneLogic {
         }
     }
 
-    /// Corrige o `paneMode` quando a seleção só permite um dos dois painéis
-    /// (seleção sem chat só pode mostrar terminal, e vice-versa). `nil`
-    /// quando `current` já é válido — não há nada a mudar.
-    static func correctedPaneMode(hasChat: Bool, hasTerminal: Bool, current: PaneMode) -> PaneMode? {
+    /// Em que painel o detalhe ABRE, dado o que esta seleção tem. `nil` quando
+    /// `current` já serve — não há nada a mudar.
+    ///
+    /// Duas responsabilidades, e a segunda é nova: além de corrigir um
+    /// `paneMode` impossível (seleção sem chat não pode mostrar chat), ela
+    /// impõe o padrão de entrada das sessões AO VIVO. `paneMode` é estado
+    /// compartilhado em `NavigationState`, então sem isso a sessão ao vivo
+    /// herdaria o painel da anterior.
+    ///
+    /// - **Tem info** (entrada ao vivo do tmux): abre SEMPRE em `.info`, a
+    ///   pedido da usuária ("antes de abrir assim mostra as infos e tudo
+    ///   mais") — é a paridade com o iPhone, onde tocar numa linha ao vivo
+    ///   abre `LiveDetailView` e o terminal vem de um botão. Vale a cada
+    ///   seleção, não só na primeira: o pane é remontado por sessão
+    ///   (`.id(selection)` em `RootSplitView`), então escolher outra sessão ao
+    ///   vivo volta pras informações dela.
+    /// - **Sem chat e sem info**: só sobra terminal.
+    /// - **Com chat**: mantém o que o usuário já escolhia entre chat e
+    ///   terminal; `.info` (herdado de uma seleção ao vivo anterior) não
+    ///   existe aqui e vira `.chat`, assim como `.terminal` numa sessão fora
+    ///   do tmux.
+    static func entryPaneMode(hasChat: Bool, hasTerminal: Bool, hasInfo: Bool,
+                              current: PaneMode) -> PaneMode? {
         let required: PaneMode
-        if !hasChat {
+        if hasInfo {
+            required = .info
+        } else if !hasChat {
             required = .terminal
-        } else if !hasTerminal {
+        } else if !hasTerminal || current == .info {
             required = .chat
         } else {
             return nil
