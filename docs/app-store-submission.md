@@ -19,7 +19,9 @@ enviar o build pelo App Store Connect.
 - [x] **Privacy manifest:** `app/CutuqueApp/PrivacyInfo.xcprivacy` — sem tracking,
       sem coleta de dados, APIs de razão obrigatória declaradas (UserDefaults CA92.1,
       SystemBootTime 35F9.1). Rode `xcodegen generate` para embuti-lo no target.
-- [x] **Ícones:** `AppIcon.appiconset` presente (iOS e watchOS, incl. 1024px).
+- [x] **Ícones:** `AppIcon.appiconset` presente (iOS e watchOS, incl. 1024px). Set de
+      iPad completo desde 2.1.0: 20@2x, 29@2x, 40@2x, 76@2x e 83.5@2x (os três
+      pequenos reusam os PNGs do iPhone — mesma contagem de pixels).
 - [x] **Sem SDKs de tracking** (nenhum Firebase/Analytics/Crashlytics/etc.).
 
 ## ⚠️ Bloqueio conhecido — App Transport Security
