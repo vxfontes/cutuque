@@ -32,7 +32,11 @@ struct CutuqueCommands: Commands {
             }
             .keyboardShortcut("t", modifiers: [.command, .shift])
             Button(nav.columnVisibility == .detailOnly ? "Recolher painel" : "Expandir painel") {
-                nav.toggleColumns()
+                // Mesma curva do `expandButton` de `SessionDetailPane` — as
+                // duas superfícies do mesmo atalho ⌘⌃F precisam produzir a
+                // MESMA animação, senão o colapso ora anima, ora salta
+                // dependendo de qual handler o sistema resolver.
+                withAnimation(.columnToggle) { nav.toggleColumns() }
             }
             .keyboardShortcut("f", modifiers: [.command, .control])
             Button("Parar o agente") { nav.send(.interrupt) }

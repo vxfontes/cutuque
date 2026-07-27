@@ -16,6 +16,14 @@ struct RootSplitView: View {
     /// por entrada em destino/painel e não brigar com o ⤡ da usuária.
     @State private var widthRuleAppliedFor: String?
 
+    /// Última largura da coluna de detalhe medida pelo `GeometryReader` do
+    /// `detail:`. Cache necessário porque trocar de destino (ex.: Sessões →
+    /// Board) NÃO muda essa largura por si só — a proporção das colunas só
+    /// reage a `columnVisibility`, que é justamente o que a regra decide.
+    /// Sem isto, a troca de `widthRuleKey` não tinha nenhuma largura pra
+    /// reaplicar a regra contra. Ver `applyWidthRuleIfNeeded()`.
+    @State private var lastKnownWidth: CGFloat?
+
     private var widthRuleKey: String { "\(nav.destination.rawValue)-\(nav.paneMode.rawValue)" }
 
     var body: some View {
@@ -28,18 +36,47 @@ struct RootSplitView: View {
                 detailColumn
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .onChange(of: geo.size.width, initial: true) { _, width in
-                        guard width > 0, widthRuleAppliedFor != widthRuleKey else { return }
-                        widthRuleAppliedFor = widthRuleKey
-                        nav.applyWidthRule(detailWidth: width)
+                        lastKnownWidth = width
+                        applyWidthRuleIfNeeded()
                     }
             }
         }
         .navigationSplitViewStyle(.balanced)
-        .onChange(of: widthRuleKey) { _, _ in widthRuleAppliedFor = nil }
+        // Critical corrigido aqui: trocar de destino/painel (ex.: Sessões →
+        // Board tocando na sidebar, sem girar o aparelho) não muda
+        // `geo.size.width` por si só, então o `.onChange` acima não disparava
+        // e a regra dos 700 pt nunca rodava pra chave nova — o Board podia
+        // abrir preso em modo estreito (sem o botão de expandir que o
+        // Terminal tem, e sem saída num iPad só de toque). Reaplica aqui
+        // contra a última largura CONHECIDA (não uma medição nova), sob o
+        // MESMO guard de `applyWidthRuleIfNeeded()` — não há risco de aplicar
+        // duas vezes nem de sobrescrever a escolha manual da usuária no ⤡,
+        // porque o guard só deixa passar quando a chave é realmente nova.
+        .onChange(of: widthRuleKey) { _, _ in
+            widthRuleAppliedFor = nil
+            applyWidthRuleIfNeeded()
+        }
         // Deep-link do push / Live Activity cai sempre em Sessões.
         .onChange(of: router.pendingSessionID) { _, id in
             if id != nil { nav.destination = .sessions }
         }
+    }
+
+    /// Único ponto que chama `nav.applyWidthRule` — os dois `.onChange`
+    /// acima (largura medida mudando, destino/painel mudando) convergem
+    /// aqui pra não duplicar o guard. `WidthRuleGate.shouldApply` é a
+    /// decisão pura (testada em `WidthRuleGateTests`, sem hosting de View);
+    /// aqui só decide COMO: marca `widthRuleAppliedFor` ANTES de chamar
+    /// `nav`, então se a própria regra colapsar a coluna e isso mudar
+    /// `geo.size.width` de novo, a segunda entrada com a mesma chave já
+    /// encontra o guard fechado — sem laço, sem reaplicar, sem sobrescrever
+    /// a escolha manual da usuária.
+    private func applyWidthRuleIfNeeded() {
+        guard let width = lastKnownWidth,
+              WidthRuleGate.shouldApply(appliedFor: widthRuleAppliedFor, key: widthRuleKey, width: width)
+        else { return }
+        widthRuleAppliedFor = widthRuleKey
+        nav.applyWidthRule(detailWidth: width)
     }
 
     @ViewBuilder private var contentColumn: some View {
@@ -132,6 +169,23 @@ struct ArchivedTaskPane: View {
 
     var body: some View {
         BoardTaskDetailView(task: task, model: readOnlyModel, readOnly: true)
+    }
+}
+
+/// Decide SE a regra dos 700 pt (`NavigationState.applyWidthRule`) deve
+/// rodar agora — extraída do `RootSplitView` pra ser testável sem hosting de
+/// View (`WidthRuleGateTests`).
+///
+/// `appliedFor` é a chave que já recebeu a regra (`nil` = nenhuma ainda);
+/// `key` é a chave corrente de destino/painel; `width` é a última largura
+/// CONHECIDA da coluna de detalhe (pode vir de uma medição nova ou de um
+/// cache — quem chama decide). Mesmo guard serve os dois gatilhos que podem
+/// levar a uma reaplicação: a largura medida mudando, e o destino/painel
+/// mudando sem que a largura mude por si só (o Critical desta correção).
+enum WidthRuleGate {
+    static func shouldApply(appliedFor: String?, key: String, width: CGFloat?) -> Bool {
+        guard let width, width > 0 else { return false }
+        return appliedFor != key
     }
 }
 
