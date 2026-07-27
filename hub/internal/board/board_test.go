@@ -125,7 +125,7 @@ func TestSearch(t *testing.T) {
 	done := s.Add(NewTask{Title: "feito OAuth antigo", Group: "g", Session: "s"})
 	col := "concluido"
 	s.Update(done.ID, &col, nil, nil, nil, "")
-	s.CloseWeek(time.Now())
+	s.CloseWeek(time.Now(), "")
 
 	res := s.Search("oauth")
 	ids := map[string]bool{}
@@ -196,7 +196,7 @@ func TestCloseWeekArchivesAndStalls(t *testing.T) {
 	s.byID[oldTodo.ID] = ot
 	s.mu.Unlock()
 
-	archived, stalled := s.CloseWeek(time.Now())
+	archived, stalled := s.CloseWeek(time.Now(), "")
 	if archived != 1 {
 		t.Fatalf("archived=%d, esperava 1", archived)
 	}
@@ -220,5 +220,115 @@ func TestCloseWeekArchivesAndStalls(t *testing.T) {
 	s.Update(oldTodo.ID, &p, nil, nil, nil, "")
 	if g, _ := s.Get(oldTodo.ID); g.Encalhada {
 		t.Fatalf("mover deveria limpar encalhada")
+	}
+}
+
+// concluir adiciona um card já em concluido.
+func concluir(s *MemStore, title string) Task {
+	t := s.Add(NewTask{Title: title, Group: "g", Session: "x"})
+	col := "concluido"
+	u, _ := s.Update(t.ID, &col, nil, nil, nil, "")
+	return u
+}
+
+// O caso da madrugada de segunda: o que foi concluído depois da meia-noite entra
+// na semana em que o trabalho aconteceu, não numa semana nova de um card só.
+func TestCloseWeekArquivaNaSemanaEscolhida(t *testing.T) {
+	s := New()
+	concluir(s, "trabalho de domingo à noite")
+	segundaDeMadrugada := time.Date(2026, 7, 27, 0, 30, 0, 0, time.UTC) // 2026-W31
+
+	archived, _ := s.CloseWeek(segundaDeMadrugada, "2026-W30")
+	if archived != 1 {
+		t.Fatalf("archived=%d, esperava 1", archived)
+	}
+	weeks := s.ArchivedWeeks()
+	if len(weeks) != 1 || weeks[0].Label != "2026-W30" {
+		t.Fatalf("esperava tudo na 2026-W30, veio %+v", weeks)
+	}
+	if weeks[0].Start != "2026-07-20" || weeks[0].End != "2026-07-26" {
+		t.Fatalf("intervalo da semana errado: %s a %s", weeks[0].Start, weeks[0].End)
+	}
+}
+
+// O corte da encalhada segue o rótulo escolhido, não o relógio: fechando na W30,
+// um a_fazer criado durante a W30 não encalha no fechamento da própria semana.
+func TestCloseWeekEncalhaPeloRotuloEscolhido(t *testing.T) {
+	s := New()
+	daSemanaFechada := s.Add(NewTask{Title: "criado na W30", Group: "g", Session: "x"})
+	anterior := s.Add(NewTask{Title: "criado na W28", Group: "g", Session: "x"})
+	s.mu.Lock()
+	a := s.byID[daSemanaFechada.ID]
+	a.CreatedAt = time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC) // quarta da W30
+	s.byID[daSemanaFechada.ID] = a
+	b := s.byID[anterior.ID]
+	b.CreatedAt = time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC) // W28
+	s.byID[anterior.ID] = b
+	s.mu.Unlock()
+
+	_, stalled := s.CloseWeek(time.Date(2026, 7, 27, 0, 30, 0, 0, time.UTC), "2026-W30")
+	if stalled != 1 {
+		t.Fatalf("stalled=%d, esperava só o card da W28", stalled)
+	}
+	if g, _ := s.Get(daSemanaFechada.ID); g.Encalhada {
+		t.Fatalf("card criado dentro da semana fechada não deveria encalhar")
+	}
+	if g, _ := s.Get(anterior.ID); !g.Encalhada {
+		t.Fatalf("card de duas semanas atrás deveria encalhar")
+	}
+}
+
+// Rótulo lixo não pode virar uma semana "0000-W00" no arquivo.
+func TestCloseWeekRotuloInvalidoCaiNaSemanaDeAgora(t *testing.T) {
+	s := New()
+	concluir(s, "qualquer coisa")
+	now := time.Date(2026, 7, 27, 0, 30, 0, 0, time.UTC)
+	s.CloseWeek(now, "semana passada, por favor")
+
+	weeks := s.ArchivedWeeks()
+	if len(weeks) != 1 || weeks[0].Label != "2026-W31" {
+		t.Fatalf("esperava cair na semana de now (2026-W31), veio %+v", weeks)
+	}
+}
+
+func TestCloseOptionsOfereceUltimaSemanaArquivada(t *testing.T) {
+	s := New()
+	concluir(s, "da W30")
+	segundaDeMadrugada := time.Date(2026, 7, 27, 0, 30, 0, 0, time.UTC)
+	s.CloseWeek(segundaDeMadrugada, "2026-W30")
+	concluir(s, "pendente 1")
+	concluir(s, "pendente 2")
+
+	opt := s.CloseOptions(segundaDeMadrugada)
+	if opt.Current.Label != "2026-W31" || opt.Current.Count != 0 {
+		t.Fatalf("current inesperado: %+v", opt.Current)
+	}
+	if opt.Current.Start != "2026-07-27" || opt.Current.End != "2026-08-02" {
+		t.Fatalf("intervalo da current errado: %+v", opt.Current)
+	}
+	if opt.Last == nil || opt.Last.Label != "2026-W30" || opt.Last.Count != 1 {
+		t.Fatalf("last inesperado: %+v", opt.Last)
+	}
+	if opt.Pending != 2 {
+		t.Fatalf("pending=%d, esperava 2", opt.Pending)
+	}
+}
+
+// Arquivo vazio, ou só com a semana atual dentro: não há escolha a oferecer, e o
+// cliente cai na confirmação simples.
+func TestCloseOptionsSemEscolhaQuandoNaoHaOutraSemana(t *testing.T) {
+	s := New()
+	now := time.Date(2026, 7, 27, 0, 30, 0, 0, time.UTC)
+	if opt := s.CloseOptions(now); opt.Last != nil {
+		t.Fatalf("arquivo vazio não deveria ter last: %+v", opt.Last)
+	}
+	concluir(s, "fechado na própria semana")
+	s.CloseWeek(now, "")
+	opt := s.CloseOptions(now)
+	if opt.Last != nil {
+		t.Fatalf("só a semana atual arquivada não é escolha: %+v", opt.Last)
+	}
+	if opt.Current.Count != 1 {
+		t.Fatalf("current deveria contar o que já foi arquivado nela: %+v", opt.Current)
 	}
 }

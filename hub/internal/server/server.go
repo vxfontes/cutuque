@@ -175,6 +175,8 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		// DELETE. Só a mantenedora (dashboard/app) fecha manualmente; o closer automático
 		// (domingo 23:59) roda server-side, sem passar por aqui.
 		mux.Handle("POST /board/close", requireAuth(cfg.Token, BoardCloseHandler(rc.board)))
+		// As opções do fechamento andam com ele: mesmo dono, mesmo token.
+		mux.Handle("GET /board/close-options", requireAuth(cfg.Token, BoardCloseOptionsHandler(rc.board)))
 	}
 
 	return mux

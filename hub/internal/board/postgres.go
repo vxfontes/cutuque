@@ -383,9 +383,10 @@ func (s *PostgresStore) Remove(id string) bool {
 	return true
 }
 
-func (s *PostgresStore) CloseWeek(now time.Time) (archived, stalled int) {
-	label := weekLabel(now)
-	weekStart := startOfISOWeek(now)
+// CloseWeek arquiva os concluídos no rótulo `week` (vazio = semana de `now`).
+// Ver a doc do MemStore para o porquê do rótulo escolhido.
+func (s *PostgresStore) CloseWeek(now time.Time, week string) (archived, stalled int) {
+	weekStart, label := weekStartFor(week, now)
 	ctx, cancel := s.ctx()
 	defer cancel()
 
@@ -433,6 +434,35 @@ func (s *PostgresStore) CloseWeek(now time.Time) (archived, stalled int) {
 		}
 	}
 	return len(archivedIDs), len(stalledIDs)
+}
+
+// CloseOptions lista as semanas candidatas ao fechamento manual. Agrega no SQL:
+// o dashboard e os apps pedem isto só para desenhar um popup, não vale trazer os
+// ~250 cards arquivados que o ArchivedWeeks devolveria.
+func (s *PostgresStore) CloseOptions(now time.Time) CloseOptions {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	counts := map[string]int{}
+	rows, err := s.pool.Query(ctx, `SELECT archived_week, count(*) FROM cutuque.board_tasks
+		WHERE archived_week IS NOT NULL GROUP BY archived_week`)
+	if err != nil {
+		log.Printf("board pg: CloseOptions semanas: %v", err)
+	} else {
+		for rows.Next() {
+			var label string
+			var n int
+			if rows.Scan(&label, &n) == nil {
+				counts[label] = n
+			}
+		}
+		rows.Close()
+	}
+	pending := 0
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM cutuque.board_tasks
+		WHERE column_name='concluido' AND archived_week IS NULL`).Scan(&pending); err != nil {
+		log.Printf("board pg: CloseOptions pendentes: %v", err)
+	}
+	return buildCloseOptions(weekLabel(now), counts, pending)
 }
 
 func (s *PostgresStore) ArchivedWeeks() []ArchivedWeek {
