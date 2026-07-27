@@ -245,6 +245,21 @@
   .confirm-actions.stack { flex-direction: column-reverse; align-items: stretch; }
   .cf-alt { background: var(--panel2); color: var(--text); }
   .cf-alt:hover { border-color: var(--faint); }
+  /* Avisos do rodapé — o que o alert() do navegador fazia, sem travar a página. */
+  #toasts { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 50;
+            display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
+  .toast { pointer-events: auto; display: flex; align-items: flex-start; gap: 10px;
+           width: max-content; max-width: min(92vw, 440px); padding: 12px 14px;
+           background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--done);
+           border-radius: 10px; box-shadow: var(--shadow); animation: toast-in .18s ease-out; }
+  .toast.err { border-left-color: var(--error); }
+  .toast .ic { width: 16px; height: 16px; margin-top: 1px; color: var(--done); }
+  .toast.err .ic { color: var(--error); }
+  .toast b { display: block; font-size: 13.5px; }
+  .toast span { color: var(--muted); font-size: 13px; }
+  .toast.out { opacity: 0; transform: translateY(6px); transition: opacity .18s, transform .18s; }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .toast { animation: none; } .toast.out { transition: none; } }
   .task-card {
     --tc: var(--faint); /* cor do tipo de IA (só a tag usa); default cinza */
     background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 100%);
@@ -447,6 +462,8 @@
       </div>
     </div>
   </div>
+
+  <div id="toasts" aria-live="polite"></div>
 
 <script>
 (() => {
@@ -964,17 +981,46 @@
     } catch (e) { console.error('delete erro:', e.message); }
   }
 
+  // Aviso no rodapé. Some sozinho em 6s, ou no clique — nunca bloqueia a página
+  // (o alert() do navegador travava tudo e ainda mostrava o host no título).
+  const $toasts = document.getElementById('toasts');
+  function toast(title, detail = '', kind = 'ok') {
+    const el = document.createElement('div');
+    el.className = 'toast' + (kind === 'err' ? ' err' : '');
+    el.innerHTML = `${kind === 'err' ? ICONS.alert : ICONS.calCheck}
+      <div><b>${esc(title)}</b>${detail ? `<span>${esc(detail)}</span>` : ''}</div>`;
+    const bye = () => {
+      if (el.classList.contains('out')) return;
+      el.classList.add('out');
+      setTimeout(() => el.remove(), 200);
+    };
+    el.addEventListener('click', bye);
+    $toasts.appendChild(el);
+    setTimeout(bye, 6000);
+  }
+
   // Fechar a semana manualmente (arquiva concluídos + marca encalhados). Token exigido.
   // `week` vazio = a semana do relógio; preenchido, arquiva no rótulo escolhido.
-  async function closeWeek(week) {
+  // `onde` é só o texto do aviso ("20 – 26 de jul"), pra ela ver onde caiu.
+  async function closeWeek(week, onde = '') {
     try {
       const url = '/board/close' + (week ? '?week=' + encodeURIComponent(week) : '');
       const res = await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN } });
-      if (!res.ok) { alert('Falha ao fechar a semana (' + res.status + ').'); return; }
+      if (!res.ok) {
+        toast('Não deu pra fechar a semana', `O hub respondeu ${res.status}. O board continua como está.`, 'err');
+        return;
+      }
       const r = await res.json();
       renderArquivo();
-      alert(`Semana fechada: ${r.archived} arquivado(s), ${r.stalled} encalhado(s).`);
-    } catch (e) { console.error('close-week erro:', e.message); }
+      const cards = r.archived === 1 ? '1 card arquivado' : `${r.archived} cards arquivados`;
+      const enc = r.stalled === 0
+        ? 'nenhum encalhado'
+        : (r.stalled === 1 ? '1 to-do virou encalhada' : `${r.stalled} to-dos viraram encalhadas`);
+      toast(onde ? `Semana fechada em ${onde}` : 'Semana fechada', `${cards}, ${enc}.`);
+    } catch (e) {
+      console.error('close-week erro:', e.message);
+      toast('Não deu pra fechar a semana', 'O hub não respondeu. O board continua como está.', 'err');
+    }
   }
 
   // Pergunta ONDE arquivar antes de fechar. Existindo uma semana anterior no
@@ -998,13 +1044,20 @@
       });
       return;
     }
+    const ultima = ptRange(opts.last.start, opts.last.end);
+    const nova = ptRange(opts.current.start, opts.current.end);
+    // Fila vazia: fechar ainda vale (é o que marca os encalhados), mas dizer
+    // "0 concluídos vão sair do board" só confunde.
+    const porque = opts.pending === 0
+      ? 'Nada concluído na fila. Fechar agora só marca como encalhados os to-dos que nunca começaram.'
+      : `${alvo} vão sair do board. Se este trabalho é da virada de madrugada, junte na semana que acabou em vez de abrir uma nova.`;
     askConfirm({
       title: 'Onde arquivar?',
-      message: `${alvo} vão sair do board. Se este trabalho é da virada de madrugada, junte na semana que acabou em vez de abrir uma nova.`,
-      altLabel: `Juntar em ${ptRange(opts.last.start, opts.last.end)} (${opts.last.count})`,
-      onAlt: () => closeWeek(opts.last.label),
-      confirmLabel: `Criar semana nova (${ptRange(opts.current.start, opts.current.end)})`,
-      onConfirm: () => closeWeek(opts.current.label),
+      message: porque,
+      altLabel: `Juntar em ${ultima} (${opts.last.count})`,
+      onAlt: () => closeWeek(opts.last.label, ultima),
+      confirmLabel: `Criar semana nova (${nova})`,
+      onConfirm: () => closeWeek(opts.current.label, nova),
     });
   }
   const $closeWeekBtn = document.getElementById('closeWeekBtn');
