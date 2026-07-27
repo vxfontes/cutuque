@@ -109,7 +109,7 @@ struct SessionDetailPane: View {
     private var expandButton: some View {
         let expanded = nav.columnVisibility == .detailOnly
         return Button {
-            withAnimation(.easeInOut(duration: 0.2)) { nav.toggleColumns() }
+            withAnimation(.columnToggle) { nav.toggleColumns() }
         } label: {
             Image(systemName: expanded
                   ? "arrow.down.right.and.arrow.up.left"
@@ -118,4 +118,15 @@ struct SessionDetailPane: View {
         .keyboardShortcut("f", modifiers: [.command, .control])
         .accessibilityLabel(expanded ? "Recolher para três colunas" : "Expandir o painel")
     }
+}
+
+extension Animation {
+    /// Curva de toda chamada a `nav.toggleColumns()`. `⌘⌃F` tem duas
+    /// superfícies legítimas — este botão e o item de menu equivalente em
+    /// `CutuqueCommands` — e as duas precisam da MESMA curva: como o mesmo
+    /// atalho de teclado só pode ter um handler resolvido pelo sistema, se
+    /// cada superfície animasse diferente o colapso ora animava, ora saltava,
+    /// dependendo de qual delas o iPadOS escolhesse. Fonte única aqui em vez
+    /// de duplicar o literal `.easeInOut(duration: 0.2)` nos dois arquivos.
+    static var columnToggle: Animation { .easeInOut(duration: 0.2) }
 }
