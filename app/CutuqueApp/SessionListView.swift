@@ -274,6 +274,7 @@ struct SessionListView: View {
     @State private var showingSettings = false
     @State private var showingStatus = false
     @State private var showingHistory = false
+    @State private var showingHelp = false
     // Sessão em processo de renomear (nil = alerta fechado) + texto do apelido.
     @State private var renameTarget: Session?
     @State private var renameText = ""
@@ -474,6 +475,9 @@ struct SessionListView: View {
         .sheet(isPresented: $showingHistory) {
             HistoryView()
         }
+        .sheet(isPresented: $showingHelp) {
+            HelpView()
+        }
         .sheet(item: $selectedLive) { entry in
             NavigationStack {
                 LiveDetailView(entry: entry)
@@ -628,6 +632,18 @@ struct SessionListView: View {
                     Image(systemName: "gearshape")
                 }
                 .accessibilityLabel("Ajustes do hub")
+            }
+            // Ajuda fica na toolbar (e não só dentro de Ajustes) porque quem
+            // acabou de baixar o app precisa achar as instruções do hub ANTES
+            // de ter o que configurar — o estado vazio da lista leva ao mesmo
+            // lugar.
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showingHelp = true
+                } label: {
+                    Image(systemName: "questionmark.circle")
+                }
+                .accessibilityLabel("Como funciona")
             }
         }
     }
@@ -852,6 +868,14 @@ struct SessionListView: View {
                 Label("Nova tarefa", systemImage: "plus")
             }
             .buttonStyle(.borderedProminent)
+
+            // Lista vazia é o que a pessoa vê na primeira abertura, antes de
+            // ter hub configurado. "Nova tarefa" não serve pra ela; isto sim.
+            Button {
+                showingHelp = true
+            } label: {
+                Label("Como configurar o hub", systemImage: "questionmark.circle")
+            }
         }
     }
 }

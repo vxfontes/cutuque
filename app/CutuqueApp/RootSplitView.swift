@@ -264,9 +264,9 @@ struct RootSplitView: View {
     }
 }
 
-/// Sidebar. Sessões, Board e Arquivo são destinos de coluna; Histórico e
-/// Ajustes continuam em sheet — são telas de consulta pontual, não valem uma
-/// reescrita pra virar coluna.
+/// Sidebar. Sessões, Board e Arquivo são destinos de coluna; Histórico,
+/// Ajustes e a Ajuda continuam em sheet — são telas de consulta pontual, não
+/// valem uma reescrita pra virar coluna.
 ///
 /// Aparece em DOIS lugares, e de propósito: na coluna de sidebar da raiz e,
 /// no destino Board, na coluna do meio (ver `contentColumn`). Só uma das
@@ -283,6 +283,7 @@ struct DestinationSidebar: View {
     @EnvironmentObject private var nav: NavigationState
     @State private var showingHistory = false
     @State private var showingSettings = false
+    @State private var showingHelp = false
 
     /// `List(selection:)` só existe para binding OPCIONAL; `nav.destination` é
     /// não-opcional de propósito (sempre há um destino escolhido — contrato da
@@ -310,6 +311,9 @@ struct DestinationSidebar: View {
                 Button { showingSettings = true } label: {
                     Label("Ajustes", systemImage: "gearshape")
                 }
+                Button { showingHelp = true } label: {
+                    Label("Como funciona", systemImage: "questionmark.circle")
+                }
             }
             .buttonStyle(.plain)
         }
@@ -320,6 +324,7 @@ struct DestinationSidebar: View {
         .navigationTitle("Cutuque")
         .sheet(isPresented: $showingHistory) { HistoryView() }
         .sheet(isPresented: $showingSettings) { HubSettingsView() }
+        .sheet(isPresented: $showingHelp) { HelpView() }
     }
 }
 

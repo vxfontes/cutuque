@@ -41,6 +41,7 @@ struct HubSettingsView: View {
     @AppStorage(LiveActivityKeys.enabled) private var liveActivityEnabled = true
     @AppStorage(AppActiveKeys.active) private var appActive = true
 
+    @State private var showingHelp = false
     @State private var renudge = 15
     @State private var renudgeAvailable = false
     @State private var savingRenudge = false
@@ -60,7 +61,7 @@ struct HubSettingsView: View {
                     Text("Desligado, o app para de te notificar em tudo — push e Live Activity — e não fica ativo em segundo plano. Ligue quando quiser voltar a ser avisada.")
                 }
 
-                Section("Hub") {
+                Section {
                     TextField("URL (ex: http://192.0.2.20:8787)", text: $url)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
@@ -68,6 +69,19 @@ struct HubSettingsView: View {
                     TextField("Token", text: $token)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                    // Sheet sobre sheet, de propósito: esta é a tela onde a
+                    // pessoa descobre que não sabe QUAL endereço pôr, e a ajuda
+                    // é a resposta — mandá-la fechar Ajustes pra ir ler perderia
+                    // o que ela já digitou.
+                    Button {
+                        showingHelp = true
+                    } label: {
+                        Label("Como funciona (hub, dashboard, tmux)", systemImage: "questionmark.circle")
+                    }
+                } header: {
+                    Text("Hub")
+                } footer: {
+                    Text("O endereço e o token são os do seu próprio servidor — o app não tem conta nem cadastro.")
                 }
 
                 Section {
@@ -133,6 +147,7 @@ struct HubSettingsView: View {
                     Button("OK") { dismiss() }
                 }
             }
+            .sheet(isPresented: $showingHelp) { HelpView() }
             .task { await loadRenudge() }
         }
     }
