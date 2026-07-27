@@ -21,6 +21,45 @@ final class NavigationStateTests: XCTestCase {
         XCTAssertEqual(nav.columnVisibility, .all)
     }
 
+    /// Em Sessões o ⤡ depende da orientação: em pé, "aberto" são DUAS colunas
+    /// (sessões | painel), não três. Três colunas na largura de um iPad em
+    /// retrato deixariam o terminal com um filete — o oposto do que o ⤡ existe
+    /// pra fazer.
+    func testExpandirEmSessoesRetratoVoltaParaDoubleColumn() {
+        let nav = NavigationState()
+        nav.destination = .sessions
+        nav.selection = makeSelection()
+        nav.applyLayoutRule(isPortrait: true)   // é ela que grava a orientação
+        XCTAssertEqual(nav.columnVisibility, .detailOnly)
+        nav.toggleColumns()
+        XCTAssertEqual(nav.columnVisibility, .doubleColumn)
+    }
+
+    /// Deitado, "aberto" continua sendo as três colunas do desenho.
+    func testExpandirEmSessoesPaisagemVoltaParaAll() {
+        let nav = NavigationState()
+        nav.destination = .sessions
+        nav.selection = makeSelection()
+        nav.applyLayoutRule(isPortrait: false)
+        nav.toggleColumns()                     // .all -> .detailOnly
+        XCTAssertEqual(nav.columnVisibility, .detailOnly)
+        nav.toggleColumns()
+        XCTAssertEqual(nav.columnVisibility, .all)
+    }
+
+    /// Girar com o painel em tela cheia não reabre nada — mas troca o que o
+    /// ⤡ vai abrir depois. Sem isto, girar pra paisagem e tocar no ⤡ ainda
+    /// devolveria as duas colunas do retrato.
+    func testOrientacaoGravadaMudaOAlvoDoExpandir() {
+        let nav = NavigationState()
+        nav.destination = .sessions
+        nav.selection = makeSelection()
+        nav.applyLayoutRule(isPortrait: true)
+        XCTAssertEqual(nav.expandedVisibility, .doubleColumn)
+        nav.applyLayoutRule(isPortrait: false)
+        XCTAssertEqual(nav.expandedVisibility, .all)
+    }
+
     /// No Board o ⤡ volta pra `.doubleColumn`, não pra `.all` — ali a lista
     /// de destinos vive na coluna do meio, e `.all` mostraria a sidebar ao
     /// lado dela: a mesma lista duas vezes.
@@ -42,7 +81,7 @@ final class NavigationStateTests: XCTestCase {
     //
     // | Destino / estado                   | Retrato       | Paisagem      |
     // |------------------------------------|---------------|---------------|
-    // | Sessões, nenhuma sessão escolhida  | .all          | .all          |
+    // | Sessões, nenhuma sessão escolhida  | .doubleColumn | .all          |
     // | Sessões, uma sessão escolhida      | .detailOnly   | .all          |
     // | Board                              | .doubleColumn | .doubleColumn |
     //
@@ -55,6 +94,14 @@ final class NavigationStateTests: XCTestCase {
     // destinos na coluna do meio. Este arquivo testa só a metade
     // `columnVisibility` do arranjo; a outra metade é estrutura de View.
     //
+    // Sessões em retrato sem seleção mudou de `.all` pra `.doubleColumn` a
+    // pedido da usuária ("na vertical acho que pode deixar 2 colunas sem
+    // selecionar terminais mesmo"). Vale a mesma ressalva do Board, e ela é
+    // mais traiçoeira aqui: o que fica visível são as colunas do meio e de
+    // detalhe, e é `RootSplitView` que nesse estado põe a lista de DESTINOS no
+    // meio e a lista de SESSÕES no detalhe. Ler `.doubleColumn` como "sidebar +
+    // lista" inverte o arranjo.
+    //
     // `paneMode` não participa: trocar Chat↔Terminal não pode mexer em
     // `columnVisibility` (decisão explícita da usuária).
 
@@ -62,12 +109,14 @@ final class NavigationStateTests: XCTestCase {
         .live(LiveEntry(machine: "mac1", session: DiscoveredSession(id: "s1", cwd: "/tmp", title: "t")))
     }
 
-    func testSessoesSemSelecaoRetratoFicaAll() {
+    /// Duas colunas em pé: "sessoes e board | sessoes listadas". Note que a
+    /// lista de sessões aqui é o DETALHE — ver a ressalva na tabela acima.
+    func testSessoesSemSelecaoRetratoFicaDoubleColumn() {
         let nav = NavigationState()
         nav.destination = .sessions
         nav.selection = nil
         nav.applyLayoutRule(isPortrait: true)
-        XCTAssertEqual(nav.columnVisibility, .all)
+        XCTAssertEqual(nav.columnVisibility, .doubleColumn)
     }
 
     func testSessoesSemSelecaoPaisagemFicaAll() {

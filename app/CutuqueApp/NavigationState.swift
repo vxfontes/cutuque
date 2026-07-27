@@ -113,9 +113,16 @@ final class NavigationState: ObservableObject {
     ///   contrário, "esconde a do meio", está errado). Quem entrega o
     ///   desenho é `RootSplitView.contentColumn`, que no Board põe a lista
     ///   de destinos na coluna do meio; ler este `case` sozinho engana.
-    /// - Sessões: `.detailOnly` só em retrato E com uma sessão escolhida — é
-    ///   aí que o painel (tela cheia) precisa da largura toda; em paisagem as
-    ///   três colunas cabem, e sem seleção não há o que colapsar pra.
+    /// - Sessões em PAISAGEM: `.all`, as três colunas do desenho da usuária
+    ///   ("sessoes e board | sessoes | terminal").
+    /// - Sessões em RETRATO, com uma sessão escolhida: `.detailOnly` — o
+    ///   painel ocupa a tela toda.
+    /// - Sessões em RETRATO, sem seleção: `.doubleColumn`, duas colunas —
+    ///   "sessoes e board | sessoes listadas". Mesma manobra do Board: como
+    ///   `.doubleColumn` esconde a SIDEBAR (e não a coluna do meio), quem
+    ///   entrega o desenho é `RootSplitView`, que nesse estado põe a lista de
+    ///   destinos na coluna do meio e a lista de SESSÕES no detalhe. Ler este
+    ///   `case` sozinho engana.
     /// - Arquivo: sempre `.all` — fora do escopo desta correção, mantém o
     ///   comportamento de sempre (nunca disputou largura).
     func layoutVisibility(isPortrait: Bool) -> NavigationSplitViewVisibility {
@@ -123,7 +130,8 @@ final class NavigationState: ObservableObject {
         case .board:
             return .doubleColumn
         case .sessions:
-            return isPortrait && selection != nil ? .detailOnly : .all
+            guard isPortrait else { return .all }
+            return selection != nil ? .detailOnly : .doubleColumn
         case .archive:
             return .all
         }
@@ -132,16 +140,37 @@ final class NavigationState: ObservableObject {
     /// O ⤡ (e o ⌘⌃F): alterna entre tela cheia e o estado "aberto" do destino
     /// corrente.
     ///
-    /// O estado aberto NÃO é `.all` em todo destino — no Board é
-    /// `.doubleColumn`. Ali a lista de destinos vive na coluna do MEIO (ver
-    /// `RootSplitView.contentColumn`), então `.all` mostraria a sidebar e a
-    /// lista lado a lado: a mesma lista duas vezes, e o board espremido numa
-    /// terceira coluna.
+    /// O estado aberto NÃO é `.all` em todo destino:
+    ///
+    /// - no **Board** é `.doubleColumn`. Ali a lista de destinos vive na coluna
+    ///   do MEIO (ver `RootSplitView.contentColumn`), então `.all` mostraria a
+    ///   sidebar e a lista lado a lado: a mesma lista duas vezes, e o board
+    ///   espremido numa terceira coluna.
+    /// - em **Sessões em retrato** também é `.doubleColumn`. Três colunas na
+    ///   largura de um iPad em pé deixariam o terminal com um filete, e é
+    ///   justamente o oposto do que o ⤡ existe pra fazer. Duas colunas ali são
+    ///   "sessões | terminal", com a sidebar atrás do ☰.
+    ///
+    /// A orientação vem de `lastIsPortrait`, gravada por `applyLayoutRule` —
+    /// esta função não recebe geometria porque quem a chama (o ⤡ do painel, o
+    /// atalho ⌘⌃F na cena `Commands`) não tem nenhuma pra dar.
     func toggleColumns() {
-        if columnVisibility == .detailOnly {
-            columnVisibility = destination == .board ? .doubleColumn : .all
-        } else {
+        guard columnVisibility == .detailOnly else {
             columnVisibility = .detailOnly
+            return
+        }
+        columnVisibility = expandedVisibility
+    }
+
+    /// O estado "aberto" do destino corrente — ver `toggleColumns()`.
+    var expandedVisibility: NavigationSplitViewVisibility {
+        switch destination {
+        case .board:
+            return .doubleColumn
+        case .sessions:
+            return lastIsPortrait ? .doubleColumn : .all
+        case .archive:
+            return .all
         }
     }
 
@@ -153,8 +182,20 @@ final class NavigationState: ObservableObject {
     /// dentro, pra continuar testável sem hosting de View (ver a
     /// tabela-verdade em `NavigationStateTests`).
     func applyLayoutRule(isPortrait: Bool) {
+        lastIsPortrait = isPortrait
         columnVisibility = layoutVisibility(isPortrait: isPortrait)
     }
+
+    /// Última orientação vista por `applyLayoutRule` — a única memória de
+    /// geometria desta classe, e existe só pro `toggleColumns()` saber o que é
+    /// "aberto" aqui (ver `expandedVisibility`). Não é `@Published`: ninguém
+    /// desenha a partir dela, e publicá-la faria toda rotação invalidar a
+    /// árvore inteira à toa.
+    ///
+    /// Começa em `false` (paisagem) e é escrita antes de qualquer toque na tela
+    /// — `RootSplitView` mede com `initial: true`, então a primeira medição
+    /// acontece na montagem.
+    private(set) var lastIsPortrait = false
 
     /// Publica o intent E o envelope (`intentEvent`) com `seq` incrementado —
     /// é isso que faz `send(.interrupt)` seguido de outro `send(.interrupt)`,

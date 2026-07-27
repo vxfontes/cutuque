@@ -110,10 +110,48 @@ struct RootSplitView: View {
         nav.applyLayoutRule(isPortrait: isPortrait)
     }
 
+    /// Em Sessões, a lista de sessões troca de coluna conforme a orientação: em
+    /// paisagem ela é a coluna do MEIO das três ("sessoes e board | sessoes |
+    /// terminal"); em retrato sem seleção o desenho da usuária pede DUAS
+    /// colunas ("sessoes e board | sessoes listadas"), e aí ela vai pro
+    /// DETALHE.
+    ///
+    /// A troca de coluna existe porque `.doubleColumn` numa split view de três
+    /// colunas esconde a SIDEBAR, não a do meio (verificado na tela, não
+    /// deduzido) — a mesma manobra do Board logo abaixo: o layout se faz por
+    /// CONTEÚDO, não por visibilidade.
+    ///
+    /// A condição em `.doubleColumn` (e não só em "retrato sem seleção") tem a
+    /// mesma razão do Board: o ☰ da split view continua na tela e revela a
+    /// sidebar de verdade. Quando isso acontece a visibilidade vira `.all` e
+    /// esta propriedade vira `false` na hora — a lista volta pro meio em vez de
+    /// aparecer duas vezes, lado a lado.
+    ///
+    /// **Custo conhecido**: girar o iPad sem nada selecionado move a
+    /// `SessionListView` entre colunas, e o SwiftUI remonta uma view que muda
+    /// de lugar na árvore. Ela é dona do próprio `@StateObject`
+    /// (`SessionListViewModel`), então isso significa modelo novo: um piscar de
+    /// lista vazia e uma reconexão do WebSocket. Nada é perdido — o refresh é
+    /// imediato — mas é real. Hospedar o modelo acima da split view resolveria;
+    /// exige contagem de referência (`startLiveUpdates` tem
+    /// `guard liveTask == nil`, então o start da instância nova seguido do stop
+    /// da antiga deixaria o polling morto), e por isso ficou como tarefa
+    /// separada. O terminal e o chat NÃO passam por isso: com seleção o painel
+    /// nunca sai da coluna de detalhe (decisão #19).
+    private var sessionListLivesInDetail: Bool {
+        nav.destination == .sessions
+            && nav.selection == nil
+            && nav.columnVisibility == .doubleColumn
+    }
+
     @ViewBuilder private var contentColumn: some View {
         switch nav.destination {
         case .sessions:
-            SessionListView(splitSelection: $nav.selection)
+            if sessionListLivesInDetail {
+                DestinationSidebar()
+            } else {
+                SessionListView(splitSelection: $nav.selection)
+            }
         case .board:
             // Aqui mora o desenho da usuária pro Board: "sessoes e board |
             // board em si". Uma `NavigationSplitView` de TRÊS colunas não
@@ -156,6 +194,12 @@ struct RootSplitView: View {
                 // .id força a troca de sessão a destruir o painel anterior — é
                 // aí, e só aí, que o `restoreSize()` do terminal deve rodar.
                 SessionDetailPane(selection: selection).id(selection)
+            } else if sessionListLivesInDetail {
+                // Retrato, nada escolhido: a lista É o detalhe (ver
+                // `sessionListLivesInDetail`). Tocar numa sessão troca a
+                // visibilidade pra `.detailOnly` e o painel toma a tela — o
+                // "ao clicar, abre terminal tela cheia" do desenho.
+                SessionListView(splitSelection: $nav.selection)
             } else {
                 ContentUnavailableView("Escolha uma sessão", systemImage: "list.bullet.rectangle",
                                        description: Text("A conversa e o terminal aparecem aqui."))
