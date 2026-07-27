@@ -21,18 +21,39 @@ final class NavigationStateTests: XCTestCase {
         XCTAssertEqual(nav.columnVisibility, .all)
     }
 
+    /// No Board o ⤡ volta pra `.doubleColumn`, não pra `.all` — ali a lista
+    /// de destinos vive na coluna do meio, e `.all` mostraria a sidebar ao
+    /// lado dela: a mesma lista duas vezes.
+    func testExpandirNoBoardVoltaParaDoubleColumnNaoAll() {
+        let nav = NavigationState()
+        nav.destination = .board
+        nav.toggleColumns()
+        XCTAssertEqual(nav.columnVisibility, .detailOnly)
+        nav.toggleColumns()
+        XCTAssertEqual(nav.columnVisibility, .doubleColumn)
+    }
+
     // MARK: - applyLayoutRule (Tarefa B: orientação decide o layout, no lugar
     // da largura medida — regra dos 700 pt aposentada)
     //
     // Tabela-verdade pedida pela usuária, hardcoded aqui (nunca derivada de
-    // `applyLayoutRule`/`wantsWidth` — comparar f(x) com uma reescrita de f
-    // é tautologia, achado já registrado neste projeto):
+    // `applyLayoutRule`/`layoutVisibility` — comparar f(x) com uma reescrita
+    // de f é tautologia, achado já registrado neste projeto):
     //
-    // | Destino / estado                  | Retrato      | Paisagem |
-    // |------------------------------------|--------------|----------|
-    // | Sessões, nenhuma sessão escolhida  | .all         | .all     |
-    // | Sessões, uma sessão escolhida      | .detailOnly  | .all     |
-    // | Board                              | .detailOnly  | .detailOnly |
+    // | Destino / estado                   | Retrato       | Paisagem      |
+    // |------------------------------------|---------------|---------------|
+    // | Sessões, nenhuma sessão escolhida  | .all          | .all          |
+    // | Sessões, uma sessão escolhida      | .detailOnly   | .all          |
+    // | Board                              | .doubleColumn | .doubleColumn |
+    //
+    // O Board é `.doubleColumn` porque o desenho dele é de DUAS colunas —
+    // "sessoes e board | board em si". Cuidado com o que `.doubleColumn`
+    // significa numa split view de TRÊS colunas: ele esconde a SIDEBAR e
+    // deixa coluna do meio + detalhe (verificado na tela do simulador — a
+    // leitura intuitiva, "esconde a do meio", é falsa). Quem faz o desenho
+    // acontecer é `RootSplitView.contentColumn`, que no Board põe a lista de
+    // destinos na coluna do meio. Este arquivo testa só a metade
+    // `columnVisibility` do arranjo; a outra metade é estrutura de View.
     //
     // `paneMode` não participa: trocar Chat↔Terminal não pode mexer em
     // `columnVisibility` (decisão explícita da usuária).
@@ -73,18 +94,18 @@ final class NavigationStateTests: XCTestCase {
         XCTAssertEqual(nav.columnVisibility, .all)
     }
 
-    func testBoardRetratoColapsaDetailOnly() {
+    func testBoardEmRetratoFicaDoubleColumn() {
         let nav = NavigationState()
         nav.destination = .board
         nav.applyLayoutRule(isPortrait: true)
-        XCTAssertEqual(nav.columnVisibility, .detailOnly)
+        XCTAssertEqual(nav.columnVisibility, .doubleColumn)
     }
 
-    func testBoardPaisagemTambemColapsaDetailOnly() {
+    func testBoardEmPaisagemTambemFicaDoubleColumn() {
         let nav = NavigationState()
         nav.destination = .board
         nav.applyLayoutRule(isPortrait: false)
-        XCTAssertEqual(nav.columnVisibility, .detailOnly)
+        XCTAssertEqual(nav.columnVisibility, .doubleColumn)
     }
 
     /// `paneMode` saiu da decisão: mesmo destino/seleção/orientação,

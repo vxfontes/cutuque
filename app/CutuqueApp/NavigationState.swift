@@ -99,33 +99,50 @@ final class NavigationState: ObservableObject {
     @Published private(set) var intentEvent = IntentEvent(seq: 0, intent: nil)
     private var intentSeq = 0
 
-    /// O que está no detalhe, nesta orientação, "quer" a coluna toda pra si —
-    /// substitui a antiga regra dos 700 pt (largura medida). `paneMode` NÃO
-    /// entra mais aqui: o colapso em retrato vale pro painel inteiro, seja
-    /// chat ou terminal (decisão explícita da usuária — "Chat continua o
-    /// padrão, só o layout muda").
+    /// Como as colunas ficam neste destino, nesta orientação — substitui a
+    /// antiga regra dos 700 pt (largura medida). `paneMode` NÃO entra aqui: o
+    /// colapso em retrato vale pro painel inteiro, seja chat ou terminal
+    /// (decisão explícita da usuária — "Chat continua o padrão, só o layout
+    /// muda").
     ///
-    /// - Board: sempre, nas duas orientações — ele não tem mais coluna do meio
-    ///   (os filtros voltaram pro topo do kanban), e um kanban espremido numa
-    ///   coluna do meio mostraria menos de duas colunas por vez.
-    /// - Sessões: só em retrato E com uma sessão escolhida — é aí que o
-    ///   painel (tela cheia) precisa da coluna toda; em paisagem as três
-    ///   colunas cabem, e sem seleção não há o que colapsar pra.
-    /// - Arquivo: nunca — fora do escopo desta correção, mantém o
+    /// - Board: `.doubleColumn` nas duas orientações — duas colunas, a lista
+    ///   de destinos e o kanban, que é o desenho da usuária ("sessoes e
+    ///   board | board em si"). Atenção ao que `.doubleColumn` de fato faz
+    ///   numa split view de TRÊS colunas: ele esconde a SIDEBAR e mostra
+    ///   coluna do meio + detalhe (verificado no simulador — o palpite
+    ///   contrário, "esconde a do meio", está errado). Quem entrega o
+    ///   desenho é `RootSplitView.contentColumn`, que no Board põe a lista
+    ///   de destinos na coluna do meio; ler este `case` sozinho engana.
+    /// - Sessões: `.detailOnly` só em retrato E com uma sessão escolhida — é
+    ///   aí que o painel (tela cheia) precisa da largura toda; em paisagem as
+    ///   três colunas cabem, e sem seleção não há o que colapsar pra.
+    /// - Arquivo: sempre `.all` — fora do escopo desta correção, mantém o
     ///   comportamento de sempre (nunca disputou largura).
-    func wantsWidth(isPortrait: Bool) -> Bool {
+    func layoutVisibility(isPortrait: Bool) -> NavigationSplitViewVisibility {
         switch destination {
         case .board:
-            return true
+            return .doubleColumn
         case .sessions:
-            return isPortrait && selection != nil
+            return isPortrait && selection != nil ? .detailOnly : .all
         case .archive:
-            return false
+            return .all
         }
     }
 
+    /// O ⤡ (e o ⌘⌃F): alterna entre tela cheia e o estado "aberto" do destino
+    /// corrente.
+    ///
+    /// O estado aberto NÃO é `.all` em todo destino — no Board é
+    /// `.doubleColumn`. Ali a lista de destinos vive na coluna do MEIO (ver
+    /// `RootSplitView.contentColumn`), então `.all` mostraria a sidebar e a
+    /// lista lado a lado: a mesma lista duas vezes, e o board espremido numa
+    /// terceira coluna.
     func toggleColumns() {
-        columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+        if columnVisibility == .detailOnly {
+            columnVisibility = destination == .board ? .doubleColumn : .all
+        } else {
+            columnVisibility = .detailOnly
+        }
     }
 
     /// Aplica a regra de layout: orientação (e, pra Sessões, se há seleção)
@@ -136,7 +153,7 @@ final class NavigationState: ObservableObject {
     /// dentro, pra continuar testável sem hosting de View (ver a
     /// tabela-verdade em `NavigationStateTests`).
     func applyLayoutRule(isPortrait: Bool) {
-        columnVisibility = wantsWidth(isPortrait: isPortrait) ? .detailOnly : .all
+        columnVisibility = layoutVisibility(isPortrait: isPortrait)
     }
 
     /// Publica o intent E o envelope (`intentEvent`) com `seq` incrementado —

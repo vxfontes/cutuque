@@ -115,8 +115,35 @@ struct RootSplitView: View {
         case .sessions:
             SessionListView(splitSelection: $nav.selection)
         case .board:
-            ContentUnavailableView("Board", systemImage: "rectangle.split.3x1",
-                                   description: Text("Os filtros ficam no topo do board."))
+            // Aqui mora o desenho da usuária pro Board: "sessoes e board |
+            // board em si". Uma `NavigationSplitView` de TRÊS colunas não
+            // sabe mostrar "sidebar + detalhe" — os três estados de
+            // `NavigationSplitViewVisibility` são `.all` (as três),
+            // `.doubleColumn` (esconde a SIDEBAR, não a do meio — verificado
+            // na tela, não deduzido) e `.detailOnly`. Não existe um que
+            // esconda só a coluna do meio.
+            //
+            // Então o layout se faz por conteúdo, não por visibilidade: em
+            // `.doubleColumn` sobram coluna do meio + detalhe, e a do meio
+            // — que ficou sem conteúdo quando os filtros voltaram pro topo
+            // do kanban — passa a mostrar a própria lista de destinos. O
+            // que a usuária vê é lista + board. A sidebar de verdade
+            // continua existindo (a raiz nunca é substituída, decisão #19),
+            // só escondida.
+            //
+            // A condição abaixo é o que impede o arranjo de se contradizer: o
+            // ☰ da própria split view continua na tela e revela a sidebar de
+            // verdade (`.toolbar(removing: .sidebarToggle)` não o remove aqui
+            // — testado). Sem a condição, esse toque deixaria a MESMA lista
+            // duas vezes, lado a lado, com o board espremido numa terceira
+            // coluna. A invariante é: a lista só ocupa a coluna do meio
+            // enquanto a sidebar está escondida.
+            if nav.columnVisibility == .all {
+                ContentUnavailableView("Board", systemImage: "rectangle.split.3x1",
+                                       description: Text("Os filtros ficam no topo do board."))
+            } else {
+                DestinationSidebar()
+            }
         case .archive:
             ArchiveView(embedded: true, selection: $nav.archiveSelection)
         }
@@ -149,6 +176,13 @@ struct RootSplitView: View {
 /// Sidebar. Sessões, Board e Arquivo são destinos de coluna; Histórico e
 /// Ajustes continuam em sheet — são telas de consulta pontual, não valem uma
 /// reescrita pra virar coluna.
+///
+/// Aparece em DOIS lugares, e de propósito: na coluna de sidebar da raiz e,
+/// no destino Board, na coluna do meio (ver `contentColumn`). Só uma das
+/// duas está visível de cada vez — no Board a sidebar de verdade fica
+/// escondida por `.doubleColumn` e o ☰ é removido de lá. São duas instâncias
+/// da mesma view, com `@State` independente, o que aqui é inofensivo: os
+/// sheets de Histórico/Ajustes pertencem a quem foi tocado.
 ///
 /// O **status do hub** de propósito NÃO está aqui: a `HubStatusView` precisa
 /// das sessões já carregadas (`sessions:`/`live:`) pro resumo, e a sidebar não
@@ -188,6 +222,10 @@ struct DestinationSidebar: View {
             }
             .buttonStyle(.plain)
         }
+        // Explícito porque esta view também vive na coluna do MEIO (Board),
+        // onde o padrão seria `.insetGrouped` e a lista destoaria da mesma
+        // lista renderizada na coluna de sidebar. Na sidebar é redundante.
+        .listStyle(.sidebar)
         .navigationTitle("Cutuque")
         .sheet(isPresented: $showingHistory) { HistoryView() }
         .sheet(isPresented: $showingSettings) { HubSettingsView() }
