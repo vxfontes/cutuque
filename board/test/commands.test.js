@@ -2,7 +2,18 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { commands, resolveScope, inScope } from '../src/commands.js';
 
+// Estado do fake compartilhado entre os testes de close-week: cada fakeCli()
+// zera, então cada teste vê só os próprios fechamentos.
+let closedWeeks = [];
+let closeOpts = {};
+
 function fakeCli(tasks = [], weeks = []) {
+  closedWeeks = [];
+  closeOpts = {
+    current: { label: '2026-W31', start: '2026-07-27', end: '2026-08-02', count: 0 },
+    last: { label: '2026-W30', start: '2026-07-20', end: '2026-07-26', count: 70 },
+    pending: 3,
+  };
   const out = [];
   const created = [];
   const moved = [];
@@ -19,7 +30,8 @@ function fakeCli(tasks = [], weeks = []) {
       addComment: async (id, author, text) => { comments.push([id, author, text]); return { id }; },
       patchTask: async (id, patch) => { patches.push([id, patch]); return { id, ...patch }; },
       archive: async () => weeks,
-      closeWeek: async () => ({ archived: 2, stalled: 1 }),
+      closeWeek: async (week = '') => { closedWeeks.push(week); return { archived: 2, stalled: 1 }; },
+      closeOptions: async () => closeOpts,
       search: async (q) => {
         const low = String(q).toLowerCase();
         return tasks.filter((t) =>
@@ -124,6 +136,27 @@ test('close-week reporta arquivados e encalhados', async () => {
   await commands.closeWeek(cli);
   assert.ok(cli._out.join('\n').includes('2 arquivado'));
   assert.ok(cli._out.join('\n').includes('1 encalhado'));
+  assert.deepEqual(closedWeeks, ['']);  // sem flag = semana do relogio
+});
+
+test('close-week --last junta na ultima semana arquivada', async () => {
+  const cli = fakeCli();
+  await commands.closeWeek(cli, { flags: { last: '' } });
+  assert.deepEqual(closedWeeks, ['2026-W30']);
+  assert.ok(cli._out.join('\n').includes('em 2026-W30'));
+});
+
+test('close-week --week manda o rotulo pedido', async () => {
+  const cli = fakeCli();
+  await commands.closeWeek(cli, { flags: { week: '2026-W29' } });
+  assert.deepEqual(closedWeeks, ['2026-W29']);
+});
+
+test('close-week --last sem semana anterior falha em vez de abrir uma nova', async () => {
+  const cli = fakeCli();
+  closeOpts = { current: { label: '2026-W31' }, last: null, pending: 3 };
+  await assert.rejects(() => commands.closeWeek(cli, { flags: { last: '' } }), /semana anterior/);
+  assert.deepEqual(closedWeeks, []);
 });
 
 test('show traz descricao + todos os comentarios', async () => {

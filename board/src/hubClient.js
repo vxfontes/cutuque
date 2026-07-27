@@ -16,6 +16,11 @@ export function createHubClient({ hubBaseUrl, token, fetchImpl = fetch }) {
     async addComment(id, author, text) { return req('POST', `/board/tasks/${id}/comments`, { author, text }); },
     async search(q) { return (await req('GET', '/board/search?q=' + encodeURIComponent(q))).tasks || []; },
     async archive() { return (await req('GET', '/board/archive')).weeks || []; },
-    async closeWeek() { return req('POST', '/board/close', {}); },
+    // week vazio = a semana do relógio (comportamento de sempre); preenchido,
+    // arquiva naquele rótulo — ver GET /board/close-options.
+    async closeWeek(week = '') {
+      return req('POST', '/board/close' + (week ? '?week=' + encodeURIComponent(week) : ''), {});
+    },
+    async closeOptions() { return req('GET', '/board/close-options'); },
   };
 }

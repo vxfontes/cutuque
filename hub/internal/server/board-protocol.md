@@ -101,6 +101,10 @@ cutuque task comment 6722dd9f1a5f2ac2 "fluxo pronto, subindo pra review" --agent
 - **Fechamento da semana** (automático, **domingo 23:59** America/Sao_Paulo — ou
   manual via `cutuque task close-week`): os cards em `concluido` são **arquivados**
   por semana e saem do board (ele começa a semana limpo).
+- **Onde arquivar**: o fechamento manual pode mirar a semana anterior
+  (`cutuque task close-week --last`, ou o popup "onde arquivar?" no dashboard e
+  nos apps). É pro trabalho que virou a madrugada de domingo cair na semana em
+  que aconteceu, em vez de abrir uma semana nova de um card só.
 - **Arquivo**: os concluídos arquivados ficam acessíveis por `cutuque task week`
   (e na aba **Arquivo** do dashboard, em calendário por semana). Use quando quiser
   revisar o que foi feito em semanas anteriores.

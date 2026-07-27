@@ -16,14 +16,14 @@ const USAGE = `uso:
   cutuque task comment <id> "<texto>" --agent <role>
   cutuque task desc <id> "<descrição>"
   cutuque task week [<label>] [--all | --group <nome> | --session]
-  cutuque task close-week
+  cutuque task close-week [--last | --week <2026-W30>]   # --last junta na última semana arquivada
 
 --agent <role> = quem está fazendo (ex: marcus, luka, ludmilla). Obrigatório em add e comment.
 list/week mostram por padrão o SEU ambiente (grupo). Encalhados aparecem no list.
 week sem label lista as semanas arquivadas; com label (ex: 2026-W28) mostra os cards.`;
 
 // Flags booleanas (não consomem o próximo argumento).
-const BOOL_FLAGS = new Set(['all', 'session', 'mine']);
+const BOOL_FLAGS = new Set(['all', 'session', 'mine', 'last']);
 
 // Separa flags (--k v) dos argumentos posicionais.
 function parseArgs(argv) {
@@ -74,7 +74,7 @@ async function main() {
     } else if (action === 'week') {
       await commands.week(cli, { flags, args: pos });
     } else if (action === 'close-week') {
-      await commands.closeWeek(cli);
+      await commands.closeWeek(cli, { flags });
     } else if (action === 'move') {
       const [id, column] = pos;
       if (!id || !column) throw new Error('uso: cutuque task move <id> <coluna>');

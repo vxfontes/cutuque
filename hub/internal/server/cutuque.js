@@ -91,7 +91,12 @@ function createHubClient({ hubBaseUrl, token, fetchImpl = fetch }) {
     async addComment(id, author, text) { return req('POST', `/board/tasks/${id}/comments`, { author, text }); },
     async search(q) { return (await req('GET', '/board/search?q=' + encodeURIComponent(q))).tasks || []; },
     async archive() { return (await req('GET', '/board/archive')).weeks || []; },
-    async closeWeek() { return req('POST', '/board/close', {}); },
+    // week vazio = a semana do relógio (comportamento de sempre); preenchido,
+    // arquiva naquele rótulo — ver GET /board/close-options.
+    async closeWeek(week = '') {
+      return req('POST', '/board/close' + (week ? '?week=' + encodeURIComponent(week) : ''), {});
+    },
+    async closeOptions() { return req('GET', '/board/close-options'); },
   };
 }
 
@@ -272,9 +277,20 @@ const commands = {
   },
   // close-week: fecha a semana manualmente (arquiva concluídos + marca encalhados).
   // Normalmente roda sozinho (domingo 23:59); aqui é o gatilho manual.
-  async closeWeek(cli) {
-    const r = await cli.client.closeWeek();
-    cli.out(`✓ semana fechada: ${r.archived} arquivado(s), ${r.stalled} encalhado(s)`);
+  //
+  // `--last` junta na última semana já arquivada, em vez de abrir uma nova: é o
+  // equivalente em terminal do popup "onde arquivar?" do dashboard e dos apps,
+  // para quando o trabalho virou a madrugada e pertence à semana que acabou.
+  async closeWeek(cli, { flags = {} } = {}) {
+    let week = flags.week || '';
+    if (!week && flags.last !== undefined) {
+      const o = await cli.client.closeOptions();
+      if (!o.last) throw new Error('não há semana anterior arquivada para juntar');
+      week = o.last.label;
+    }
+    const r = await cli.client.closeWeek(week);
+    const onde = week ? ` em ${week}` : '';
+    cli.out(`✓ semana fechada${onde}: ${r.archived} arquivado(s), ${r.stalled} encalhado(s)`);
   },
   async move(cli, id, column) {
     if (!COLS.includes(column)) throw new Error(`coluna inválida: ${column} (use: ${COLS.join(', ')})`);
@@ -296,14 +312,14 @@ const USAGE = `uso:
   cutuque task comment <id> "<texto>" --agent <role>
   cutuque task desc <id> "<descrição>"
   cutuque task week [<label>] [--all | --group <nome> | --session]
-  cutuque task close-week
+  cutuque task close-week [--last | --week <2026-W30>]   # --last junta na última semana arquivada
 
 --agent <role> = quem está fazendo (ex: marcus, luka, ludmilla). Obrigatório em add e comment.
 list/week mostram por padrão o SEU ambiente (grupo). Encalhados aparecem no list.
 week sem label lista as semanas arquivadas; com label (ex: 2026-W28) mostra os cards.`;
 
 // Flags booleanas (não consomem o próximo argumento).
-const BOOL_FLAGS = new Set(['all', 'session', 'mine']);
+const BOOL_FLAGS = new Set(['all', 'session', 'mine', 'last']);
 
 // Separa flags (--k v) dos argumentos posicionais.
 function parseArgs(argv) {
@@ -354,7 +370,7 @@ async function main() {
     } else if (action === 'week') {
       await commands.week(cli, { flags, args: pos });
     } else if (action === 'close-week') {
-      await commands.closeWeek(cli);
+      await commands.closeWeek(cli, { flags });
     } else if (action === 'move') {
       const [id, column] = pos;
       if (!id || !column) throw new Error('uso: cutuque task move <id> <coluna>');

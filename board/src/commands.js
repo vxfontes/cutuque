@@ -174,9 +174,20 @@ export const commands = {
   },
   // close-week: fecha a semana manualmente (arquiva concluídos + marca encalhados).
   // Normalmente roda sozinho (domingo 23:59); aqui é o gatilho manual.
-  async closeWeek(cli) {
-    const r = await cli.client.closeWeek();
-    cli.out(`✓ semana fechada: ${r.archived} arquivado(s), ${r.stalled} encalhado(s)`);
+  //
+  // `--last` junta na última semana já arquivada, em vez de abrir uma nova: é o
+  // equivalente em terminal do popup "onde arquivar?" do dashboard e dos apps,
+  // para quando o trabalho virou a madrugada e pertence à semana que acabou.
+  async closeWeek(cli, { flags = {} } = {}) {
+    let week = flags.week || '';
+    if (!week && flags.last !== undefined) {
+      const o = await cli.client.closeOptions();
+      if (!o.last) throw new Error('não há semana anterior arquivada para juntar');
+      week = o.last.label;
+    }
+    const r = await cli.client.closeWeek(week);
+    const onde = week ? ` em ${week}` : '';
+    cli.out(`✓ semana fechada${onde}: ${r.archived} arquivado(s), ${r.stalled} encalhado(s)`);
   },
   async move(cli, id, column) {
     if (!COLS.includes(column)) throw new Error(`coluna inválida: ${column} (use: ${COLS.join(', ')})`);
