@@ -21,33 +21,15 @@ final class PhoneWatchRelay: NSObject, WCSessionDelegate {
         Task {
             switch action {
             case "needsYou":
-                let all = (try? await api.sessions()) ?? []
-                let needs = all.filter { $0.state == .needsYou }.map { s -> [String: Any] in
-                    // Perguntas de seleção (AskUserQuestion), se houver — o relógio
-                    // usa isso pra desenhar as opções em vez do sim/não.
-                    let questions = (s.pendingQuestions ?? []).map { q -> [String: Any] in
-                        [
-                            "question": q.question,
-                            "header": q.header,
-                            "multiSelect": q.multiSelect,
-                            "options": q.options.map { opt -> [String: Any] in
-                                ["label": opt.label, "description": opt.description ?? ""]
-                            },
-                        ]
-                    }
-                    return [
-                        "id": s.id,
-                        "title": s.title,
-                        "prompt": (s.pendingPrompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
-                        "hasPane": s.tmuxTarget != nil,
-                        // Sessão externa (hook/tmux de terceiro): o hub NÃO controla o
-                        // gate dela, então o relógio a trata como read-only (não
-                        // oferece aprovar/negar/responder — a resposta é no terminal).
-                        "isExternal": s.isExternal,
-                        "questions": questions,
-                    ]
+                // Nada de `try?` aqui: se o iPhone não alcançou o hub, o relógio
+                // PRECISA saber. Engolir o erro e responder lista vazia fazia o
+                // pulso escrever "Tudo em dia" com o hub cheio de pedidos parados.
+                do {
+                    let all = try await api.sessions()
+                    replyHandler(Self.needsYouReply(from: all).wire)
+                } catch {
+                    replyHandler([WatchWireKey.error: "o iPhone não alcançou o hub"])
                 }
-                replyHandler(["sessions": needs])
             case "approve":
                 replyHandler(["ok": (try? await api.approve(sessionID: id)) != nil])
             case "deny":
@@ -75,6 +57,50 @@ final class PhoneWatchRelay: NSObject, WCSessionDelegate {
                 replyHandler(["ok": false])
             }
         }
+    }
+
+    /// Traduz a lista completa do hub no que cabe no pulso: as sessões que
+    /// precisam de você + a contagem das outras.
+    ///
+    /// A contagem existe pra tela vazia não ser ambígua. "Tudo em dia" sozinho
+    /// tanto pode significar "os seus três agentes estão trabalhando" quanto
+    /// "não há agente nenhum" — no pulso, essa diferença é a informação toda.
+    static func needsYouReply(from all: [Session]) -> WatchNeedsYouReply {
+        var overview = WatchOverview()
+        var needs: [WatchSession] = []
+
+        for s in all {
+            switch s.state {
+            case .needsYou:
+                // Perguntas de seleção (AskUserQuestion), se houver — o relógio
+                // usa isso pra desenhar as opções em vez do sim/não.
+                let questions = (s.pendingQuestions ?? []).map { q in
+                    WatchQuestion(question: q.question,
+                                  header: q.header,
+                                  multiSelect: q.multiSelect,
+                                  options: q.options.map {
+                                      WatchQuestionOption(label: $0.label, description: $0.description ?? "")
+                                  })
+                }
+                needs.append(WatchSession(
+                    id: s.id,
+                    title: s.title,
+                    machine: s.machine,
+                    agent: s.agent,
+                    prompt: (s.pendingPrompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+                    hasPane: s.tmuxTarget != nil,
+                    // Sessão externa (hook/tmux de terceiro): o hub NÃO controla o
+                    // gate dela, então o relógio a trata como read-only (não
+                    // oferece aprovar/negar/responder — a resposta é no terminal).
+                    isExternal: s.isExternal,
+                    questions: questions))
+            case .running: overview.running += 1
+            case .done:    overview.done += 1
+            case .error:   overview.error += 1
+            case .idle:    overview.idle += 1
+            }
+        }
+        return WatchNeedsYouReply(sessions: needs, overview: overview)
     }
 
     // Stubs exigidos no iOS (troca de device/conta): re-ativa a sessão.
