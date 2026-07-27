@@ -981,7 +981,7 @@ private struct HubStatusIndicator: View {
 
 // MARK: - Atalhos ⌘ (Task 11)
 
-/// `.onChange(of: nav.intent)` isolado num `ViewModifier` concreto: colado
+/// `.onChange(of: nav.intentEvent)` isolado num `ViewModifier` concreto: colado
 /// direto na cadeia gigante de modificadores de `bodyContent`, o
 /// type-checker do Swift não fecha a conta ("unable to type-check this
 /// expression in reasonable time" — erro real de build, não achismo). Como
@@ -991,12 +991,18 @@ private struct AppIntentListener: ViewModifier {
     // `@EnvironmentObject` do pai (a `SessionListView` já tem o dela, linha
     // acima na struct) — cada tipo que lê do ambiente precisa da sua própria
     // propriedade. Não é duplicação pra "limpar"; sem esta linha o
-    // `.onChange(of: nav.intent)` abaixo não compila.
+    // `.onChange(of: nav.intentEvent)` abaixo não compila.
     @EnvironmentObject private var nav: NavigationState
     let handle: (AppIntent?) -> Void
 
+    // Observa `nav.intentEvent` (envelope com `seq`), não `nav.intent` cru:
+    // ⌘N/⌘R/⌘1…⌘9 repetidos sem consumo no meio mandam o MESMO `AppIntent`,
+    // e sem o `seq` o `.onChange` ficaria mudo no segundo envio (achado
+    // Critical da revisão final — ver `NavigationState.IntentEvent`).
+    // `handle` ignora o parâmetro mesmo (lê `nav.consumeSessionListIntent()`
+    // por dentro), então só a origem do evento muda aqui.
     func body(content: Content) -> some View {
-        content.onChange(of: nav.intent) { _, intent in handle(intent) }
+        content.onChange(of: nav.intentEvent) { _, event in handle(event.intent) }
     }
 }
 

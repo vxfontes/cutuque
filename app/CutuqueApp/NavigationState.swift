@@ -50,6 +50,22 @@ enum AppIntent: Equatable {
     case moveCardRight
 }
 
+/// Envelope publicado no lugar do `AppIntent?` cru pros consumidores que
+/// escutam via `.onChange`: carrega um `seq` monotônico.
+///
+/// `AppIntent` é `Equatable`, e `.onChange` só invoca a closure quando o
+/// valor OBSERVADO muda. Sem o `seq`, reenviar o MESMO intent sem que
+/// ninguém tenha consumido o anterior produz `oldValue == newValue` — e o
+/// atalho correspondente fica morto pra sempre, até algum OUTRO intent
+/// transitar e resetar por acaso (achado Critical da revisão final da
+/// `versao-ipad`: ver `NavigationState.send(_:)`). `seq` garante que dois
+/// `send()` do mesmo `AppIntent` em sequência sempre produzem um
+/// `IntentEvent` diferente, então o `.onChange` sempre dispara.
+struct IntentEvent: Equatable {
+    let seq: Int
+    let intent: AppIntent?
+}
+
 /// Estado de navegação da versão iPad. Vive no `CutuqueApp` (para os atalhos
 /// da cena `Commands` alcançarem) e desce por `environmentObject`.
 ///
@@ -66,6 +82,18 @@ final class NavigationState: ObservableObject {
     /// Card aberto no inspector do board (também alimentado pela busca).
     @Published var boardSelection: BoardTask?
     @Published var intent: AppIntent?
+    /// O que os consumidores editáveis (`SessionListView`, `SessionDetailView`,
+    /// `BoardView`) devem observar em `.onChange` — não `intent` cru (ver
+    /// `IntentEvent`). Propriedade IRMÃ de `intent`, não substituta: o
+    /// `BoardFilterList` (outra correção em voo, arquivo que esta tarefa não
+    /// toca) continua observando `intent` cru direto. Seu único intent
+    /// (`.focusSearch`) é imune ao defeito de `.onChange` mudo porque quem
+    /// manda `.focusSearch` (`CutuqueCommands`) sempre força
+    /// `destination = .board` antes, garantindo um consumidor montado — logo
+    /// `.focusSearch` nunca fica parado sem consumo, e há sempre um `nil`
+    /// intermediário entre dois envios seguidos (ver `RootSplitView.contentColumn`).
+    @Published private(set) var intentEvent = IntentEvent(seq: 0, intent: nil)
+    private var intentSeq = 0
 
     /// O que está no detalhe agora disputa largura? Board sempre; sessão só
     /// quando está mostrando o terminal.
@@ -86,7 +114,16 @@ final class NavigationState: ObservableObject {
             : .all
     }
 
-    func send(_ intent: AppIntent) { self.intent = intent }
+    /// Publica o intent E o envelope (`intentEvent`) com `seq` incrementado —
+    /// é isso que faz `send(.interrupt)` seguido de outro `send(.interrupt)`,
+    /// sem consumo no meio, ser sempre uma transição observável (ver
+    /// `IntentEvent`).
+    func send(_ intent: AppIntent) {
+        self.intent = intent
+        intentSeq += 1
+        intentEvent = IntentEvent(seq: intentSeq, intent: intent)
+    }
+
     func consume() { intent = nil }
 
     /// Zera o intent SE (e só se) for `.interrupt`, e diz se consumiu.
