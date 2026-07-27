@@ -34,10 +34,10 @@ enum TerminalGeometry {
 enum PadLayout {
     /// Abaixo disto o painel de detalhe é estreito demais pras duas superfícies
     /// largas: o board fica com coluna de ~110 pt e o terminal cai abaixo das
-    /// 80 colunas clássicas. Nesses casos o destino abre já expandido.
+    /// 80 colunas clássicas. Usado por `BoardLayout.isRegularWidth` (a barra de
+    /// filtros/busca própria do board, ver `BoardMoveLogic.swift`) — NÃO decide
+    /// mais o colapso da split view do iPad: isso agora é por orientação (ver
+    /// `NavigationState.applyLayoutRule`, que substituiu a antiga
+    /// `PadLayout.startsExpanded(detailWidth:)`).
     static let expandThreshold: CGFloat = 700
-
-    static func startsExpanded(detailWidth: CGFloat) -> Bool {
-        detailWidth > 0 && detailWidth < expandThreshold
-    }
 }

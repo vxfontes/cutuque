@@ -12,19 +12,39 @@ struct RootSplitView: View {
     @EnvironmentObject private var router: Router
     @EnvironmentObject private var nav: NavigationState
 
-    /// Chave do que já teve a regra dos 700 pt aplicada, pra ela valer UMA vez
-    /// por entrada em destino/painel e não brigar com o ⤡ da usuária.
-    @State private var widthRuleAppliedFor: String?
+    /// Chave do que já teve a regra de layout aplicada, pra ela valer UMA vez
+    /// por entrada em destino/seleção/orientação e não brigar com o ⤡ da
+    /// usuária.
+    @State private var layoutRuleAppliedFor: String?
 
-    /// Última largura da coluna de detalhe medida pelo `GeometryReader` do
-    /// `detail:`. Cache necessário porque trocar de destino (ex.: Sessões →
-    /// Board) NÃO muda essa largura por si só — a proporção das colunas só
-    /// reage a `columnVisibility`, que é justamente o que a regra decide.
-    /// Sem isto, a troca de `widthRuleKey` não tinha nenhuma largura pra
-    /// reaplicar a regra contra. Ver `applyWidthRuleIfNeeded()`.
-    @State private var lastKnownWidth: CGFloat?
+    /// Último tamanho do split view inteiro, medido pelo `.background` abaixo
+    /// (mede sem participar do layout — não é o `detailColumn` que mede mais,
+    /// ver nota da Task B). Cache necessário porque trocar de destino ou de
+    /// seleção (ex.: Sessões → Board, ou escolher uma sessão) NÃO dispara uma
+    /// nova medição de geometria por si só — só a rotação física do aparelho
+    /// muda `geo.size`. Sem isto, a troca de `layoutRuleKey` não tinha
+    /// nenhum tamanho pra reaplicar a regra contra. Ver
+    /// `applyLayoutRuleIfNeeded()`.
+    @State private var lastKnownSize: CGSize?
 
-    private var widthRuleKey: String { "\(nav.destination.rawValue)-\(nav.paneMode.rawValue)" }
+    /// `retrato = altura > largura`, lida do tamanho do próprio split view —
+    /// não de `UIDevice.current.orientation` (devolve `.unknown`/`.faceUp` e
+    /// exige notificação) nem de `horizontalSizeClass` (num iPad em tela
+    /// cheia é `.regular` nas DUAS orientações). Funciona por construção em
+    /// Slide Over e Split View estreito: a janela do app fica alta e estreita
+    /// → lê como retrato → tela cheia, que é o comportamento certo lá.
+    private var isPortrait: Bool {
+        guard let size = lastKnownSize else { return false }
+        return size.height > size.width
+    }
+
+    /// Eixos que decidem o layout agora: destino, orientação e "tem sessão
+    /// escolhida". `paneMode` sai da chave de propósito — trocar
+    /// Chat↔Terminal não pode mais mexer em `columnVisibility` (decisão
+    /// explícita da usuária).
+    private var layoutRuleKey: String {
+        "\(nav.destination.rawValue)-\(isPortrait)-\(nav.selection != nil)"
+    }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $nav.columnVisibility) {
@@ -32,29 +52,40 @@ struct RootSplitView: View {
         } content: {
             contentColumn
         } detail: {
-            GeometryReader { geo in
-                detailColumn
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .onChange(of: geo.size.width, initial: true) { _, width in
-                        lastKnownWidth = width
-                        applyWidthRuleIfNeeded()
-                    }
-            }
+            detailColumn
         }
         .navigationSplitViewStyle(.balanced)
-        // Critical corrigido aqui: trocar de destino/painel (ex.: Sessões →
-        // Board tocando na sidebar, sem girar o aparelho) não muda
-        // `geo.size.width` por si só, então o `.onChange` acima não disparava
-        // e a regra dos 700 pt nunca rodava pra chave nova — o Board podia
-        // abrir preso em modo estreito (sem o botão de expandir que o
-        // Terminal tem, e sem saída num iPad só de toque). Reaplica aqui
-        // contra a última largura CONHECIDA (não uma medição nova), sob o
-        // MESMO guard de `applyWidthRuleIfNeeded()` — não há risco de aplicar
-        // duas vezes nem de sobrescrever a escolha manual da usuária no ⤡,
-        // porque o guard só deixa passar quando a chave é realmente nova.
-        .onChange(of: widthRuleKey) { _, _ in
-            widthRuleAppliedFor = nil
-            applyWidthRuleIfNeeded()
+        // Mede a proporção do split view sem afetar o layout — este
+        // `.background(GeometryReader { Color.clear })` é o padrão a usar
+        // (NÃO embrulhar a `NavigationSplitView` num `GeometryReader`, que
+        // participaria do layout). Antes o `GeometryReader` vivia dentro do
+        // `detail:` só pra medir a largura da coluna de detalhe pra regra dos
+        // 700 pt; com o critério agora sendo orientação, não sobrou nada que
+        // dependesse daquela medição — o `detailColumn` volta direto pro
+        // `detail:` acima.
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onChange(of: geo.size, initial: true) { _, size in
+                        lastKnownSize = size
+                        applyLayoutRuleIfNeeded()
+                    }
+            }
+        )
+        // Critical herdado da regra dos 700 pt (agora sobre orientação):
+        // trocar de destino ou de seleção (ex.: Sessões → Board tocando na
+        // sidebar, ou escolher uma sessão, sem girar o aparelho) não muda
+        // `geo.size` por si só, então o `.onChange` acima não disparava e a
+        // regra nunca rodava pra chave nova — o Board podia abrir preso em
+        // modo estreito (sem o botão de expandir que o Terminal tem, e sem
+        // saída num iPad só de toque). Reaplica aqui contra o último tamanho
+        // CONHECIDO (não uma medição nova), sob o MESMO guard de
+        // `applyLayoutRuleIfNeeded()` — não há risco de aplicar duas vezes
+        // nem de sobrescrever a escolha manual da usuária no ⤡, porque o
+        // guard só deixa passar quando a chave é realmente nova.
+        .onChange(of: layoutRuleKey) { _, _ in
+            layoutRuleAppliedFor = nil
+            applyLayoutRuleIfNeeded()
         }
         // Deep-link do push / Live Activity cai sempre em Sessões.
         .onChange(of: router.pendingSessionID) { _, id in
@@ -62,21 +93,21 @@ struct RootSplitView: View {
         }
     }
 
-    /// Único ponto que chama `nav.applyWidthRule` — os dois `.onChange`
-    /// acima (largura medida mudando, destino/painel mudando) convergem
-    /// aqui pra não duplicar o guard. `WidthRuleGate.shouldApply` é a
-    /// decisão pura (testada em `WidthRuleGateTests`, sem hosting de View);
-    /// aqui só decide COMO: marca `widthRuleAppliedFor` ANTES de chamar
-    /// `nav`, então se a própria regra colapsar a coluna e isso mudar
-    /// `geo.size.width` de novo, a segunda entrada com a mesma chave já
-    /// encontra o guard fechado — sem laço, sem reaplicar, sem sobrescrever
-    /// a escolha manual da usuária.
-    private func applyWidthRuleIfNeeded() {
-        guard let width = lastKnownWidth,
-              WidthRuleGate.shouldApply(appliedFor: widthRuleAppliedFor, key: widthRuleKey, width: width)
+    /// Único ponto que chama `nav.applyLayoutRule` — os dois `.onChange`
+    /// acima (tamanho medido mudando de verdade, ou destino/seleção mudando
+    /// sem que a orientação mude por si só) convergem aqui pra não duplicar
+    /// o guard. `LayoutRuleGate.shouldApply` é a decisão pura (testada em
+    /// `WidthRuleGateTests`, sem hosting de View); aqui só decide COMO: marca
+    /// `layoutRuleAppliedFor` ANTES de chamar `nav`, então se a própria regra
+    /// colapsar a coluna e isso mudar `geo.size` de novo, a segunda entrada
+    /// com a mesma chave já encontra o guard fechado — sem laço, sem
+    /// reaplicar, sem sobrescrever a escolha manual da usuária.
+    private func applyLayoutRuleIfNeeded() {
+        guard lastKnownSize != nil,
+              LayoutRuleGate.shouldApply(appliedFor: layoutRuleAppliedFor, key: layoutRuleKey)
         else { return }
-        widthRuleAppliedFor = widthRuleKey
-        nav.applyWidthRule(detailWidth: width)
+        layoutRuleAppliedFor = layoutRuleKey
+        nav.applyLayoutRule(isPortrait: isPortrait)
     }
 
     @ViewBuilder private var contentColumn: some View {
@@ -172,20 +203,23 @@ struct ArchivedTaskPane: View {
     }
 }
 
-/// Decide SE a regra dos 700 pt (`NavigationState.applyWidthRule`) deve
+/// Decide SE a regra de layout (`NavigationState.applyLayoutRule`) deve
 /// rodar agora — extraída do `RootSplitView` pra ser testável sem hosting de
-/// View (`WidthRuleGateTests`).
+/// View (`WidthRuleGateTests`). Renomeado de `WidthRuleGate` (regra dos 700
+/// pt): a decisão em si (guard de chave) não mudou, só o que vai na `key` —
+/// antes destino+painel, agora destino+orientação+seleção.
 ///
 /// `appliedFor` é a chave que já recebeu a regra (`nil` = nenhuma ainda);
-/// `key` é a chave corrente de destino/painel; `width` é a última largura
-/// CONHECIDA da coluna de detalhe (pode vir de uma medição nova ou de um
-/// cache — quem chama decide). Mesmo guard serve os dois gatilhos que podem
-/// levar a uma reaplicação: a largura medida mudando, e o destino/painel
-/// mudando sem que a largura mude por si só (o Critical desta correção).
-enum WidthRuleGate {
-    static func shouldApply(appliedFor: String?, key: String, width: CGFloat?) -> Bool {
-        guard let width, width > 0 else { return false }
-        return appliedFor != key
+/// `key` é a chave corrente de destino/orientação/seleção. A validade da
+/// medição (há um `lastKnownSize` conhecido?) é responsabilidade de quem
+/// chama (`applyLayoutRuleIfNeeded()`), não deste guard — aqui só a
+/// comparação de chaves. Mesmo guard serve os dois gatilhos que podem levar
+/// a uma reaplicação: o tamanho medido mudando de verdade (rotação), e
+/// destino/seleção mudando sem que a orientação mude por si só (o Critical
+/// original desta correção, herdado da regra dos 700 pt).
+enum LayoutRuleGate {
+    static func shouldApply(appliedFor: String?, key: String) -> Bool {
+        appliedFor != key
     }
 }
 
