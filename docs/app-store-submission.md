@@ -5,7 +5,7 @@ enviar o build pelo App Store Connect.
 
 ## Estado atual (já pronto no repo)
 
-- [x] **Versão / build:** `CFBundleShortVersionString 2.0.0`, `CFBundleVersion 10`
+- [x] **Versão / build:** `CFBundleShortVersionString 2.1.0`, `CFBundleVersion 12`
       (iOS, watchOS e widget alinhados — ver `app/project.yml`). Lembrete: subir o
       `CFBundleVersion` a cada upload novo ao TestFlight.
 - [x] **APNs de produção:** `aps-environment: production` no app e
