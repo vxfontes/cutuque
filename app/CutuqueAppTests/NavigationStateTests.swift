@@ -143,6 +143,60 @@ final class NavigationStateTests: XCTestCase {
         XCTAssertEqual(nav.columnVisibility, .all)
     }
 
+    /// Sair pra outro destino solta a sessão escolhida — voltar pras Sessões
+    /// tem que cair na LISTA, não na última sessão aberta. Sem isto, em
+    /// retrato, `layoutVisibility` colapsa pra `.detailOnly` na volta e a
+    /// lista some (reportado no teste da Vanessa no iPad).
+    func testTrocarDeDestinoLimpaASelecaoDeSessao() {
+        let nav = NavigationState()
+        nav.selection = makeSelection()
+
+        nav.destination = .board
+
+        XCTAssertNil(nav.selection)
+    }
+
+    /// E a volta pras Sessões continua sem seleção: é o cenário completo do
+    /// bug — Sessões (com uma aberta) → Board → Sessões deve mostrar a lista.
+    func testVoltarPrasSessoesDepoisDoBoardMostraALista() {
+        let nav = NavigationState()
+        nav.selection = makeSelection()
+        nav.destination = .board
+
+        nav.destination = .sessions
+        nav.applyLayoutRule(isPortrait: true)
+
+        XCTAssertNil(nav.selection)
+        XCTAssertEqual(nav.columnVisibility, .doubleColumn)
+    }
+
+    /// Reatribuir o MESMO destino não é troca de destino e não pode limpar
+    /// nada: a `List(selection:)` da barra lateral reescreve o destino a cada
+    /// toque, inclusive no item já ativo, e isso não pode fechar a sessão
+    /// que está aberta ao lado.
+    func testReatribuirOMesmoDestinoNaoLimpaASelecao() {
+        let nav = NavigationState()
+        nav.selection = makeSelection()
+
+        nav.destination = .sessions
+
+        XCTAssertNotNil(nav.selection)
+    }
+
+    /// A seleção do board sobrevive à troca de destino — só `selection`
+    /// participa da regra de layout, então só ela precisa cair.
+    func testTrocarDeDestinoNaoMexeNaSelecaoDoBoard() {
+        let nav = NavigationState()
+        nav.boardSelection = BoardTask(
+            id: "t1", title: "Card", column: "backlog", group: "g", session: "s"
+        )
+
+        nav.destination = .board
+        nav.destination = .sessions
+
+        XCTAssertEqual(nav.boardSelection?.id, "t1")
+    }
+
     func testBoardEmRetratoFicaDoubleColumn() {
         let nav = NavigationState()
         nav.destination = .board

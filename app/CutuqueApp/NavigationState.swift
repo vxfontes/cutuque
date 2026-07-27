@@ -87,7 +87,23 @@ struct IntentEvent: Equatable {
 /// com ela, o espelho do tmux de ser derrubado.
 @MainActor
 final class NavigationState: ObservableObject {
-    @Published var destination: PadDestination = .sessions
+    /// Trocar de destino LIMPA a seleção de sessão.
+    ///
+    /// Sem isto, sair pro Board e voltar pra Sessões caía direto na última
+    /// sessão aberta em vez da lista — em retrato a regra de layout colapsa
+    /// pra `.detailOnly` quando há seleção, então a lista simplesmente não
+    /// aparecia (reportado pela Vanessa testando no iPad).
+    ///
+    /// Só `selection` é limpa, e não `boardSelection`/`archiveSelection`,
+    /// porque só ela participa de `layoutVisibility` — deixar um card do
+    /// board aberto pra quando você voltar é lembrança útil; deixar uma
+    /// sessão selecionada é esconder a lista.
+    @Published var destination: PadDestination = .sessions {
+        didSet {
+            guard oldValue != destination else { return }
+            selection = nil
+        }
+    }
     @Published var selection: DetailSelection?
     @Published var paneMode: PaneMode = .chat
     @Published var columnVisibility: NavigationSplitViewVisibility = .all
