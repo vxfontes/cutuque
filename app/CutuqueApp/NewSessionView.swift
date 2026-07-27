@@ -128,7 +128,11 @@ struct NewSessionView: View {
     // MARK: Seções do formulário
 
     // Alvos planejados mas ainda não disponíveis no hub (aparecem como "em breve").
-    private let plannedMachines = ["desktop-win"]
+    // O nome tem que bater com o alvo do hub (`CUTUQUE_SSH_TARGETS=...,windows=...`,
+    // ver docs/13-alvo-windows-wsl2.md): assim que o hub passar a listar `windows`
+    // em /targets, o filtro de `comingSoon` o remove daqui sozinho e ele aparece no
+    // Picker como qualquer outra máquina — nenhuma mudança de app é necessária.
+    private let plannedMachines = ["windows"]
 
     private var comingSoon: [String] {
         plannedMachines.filter { !machines.contains($0) }

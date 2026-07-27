@@ -9,4 +9,12 @@ final class SmokeTests: XCTestCase {
             ["a_fazer", "em_progresso", "feito", "em_revisao", "concluido"]
         )
     }
+
+    /// O alvo Windows entra pelo nome curto `windows` (o mesmo de
+    /// `CUTUQUE_SSH_TARGETS`) e precisa continuar caindo no ícone de PC —
+    /// o `switch` casa por substring, não por nome exato.
+    func testAlvoWindowsUsaIconeDePC() {
+        XCTAssertEqual(machineSymbol("windows"), "pc")
+        XCTAssertEqual(machineSymbol("Windows"), "pc")
+    }
 }
