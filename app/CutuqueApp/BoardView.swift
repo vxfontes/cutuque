@@ -600,8 +600,60 @@ struct BoardTaskDetailView: View {
         if let onClose { onClose() } else { dismiss() }
     }
 
+    /// Cabeçalho com título e ✕, DENTRO do conteúdo — não numa toolbar.
+    ///
+    /// Existe porque o `.inspector` do iPadOS não renderiza a barra de
+    /// navegação do `NavigationStack` que ele apresenta: o botão "Fechar" do
+    /// `.toolbar` abaixo existe, é montado, e simplesmente não chega à tela.
+    /// Verificado no simulador do iPad — o card abria sem título, sem ✕ e sem
+    /// gesto de saída, e não havia como fechá-lo. No iPhone o mesmo detalhe é
+    /// um sheet, a barra aparece e o "Fechar" sempre funcionou; por isso o
+    /// furo passou despercebido até a Vanessa testar no iPad.
+    ///
+    /// Só entra quando `onClose != nil`, que é exatamente o caso do inspector
+    /// (os outros dois usos — sheet do arquivo semanal e `ArchivedTaskPane` na
+    /// coluna de detalhe — passam `nil` e ficam como estavam).
+    private var inspectorHeader: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(live.title)
+                .font(.headline)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+            Button(action: close) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title3)
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Fechar o card")
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+    }
+
     var body: some View {
         NavigationStack {
+            VStack(spacing: 0) {
+                if onClose != nil {
+                    inspectorHeader
+                    Divider()
+                }
+                detailList
+            }
+            .navigationTitle(live.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Fechar") { close() } } }
+            .alert("Apagar card?", isPresented: $showDeleteConfirm) {
+                Button("Cancelar", role: .cancel) {}
+                Button("Apagar", role: .destructive) { Task { await model.delete(live); close() } }
+            } message: {
+                Text("\"\(live.title)\" será apagado. Esta ação não pode ser desfeita.")
+            }
+        }
+    }
+
+    private var detailList: some View {
             List {
                 Section {
                     HStack(spacing: 6) {
@@ -697,16 +749,6 @@ struct BoardTaskDetailView: View {
                     }
                 }
             }
-            .navigationTitle(live.title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Fechar") { close() } } }
-            .alert("Apagar card?", isPresented: $showDeleteConfirm) {
-                Button("Cancelar", role: .cancel) {}
-                Button("Apagar", role: .destructive) { Task { await model.delete(live); close() } }
-            } message: {
-                Text("\"\(live.title)\" será apagado. Esta ação não pode ser desfeita.")
-            }
-        }
     }
 
     @ViewBuilder
