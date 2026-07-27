@@ -32,13 +32,20 @@ enum SessionDetailPaneLogic {
     /// compartilhado em `NavigationState`, então sem isso a sessão ao vivo
     /// herdaria o painel da anterior.
     ///
-    /// - **Tem info** (entrada ao vivo do tmux): abre SEMPRE em `.info`, a
-    ///   pedido da usuária ("antes de abrir assim mostra as infos e tudo
-    ///   mais") — é a paridade com o iPhone, onde tocar numa linha ao vivo
-    ///   abre `LiveDetailView` e o terminal vem de um botão. Vale a cada
-    ///   seleção, não só na primeira: o pane é remontado por sessão
-    ///   (`.id(selection)` em `RootSplitView`), então escolher outra sessão ao
-    ///   vivo volta pras informações dela.
+    /// - **Tem info** (entrada ao vivo do tmux): abre SEMPRE em `.terminal`.
+    ///   Vale a cada seleção, não só na primeira: o pane é remontado por
+    ///   sessão (`.id(selection)` em `RootSplitView`), então escolher outra
+    ///   sessão ao vivo volta pro terminal dela.
+    ///
+    ///   Isto já foi `.info` — a pedido da própria usuária ("antes de abrir
+    ///   assim mostra as infos e tudo mais"), pela paridade com o iPhone,
+    ///   onde tocar numa linha ao vivo abre `LiveDetailView` e o terminal vem
+    ///   de um botão. Ela testou no iPad e mudou de ideia (2026-07-27: "a
+    ///   tela de terminal deve ser a primeira a abrir e info deve ser a tela
+    ///   da direita no seletor"). No iPad o terminal cabe inteiro ao lado da
+    ///   lista, então a escada de toques que fazia sentido no telefone só
+    ///   atrasa aqui. A informação não sumiu: virou a aba da direita, e o ✕
+    ///   do terminal continua caindo nela.
     /// - **Sem chat e sem info**: só sobra terminal.
     /// - **Com chat**: mantém o que o usuário já escolhia entre chat e
     ///   terminal; `.info` (herdado de uma seleção ao vivo anterior) não
@@ -48,7 +55,7 @@ enum SessionDetailPaneLogic {
                               current: PaneMode) -> PaneMode? {
         let required: PaneMode
         if hasInfo {
-            required = .info
+            required = .terminal
         } else if !hasChat {
             required = .terminal
         } else if !hasTerminal || current == .info {
@@ -57,6 +64,27 @@ enum SessionDetailPaneLogic {
             return nil
         }
         return required == current ? nil : required
+    }
+
+    /// Os segmentos do seletor do topo, NA ORDEM em que aparecem. Vazio
+    /// quando não há o que alternar (sessão do registry fora do tmux) — e aí
+    /// nenhum `ToolbarItem` entra em `.principal`, porque um item vazio ali
+    /// ocuparia o lugar do título.
+    ///
+    /// A ordem não é decorativa: a primeira aba é a que abre. Numa entrada ao
+    /// vivo é `Terminal | Info` (ver `entryPaneMode`), numa sessão do registry
+    /// que roda no tmux continua `Chat | Terminal`.
+    ///
+    /// Esta função e `entryPaneMode` leem os mesmos três "tem/não tem" e
+    /// precisam concordar: se divergirem, o segmentado abre sem nenhum
+    /// segmento marcado. Por isso as duas moram aqui, lado a lado, e os
+    /// testes cobrem o par.
+    static func selectorSegments(hasChat: Bool, hasTerminal: Bool,
+                                 hasInfo: Bool) -> [(label: String, mode: PaneMode)] {
+        guard hasTerminal else { return [] }
+        if hasInfo { return [("Terminal", .terminal), ("Info", .info)] }
+        if hasChat { return [("Chat", .chat), ("Terminal", .terminal)] }
+        return []
     }
 
     /// Único título de navegação do pane, computado a partir de `showsChat` —

@@ -111,8 +111,8 @@ struct SessionDetailPane: View {
         // escreve nela, sem concorrência a resolver.
         .onPreferenceChange(LiveChatTitleKey.self) { liveChatTitle = $0 }
         .toolbar {
-            if let first = selectorFirstPane {
-                ToolbarItem(placement: .principal) { selector(first: first) }
+            if !selectorSegments.isEmpty {
+                ToolbarItem(placement: .principal) { selector(segments: selectorSegments) }
             }
             if liveEntry != nil, showsTerminal {
                 ToolbarItem(placement: .topBarTrailing) { closeTerminalButton }
@@ -121,7 +121,7 @@ struct SessionDetailPane: View {
         }
         .onAppear {
             // Onde este painel abre: seleção sem chat não pode mostrar chat, e
-            // entrada ao vivo abre nas informações. Decisão pura (testável sem
+            // entrada ao vivo abre no terminal. Decisão pura (testável sem
             // hosting de View) em `SessionDetailPaneLogic.entryPaneMode`.
             if let entry = SessionDetailPaneLogic.entryPaneMode(
                 hasChat: session != nil, hasTerminal: terminal != nil,
@@ -132,26 +132,20 @@ struct SessionDetailPane: View {
         }
     }
 
-    /// A ABA DA ESQUERDA do seletor do topo — a da direita é sempre Terminal.
-    /// `Chat` numa sessão do registry que roda no tmux, `Info` numa entrada ao
-    /// vivo. `nil` quando não há o que alternar (sessão fora do tmux), e aí
-    /// não entra `ToolbarItem` nenhum em `.principal`: um item vazio ali
-    /// ocuparia o lugar do título.
-    ///
-    /// Espelha a disponibilidade que `SessionDetailPaneLogic.entryPaneMode`
-    /// usa — as duas leem os mesmos três "tem/não tem". Se divergirem, o
-    /// segmentado abre sem nenhum segmento marcado.
-    private var selectorFirstPane: (label: String, mode: PaneMode)? {
-        guard terminal != nil else { return nil }
-        if liveEntry != nil { return ("Info", .info) }
-        if session != nil { return ("Chat", .chat) }
-        return nil
+    /// As abas do seletor do topo, na ordem. Decisão pura (testável sem
+    /// hosting de View) em `SessionDetailPaneLogic.selectorSegments`.
+    private var selectorSegments: [(label: String, mode: PaneMode)] {
+        SessionDetailPaneLogic.selectorSegments(
+            hasChat: session != nil, hasTerminal: terminal != nil,
+            hasInfo: liveEntry != nil
+        )
     }
 
-    private func selector(first: (label: String, mode: PaneMode)) -> some View {
+    private func selector(segments: [(label: String, mode: PaneMode)]) -> some View {
         Picker("Painel", selection: $nav.paneMode) {
-            Text(first.label).tag(first.mode)
-            Text("Terminal").tag(PaneMode.terminal)
+            ForEach(segments, id: \.mode) { segment in
+                Text(segment.label).tag(segment.mode)
+            }
         }
         .pickerStyle(.segmented)
         .frame(maxWidth: 220)

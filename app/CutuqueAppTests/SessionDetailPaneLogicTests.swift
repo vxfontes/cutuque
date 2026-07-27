@@ -90,24 +90,24 @@ final class SessionDetailPaneLogicTests: XCTestCase {
             hasChat: true, hasTerminal: false, hasInfo: false, current: .chat))
     }
 
-    /// O pedido da usuária: entrada ao vivo abre nas INFORMAÇÕES, como no
-    /// iPhone — mesmo vindo do terminal de outra sessão. `paneMode` é estado
-    /// compartilhado, então sem isto a sessão ao vivo herdaria o painel da
-    /// anterior e cairia direto no terminal, que é justamente o que ela
-    /// reclamou.
-    func testEntradaAoVivoAbreNasInformacoes() {
+    /// Entrada ao vivo abre no TERMINAL — mesmo herdando `.chat` ou `.info` de
+    /// outra sessão, já que `paneMode` é estado compartilhado. Isto já foi
+    /// `.info` (paridade com o iPhone); a usuária testou no iPad e pediu o
+    /// contrário em 2026-07-27, ver `entryPaneMode`.
+    func testEntradaAoVivoAbreNoTerminal() {
         XCTAssertEqual(SessionDetailPaneLogic.entryPaneMode(
-            hasChat: false, hasTerminal: true, hasInfo: true, current: .terminal), .info)
+            hasChat: false, hasTerminal: true, hasInfo: true, current: .info), .terminal)
         XCTAssertEqual(SessionDetailPaneLogic.entryPaneMode(
-            hasChat: false, hasTerminal: true, hasInfo: true, current: .chat), .info)
+            hasChat: false, hasTerminal: true, hasInfo: true, current: .chat), .terminal)
     }
 
-    /// Já nas informações, nada a corrigir — a função não pode devolver um
-    /// valor "igual ao atual", senão o `onAppear` do pane escreveria em
-    /// `nav.paneMode` a cada montagem à toa.
-    func testJaNasInformacoesNaoForcaNada() {
+    /// Já no terminal, nada a corrigir — a função não pode devolver um valor
+    /// "igual ao atual", senão o `onAppear` do pane escreveria em
+    /// `nav.paneMode` a cada montagem à toa. É o que preserva o ✕ do terminal:
+    /// ele leva pra `.info`, e nada remonta o pane pra desfazer isso.
+    func testJaNoTerminalNaoForcaNada() {
         XCTAssertNil(SessionDetailPaneLogic.entryPaneMode(
-            hasChat: false, hasTerminal: true, hasInfo: true, current: .info))
+            hasChat: false, hasTerminal: true, hasInfo: true, current: .terminal))
     }
 
     /// O caminho de volta: sessão do registry NÃO tem informações ao vivo, e
@@ -122,6 +122,65 @@ final class SessionDetailPaneLogicTests: XCTestCase {
         // terminal, não chat.
         XCTAssertEqual(SessionDetailPaneLogic.entryPaneMode(
             hasChat: false, hasTerminal: true, hasInfo: false, current: .info), .terminal)
+    }
+
+    // MARK: - selectorSegments
+
+    /// O pedido de 2026-07-27: numa entrada ao vivo, Terminal à ESQUERDA e
+    /// Info à direita. A ordem é o contrato — a primeira aba é a que abre, e
+    /// `entryPaneMode` tem que concordar (ver o teste do par, abaixo).
+    func testEntradaAoVivoTemTerminalDepoisInfo() {
+        let segments = SessionDetailPaneLogic.selectorSegments(
+            hasChat: false, hasTerminal: true, hasInfo: true)
+        XCTAssertEqual(segments.map(\.label), ["Terminal", "Info"])
+        XCTAssertEqual(segments.map(\.mode), [.terminal, .info])
+    }
+
+    /// Sessão do registry rodando no tmux: `Chat | Terminal`, como sempre foi.
+    func testSessaoDoRegistryNoTmuxTemChatDepoisTerminal() {
+        let segments = SessionDetailPaneLogic.selectorSegments(
+            hasChat: true, hasTerminal: true, hasInfo: false)
+        XCTAssertEqual(segments.map(\.label), ["Chat", "Terminal"])
+        XCTAssertEqual(segments.map(\.mode), [.chat, .terminal])
+    }
+
+    /// Sem terminal não há o que alternar — e o seletor vazio importa: um
+    /// `ToolbarItem` em `.principal` sem conteúdo ocuparia o lugar do título.
+    func testSessaoForaDoTmuxNaoTemSeletor() {
+        XCTAssertTrue(SessionDetailPaneLogic.selectorSegments(
+            hasChat: true, hasTerminal: false, hasInfo: false).isEmpty)
+    }
+
+    /// Só terminal (sem chat e sem info) também não alterna nada.
+    func testSoTerminalNaoTemSeletor() {
+        XCTAssertTrue(SessionDetailPaneLogic.selectorSegments(
+            hasChat: false, hasTerminal: true, hasInfo: false).isEmpty)
+    }
+
+    /// O par tem que concordar: a aba que abre (`entryPaneMode`) precisa
+    /// existir entre os segmentos, senão o segmentado aparece sem nada
+    /// marcado. Cobre as oito combinações dos três "tem/não tem" × o
+    /// `paneMode` herdado.
+    func testAAbaQueAbreSempreExisteNoSeletor() {
+        for hasChat in [true, false] {
+            for hasTerminal in [true, false] {
+                for hasInfo in [true, false] {
+                    let segments = SessionDetailPaneLogic.selectorSegments(
+                        hasChat: hasChat, hasTerminal: hasTerminal, hasInfo: hasInfo)
+                    guard !segments.isEmpty else { continue }
+                    for current in PaneMode.allCases {
+                        let opens = SessionDetailPaneLogic.entryPaneMode(
+                            hasChat: hasChat, hasTerminal: hasTerminal,
+                            hasInfo: hasInfo, current: current) ?? current
+                        XCTAssertTrue(
+                            segments.contains { $0.mode == opens },
+                            "abre em \(opens) mas o seletor só tem \(segments.map(\.mode)) "
+                            + "(chat: \(hasChat), terminal: \(hasTerminal), info: \(hasInfo), atual: \(current))"
+                        )
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - paneTitle
