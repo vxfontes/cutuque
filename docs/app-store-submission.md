@@ -5,9 +5,15 @@ enviar o build pelo App Store Connect.
 
 ## Estado atual (já pronto no repo)
 
-- [x] **Versão / build:** `CFBundleShortVersionString 2.1.0`, `CFBundleVersion 12`
+- [x] **Versão / build:** `CFBundleShortVersionString 2.2.0`, `CFBundleVersion 14`
       (iOS, watchOS e widget alinhados — ver `app/project.yml`). Lembrete: subir o
-      `CFBundleVersion` a cada upload novo ao TestFlight.
+      `CFBundleVersion` a cada upload novo ao TestFlight — o número precisa ser
+      único **dentro do trem daquela versão curta**, não globalmente.
+      Estado no ASC em 2026-07-27: **2.2.0 build 12 já está no TestFlight**
+      ("Pronta para envio"); 2.1.0 tem os builds 12 e 13. O `project.yml` está em
+      14 para o próximo upload de 2.2.0 não colidir. Na página da versão 2.2.0 é
+      preciso trocar a compilação anexada (vinha com a **1 / 1.0**, resíduo antigo)
+      antes de clicar em "Adicionar para revisão".
 - [x] **APNs de produção:** `aps-environment: production` no app e
       `CUTUQUE_APNS_HOST=api.push.apple.com` no hub (config/hub.env do macmini).
       Requer chave `.p8` de produção e que o device (build TestFlight) registre um
@@ -24,20 +30,66 @@ enviar o build pelo App Store Connect.
       pequenos reusam os PNGs do iPhone — mesma contagem de pixels).
 - [x] **Sem SDKs de tracking** (nenhum Firebase/Analytics/Crashlytics/etc.).
 
-## ⚠️ Bloqueio conhecido — App Transport Security
+## App Transport Security — decidido em 2026-07-27: manter e justificar
 
-`app/project.yml` usa hoje `NSAppTransportSecurity → NSAllowsArbitraryLoads: true`
-(HTTP aberto, para o hub em IP privado). A App Review **exige justificativa** para
-`NSAllowsArbitraryLoads` e pode rejeitar. Além disso, `NSAllowsArbitraryLoads`
-coexistindo com `NSAllowsLocalNetworking` faz o iOS ignorar o primeiro, e a faixa
-CGNAT do Tailscale (100.64/10) não é coberta pela exceção de rede local (erro -1022).
+`app/project.yml` usa `NSAppTransportSecurity → NSAllowsArbitraryLoads: true`, e
+**só isso** (não há `NSAllowsLocalNetworking` junto — se houvesse, o iOS ignoraria
+o ArbitraryLoads e o HTTP pro hub quebraria com -1022, porque a faixa CGNAT do
+Tailscale (100.64/10) não conta como rede local).
 
-Opções (escolher antes de enviar):
-1. **HTTPS no hub** (TLS, ex.: cert do Tailscale/`tailscale cert`) e remover o
-   ArbitraryLoads — solução mais limpa e sem risco na review.
-2. **Exceção por domínio** em `NSExceptionDomains` (requer nome DNS, não IP puro).
-3. **Manter ArbitraryLoads** e justificar na review (comunicação só com hub do
-   próprio usuário em rede privada) — maior risco de idas e vindas.
+**Decisão: fica como está para a 2.2.0.** As alternativas foram avaliadas e nenhuma
+serve ao produto hoje:
+
+1. **HTTPS no hub** (`tailscale cert`) — a mais limpa, mas obriga o hub a ganhar TLS,
+   o app a migrar de IP para nome MagicDNS, e **todo usuário** a ter Tailscale com
+   MagicDNS ligado. Quem roda o hub só na LAN ficaria de fora. É projeto próprio,
+   não ajuste pré-review. Fica como melhoria pós-lançamento.
+2. **Exceção por domínio** (`NSExceptionDomains`) — exige nome DNS. O hub é IP puro.
+   Não se aplica.
+3. **Rede local** (`NSAllowsLocalNetworking`) — não cobre 100.64/10. Não resolve.
+
+Para falar com um IP arbitrário na rede do próprio usuário, `NSAllowsArbitraryLoads`
+é o único mecanismo que funciona. A mitigação é **explicar bem**, em dois lugares:
+
+- na **descrição** da App Store, o parágrafo que deixa claro que o Cutuque é um
+  cliente e precisa do hub que o próprio usuário roda;
+- nas **Notas** para a equipe de revisão (texto pronto em "Notas de revisão" abaixo).
+
+## ⚠️ Seções obrigatórias do App Store Connect
+
+Levantado em 2026-07-27, depois de um `Adicionar para revisão` falhar com o erro
+genérico **"Ocorreu um erro. Tente novamente mais tarde."** — o ASC valida tudo de
+uma vez e não diz o que faltou. Eram quatro seções em branco:
+
+- [ ] **URL da Política de Privacidade** (Privacidade do app) — obrigatória, precisa
+      ser pública. Usar o `PRIVACY.md` na raiz do repo:
+      `https://github.com/vxfontes/cutuque/blob/master/PRIVACY.md`
+- [ ] **Privacy Nutrition Label** (Privacidade do app) — declarar **"Data Not
+      Collected"**, consistente com o `PrivacyInfo.xcprivacy`.
+- [ ] **Classificações etárias** (Informações do app) — responder o questionário;
+      tudo "Nenhum".
+- [ ] **Preço e disponibilidade** (Preços e disponibilidade) — definir preço e em
+      quais países. O método de distribuição **não pode ser alterado depois de
+      aprovado**.
+
+## Notas de revisão (colar em Revisão de apps → Notas)
+
+> O Cutuque é um app **cliente**. Ele não tem servidor próprio e não se conecta a
+> nenhum serviço nosso: ele fala exclusivamente com o "hub" Cutuque, um servidor de
+> código aberto que o próprio usuário instala e opera na máquina dele
+> (github.com/vxfontes/cutuque). O endereço e o token são digitados pelo usuário nos
+> Ajustes do app.
+>
+> **Sobre o NSAllowsArbitraryLoads:** o hub roda na rede privada do usuário e é
+> alcançado por endereço IP (LAN ou Tailscale, faixa 100.64/10). Como não existe nome
+> DNS estável, não é possível usar NSExceptionDomains; e NSAllowsLocalNetworking não
+> cobre a faixa CGNAT do Tailscale. A exceção é o único mecanismo que permite ao app
+> conversar com o servidor do próprio usuário. Nenhum tráfego sai da rede do usuário
+> e nenhum dado é enviado ao desenvolvedor.
+>
+> **Para testar:** o app precisa de um hub rodando para mostrar sessões reais. Sem
+> hub configurado, ele abre normalmente na tela de Ajustes, com a tela "Como
+> funciona" explicando a instalação. Não há login nem conta.
 
 ## Checklist antes de enviar
 
