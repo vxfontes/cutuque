@@ -18,16 +18,18 @@ struct BoardFilterList: View {
     /// `isPad: true` é sempre verdade aqui, ao contrário do `BoardView` que
     /// também vive no `RootTabView` do iPhone.
     ///
-    /// `showsOwnFilterAndSearch` responde "o `BoardView` é quem mostra a
-    /// PRÓPRIA busca agora?" — e este `BoardFilterList` é o dono visível
-    /// exatamente quando a resposta é `false` (mesma função pura testada em
-    /// `BoardMoveLogicTests`, só negada): os dois ramos usam o MESMO
-    /// predicado, então nunca os dois tratam `.focusSearch` ao mesmo tempo, e
-    /// nunca os dois deixam de tratar (rodada 3 da revisão da Task 16).
-    private var showsOwnFilterAndSearch: Bool {
-        BoardLayout.showsOwnFilterAndSearch(isPad: true,
-                                             horizontalSizeClassIsCompact: horizontalSizeClass == .compact,
-                                             columnVisibilityIsDetailOnly: nav.columnVisibility == .detailOnly)
+    /// `filterListHandlesFocusSearch` responde "sou EU (`BoardFilterList`)
+    /// quem trata `.focusSearch` agora?" — função pura própria em
+    /// `BoardLayout`, definida como a negação de `showsOwnFilterAndSearch`
+    /// (mesmo predicado que o `BoardView` usa, testada em
+    /// `BoardMoveLogicTests`): os dois ramos usam o MESMO par de funções
+    /// complementares, então nunca os dois tratam `.focusSearch` ao mesmo
+    /// tempo, e nunca os dois deixam de tratar (rodada 3 da revisão da
+    /// Task 16; extração pro nome próprio na correção Minor seguinte).
+    private var filterListHandlesFocusSearch: Bool {
+        BoardLayout.filterListHandlesFocusSearch(
+            horizontalSizeClassIsCompact: horizontalSizeClass == .compact,
+            columnVisibilityIsDetailOnly: nav.columnVisibility == .detailOnly)
     }
 
     var body: some View {
@@ -77,15 +79,14 @@ struct BoardFilterList: View {
         }
         // Só consome o que trata — o board (coluna de detalhe) está vivo junto
         // e precisa receber o ⌘← / ⌘→. `.focusSearch` só é tratado aqui quando
-        // ESTE `BoardFilterList` é quem está visível de fato ao lado do board
-        // (`!showsOwnFilterAndSearch`) — do contrário quem foca é a busca
-        // própria da `BoardView` (achado da rodada 3: os dois ramos precisam
-        // ser mutuamente exclusivos por construção, nunca os dois tratando,
-        // nunca os dois deixando passar).
+        // `filterListHandlesFocusSearch` é `true` — do contrário quem foca é a
+        // busca própria da `BoardView` (achado da rodada 3: os dois ramos
+        // precisam ser mutuamente exclusivos por construção, nunca os dois
+        // tratando, nunca os dois deixando passar).
         .onChange(of: nav.intent) { _, intent in
             switch intent {
             case .focusSearch:
-                guard !showsOwnFilterAndSearch else { return }
+                guard filterListHandlesFocusSearch else { return }
                 searchFocused = true
             default:
                 return

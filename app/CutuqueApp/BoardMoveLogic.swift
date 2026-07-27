@@ -133,4 +133,21 @@ enum BoardLayout {
                                          columnVisibilityIsDetailOnly: Bool) -> Bool {
         !isPad || horizontalSizeClassIsCompact || columnVisibilityIsDetailOnly
     }
+
+    /// O outro lado do contrato de `.focusSearch` mutuamente exclusivo: quem
+    /// trata é `BoardFilterList` exatamente quando `BoardView` NÃO trata a
+    /// própria busca — mesmo predicado de `showsOwnFilterAndSearch`, negado,
+    /// com nome próprio pra não deixar a negação implícita espalhada por
+    /// `BoardFilterList.swift`.
+    ///
+    /// Sem `isPad`: `BoardFilterList` só é instanciado dentro do
+    /// `RootSplitView`, que só é montado no ramo `.pad` de `CutuqueApp.swift`
+    /// — `isPad` já é sempre `true` ali, então a assinatura nem oferece o
+    /// parâmetro (evita a chance de alguém passar `false` por engano).
+    static func filterListHandlesFocusSearch(horizontalSizeClassIsCompact: Bool,
+                                              columnVisibilityIsDetailOnly: Bool) -> Bool {
+        !showsOwnFilterAndSearch(isPad: true,
+                                  horizontalSizeClassIsCompact: horizontalSizeClassIsCompact,
+                                  columnVisibilityIsDetailOnly: columnVisibilityIsDetailOnly)
+    }
 }

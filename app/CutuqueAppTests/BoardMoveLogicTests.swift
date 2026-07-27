@@ -260,28 +260,54 @@ final class BoardMoveLogicTests: XCTestCase {
 
     /// `BoardView` trata `.focusSearch` quando é dono
     /// (`showsOwnFilterAndSearch` true); `BoardFilterList` (que só existe no
-    /// iPad, dentro do `RootSplitView`) trata exatamente quando NÃO é —
-    /// mesma função pura, um lado negando o outro. Trava aqui, em teste puro,
+    /// iPad, dentro do `RootSplitView`) trata exatamente quando
+    /// `filterListHandlesFocusSearch` é `true`. Trava aqui, em teste puro,
     /// que os dois nunca concordam: nunca os dois tratam ao mesmo tempo (⌘F
     /// focaria um campo invisível e comeria o intent do dono de verdade),
     /// nunca os dois deixam passar (o intent travaria até outro resetar a
     /// comparação do `Equatable`, já que `.onChange` só dispara na transição).
     ///
-    /// O que isto NÃO prova: que `BoardView.swift` e `BoardFilterList.swift`
-    /// de fato chamam esta função com esses parâmetros e consomem só no ramo
-    /// correto — isso foi conferido por leitura de código (ver relatório),
-    /// não por este teste, que só trava o contrato da função pura em si.
-    func testExatamenteUmDosDoisConsumidoresTrataFocusSearchNoIPad() {
-        for compact in [false, true] {
-            for detailOnly in [false, true] {
-                let boardViewTrata = BoardLayout.showsOwnFilterAndSearch(
-                    isPad: true,
-                    horizontalSizeClassIsCompact: compact,
-                    columnVisibilityIsDetailOnly: detailOnly)
-                let boardFilterListTrata = !boardViewTrata
-                XCTAssertTrue(boardViewTrata != boardFilterListTrata,
-                              "exatamente um deve tratar: compact=\(compact) detailOnly=\(detailOnly)")
-            }
+    /// IMPORTANTE (Minor da rodada 3): a versão anterior deste teste derivava
+    /// `boardFilterListTrata` como `!boardViewTrata` — comparar `f(x) !=
+    /// !f(x)` é `a != !a`, tautologia pra qualquer `Bool`, sempre verdadeira.
+    /// Um `guard` invertido em `BoardFilterList.swift` (ou em
+    /// `filterListHandlesFocusSearch`) quebraria a exclusão mútua de verdade
+    /// e este teste continuaria verde. A correção não é só nomear a negação
+    /// (`BoardLayout.filterListHandlesFocusSearch`, ver `BoardMoveLogic.swift`)
+    /// — é parar de comparar as duas funções ENTRE si e comparar CADA UMA
+    /// contra um valor esperado escrito à mão, derivado da regra em prosa
+    /// (não do código): com `isPad: true` fixo, o board mostra a própria
+    /// busca quando `compact || detailOnly`; o `BoardFilterList` trata quando
+    /// `!compact && !detailOnly`. Mesmo padrão de
+    /// `testTabelaVerdadeCompletaDosTresEixos` acima, aplicado às 4
+    /// combinações que sobram quando `isPad` já está fixo em `true`.
+    func testExatamenteUmDosDoisConsumidoresTrataFocusSearchNoIPadValoresHardcoded() {
+        // (compact, detailOnly) -> (esperado p/ BoardView, esperado p/ BoardFilterList)
+        // Nenhum dos dois lados é derivado do outro nem da função sob teste.
+        let casos: [(compact: Bool, detailOnly: Bool, boardViewEsperado: Bool, filterListEsperado: Bool)] = [
+            (false, false, false, true),   // iPad largo, tudo visível — BoardFilterList é quem trata
+            (false, true,  true,  false),  // regra dos 700pt colapsou — BoardView é quem trata
+            (true,  false, true,  false),  // Slide Over/Split View mínimo — BoardView é quem trata
+            (true,  true,  true,  false),  // compacto E detailOnly — BoardView é quem trata
+        ]
+        for caso in casos {
+            let boardViewTrata = BoardLayout.showsOwnFilterAndSearch(
+                isPad: true,
+                horizontalSizeClassIsCompact: caso.compact,
+                columnVisibilityIsDetailOnly: caso.detailOnly)
+            let boardFilterListTrata = BoardLayout.filterListHandlesFocusSearch(
+                horizontalSizeClassIsCompact: caso.compact,
+                columnVisibilityIsDetailOnly: caso.detailOnly)
+
+            XCTAssertEqual(boardViewTrata, caso.boardViewEsperado,
+                            "BoardView: compact=\(caso.compact) detailOnly=\(caso.detailOnly)")
+            XCTAssertEqual(boardFilterListTrata, caso.filterListEsperado,
+                            "BoardFilterList: compact=\(caso.compact) detailOnly=\(caso.detailOnly)")
+
+            // E, com os dois lados travados contra valores hardcoded acima,
+            // a exclusão mútua real (não tautológica) segue de graça:
+            XCTAssertTrue(boardViewTrata != boardFilterListTrata,
+                          "exatamente um deve tratar: compact=\(caso.compact) detailOnly=\(caso.detailOnly)")
         }
     }
 }
