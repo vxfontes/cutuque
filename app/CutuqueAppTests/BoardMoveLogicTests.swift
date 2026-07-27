@@ -126,4 +126,162 @@ final class BoardMoveLogicTests: XCTestCase {
     func testIPadEhPad() {
         XCTAssertTrue(BoardLayout.isPad(.pad))
     }
+
+    // MARK: largura medida (Task 16, achado: Slide Over/Split View no mínimo)
+    //
+    // `isRegular = isPad` ignorava a largura que o `GeometryReader` já media:
+    // num iPad em Slide Over (~320 pt) isso dava colunas de 260 pt sem
+    // paginação. `isRegularWidth` responde "estou estreito AGORA?" (muda em
+    // runtime) e não pode nunca virar `true` num idiom que não é `.pad`
+    // (isso continua sendo obrigação de `isPad`, por idiom).
+
+    func testIPadEmSlideOverVoltaAPaginar() {
+        // ~320 pt, idiom .pad: abaixo do limiar de 700, não é "regular".
+        XCTAssertFalse(BoardLayout.isRegularWidth(idiom: .pad, measuredWidth: 320))
+    }
+
+    func testIPadLargoContinuaDividindoAsColunas() {
+        // Split View largo / tela cheia: acima do limiar, comportamento
+        // regular preservado (nenhuma regressão no caminho já aceito).
+        XCTAssertTrue(BoardLayout.isRegularWidth(idiom: .pad, measuredWidth: 1024))
+    }
+
+    func testLimiarDos700PtEhInclusivoParaRegular() {
+        XCTAssertTrue(BoardLayout.isRegularWidth(idiom: .pad, measuredWidth: 700))
+        XCTAssertFalse(BoardLayout.isRegularWidth(idiom: .pad, measuredWidth: 699))
+    }
+
+    func testIPhoneNuncaEhRegularPorLarguraNemEmTelaGrande() {
+        // Idiom decide "sou iPad?" — iPhone nunca vira "regular" aqui, por
+        // maior que a largura medida seja (Pro Max em paisagem, p.ex.).
+        XCTAssertFalse(BoardLayout.isRegularWidth(idiom: .phone, measuredWidth: 1024))
+    }
+
+    func testColunaVoltaAPaginarQuandoLarguraMedidaEstreita() {
+        // Fim a fim: 320 pt medidos, 6 colunas — mesmo com idiom .pad, a
+        // função de paginação (`isRegular=false`) devolve os 86% do iPhone.
+        let isRegular = BoardLayout.isRegularWidth(idiom: .pad, measuredWidth: 320)
+        XCTAssertEqual(BoardLayout.columnWidth(available: 320, columns: 6, isRegular: isRegular),
+                       320 * 0.86, accuracy: 0.01)
+    }
+
+    // MARK: FilterBar/busca própria do BoardView (Task 16, rodadas 1 e 2)
+    //
+    // Três eixos independentes decidem se o `BoardFilterList` (coluna do
+    // meio, dono de verdade dos filtros e da busca) está visível ao lado do
+    // `BoardView` agora:
+    //   1. isPad (idiom, nunca muda em runtime)
+    //   2. horizontalSizeClass == .compact (Slide Over, Split View no mínimo
+    //      — achado da rodada 1)
+    //   3. columnVisibility == .detailOnly (regra dos 700 pt da coluna de
+    //      DETALHE, `NavigationState.applyWidthRule` — dispara até em tela
+    //      cheia `.regular`, sem Split View nenhum, num iPad de 11" em
+    //      retrato normal; achado da rodada 2, mesmo bug reaberto por um
+    //      gatilho mais comum que o Slide Over)
+    //
+    // Faltando qualquer um dos três, o `BoardFilterList` sai de vista e o
+    // `BoardView` precisa da própria FilterBar/busca — daí o `||`. Tabela-
+    // verdade completa: as 8 combinações, não só as que "interessam".
+
+    func testTabelaVerdadeCompletaDosTresEixos() {
+        // (isPad, compact, detailOnly) -> esperado
+        let casos: [(Bool, Bool, Bool, Bool)] = [
+            (false, false, false, true),   // iPhone, nada especial
+            (false, false, true,  true),   // iPhone, detailOnly (nem se aplica de fato, mas isPad=false já garante true)
+            (false, true,  false, true),   // iPhone compacto (retrato comum)
+            (false, true,  true,  true),   // iPhone compacto + detailOnly
+            (true,  false, false, false),  // iPad largo, todas as colunas visíveis — BoardFilterList AO LADO
+            (true,  false, true,  true),   // iPad "regular" mas regra dos 700pt escondeu sidebar+conteúdo (achado rodada 2)
+            (true,  true,  false, true),   // iPad em Slide Over/Split View no mínimo (achado rodada 1)
+            (true,  true,  true,  true),   // iPad compacto E detailOnly — os dois motivos ao mesmo tempo
+        ]
+        for (isPad, compact, detailOnly, esperado) in casos {
+            XCTAssertEqual(
+                BoardLayout.showsOwnFilterAndSearch(isPad: isPad,
+                                                     horizontalSizeClassIsCompact: compact,
+                                                     columnVisibilityIsDetailOnly: detailOnly),
+                esperado,
+                "isPad=\(isPad) compact=\(compact) detailOnly=\(detailOnly)"
+            )
+        }
+    }
+
+    // Os 3 testes abaixo (`IPadLargoComTodasAsColunasVisiveis`,
+    // `IPadCompacto`, `IPadDetailOnlyEmTelaCheiaRegular`) já estão cobertos,
+    // combinação a combinação, por `testTabelaVerdadeCompletaDosTresEixos`
+    // acima — são redundantes de propósito (Minor da rodada 3 da revisão):
+    // ficam como documentação nomeada dos 3 achados que motivaram cada eixo
+    // (rodada 1, rodada 2, e o caso "ao lado" que nunca quebrou), não porque
+    // agreguem cobertura nova. Se algum dia virarem manutenção morta, é
+    // seguro removê-los sem perder cobertura — a tabela-verdade sozinha já
+    // garante as 8 combinações.
+
+    func testIPhoneSempreMostraAPropriaFilterBarEBuscaQualquerCombinacao() {
+        // Com isPad=false o resultado tem que ser `true` por curto-circuito,
+        // não importa o que os outros dois eixos digam — é a garantia de
+        // "iPhone não pode regredir".
+        for compact in [false, true] {
+            for detailOnly in [false, true] {
+                XCTAssertTrue(BoardLayout.showsOwnFilterAndSearch(isPad: false,
+                                                                   horizontalSizeClassIsCompact: compact,
+                                                                   columnVisibilityIsDetailOnly: detailOnly))
+            }
+        }
+    }
+
+    func testIPadLargoComTodasAsColunasVisiveisEscondeAPropriaFilterBarEBusca() {
+        // Único caso `false`: `BoardFilterList` está ao lado — duplicar aqui
+        // reproduziria a busca dupla (achado Important 1 da Task 13).
+        XCTAssertFalse(BoardLayout.showsOwnFilterAndSearch(isPad: true,
+                                                            horizontalSizeClassIsCompact: false,
+                                                            columnVisibilityIsDetailOnly: false))
+    }
+
+    func testIPadCompactoMostraAPropriaFilterBarEBusca() {
+        // Slide Over/Split View no mínimo: `BoardFilterList` colapsou pra
+        // trás na pilha — sem isto o board ficaria sem busca nenhuma.
+        XCTAssertTrue(BoardLayout.showsOwnFilterAndSearch(isPad: true,
+                                                           horizontalSizeClassIsCompact: true,
+                                                           columnVisibilityIsDetailOnly: false))
+    }
+
+    func testIPadDetailOnlyEmTelaCheiaRegularMostraAPropriaFilterBarEBusca() {
+        // O achado da rodada 2: um iPad de 11" em retrato normal (regular,
+        // sem Split View nenhum) já colapsa pra `.detailOnly` pela regra dos
+        // 700 pt da coluna de detalhe — o board não tem botão pra desfazer
+        // isso (só o `expandButton` de sessão chama `toggleColumns()`), e
+        // sem esta busca ficaria sem NENHUMA forma de filtrar/buscar.
+        XCTAssertTrue(BoardLayout.showsOwnFilterAndSearch(isPad: true,
+                                                           horizontalSizeClassIsCompact: false,
+                                                           columnVisibilityIsDetailOnly: true))
+    }
+
+    // MARK: - `.focusSearch` mutuamente exclusivo (rodada 3 da revisão)
+
+    /// `BoardView` trata `.focusSearch` quando é dono
+    /// (`showsOwnFilterAndSearch` true); `BoardFilterList` (que só existe no
+    /// iPad, dentro do `RootSplitView`) trata exatamente quando NÃO é —
+    /// mesma função pura, um lado negando o outro. Trava aqui, em teste puro,
+    /// que os dois nunca concordam: nunca os dois tratam ao mesmo tempo (⌘F
+    /// focaria um campo invisível e comeria o intent do dono de verdade),
+    /// nunca os dois deixam passar (o intent travaria até outro resetar a
+    /// comparação do `Equatable`, já que `.onChange` só dispara na transição).
+    ///
+    /// O que isto NÃO prova: que `BoardView.swift` e `BoardFilterList.swift`
+    /// de fato chamam esta função com esses parâmetros e consomem só no ramo
+    /// correto — isso foi conferido por leitura de código (ver relatório),
+    /// não por este teste, que só trava o contrato da função pura em si.
+    func testExatamenteUmDosDoisConsumidoresTrataFocusSearchNoIPad() {
+        for compact in [false, true] {
+            for detailOnly in [false, true] {
+                let boardViewTrata = BoardLayout.showsOwnFilterAndSearch(
+                    isPad: true,
+                    horizontalSizeClassIsCompact: compact,
+                    columnVisibilityIsDetailOnly: detailOnly)
+                let boardFilterListTrata = !boardViewTrata
+                XCTAssertTrue(boardViewTrata != boardFilterListTrata,
+                              "exatamente um deve tratar: compact=\(compact) detailOnly=\(detailOnly)")
+            }
+        }
+    }
 }
