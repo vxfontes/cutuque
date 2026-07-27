@@ -12,7 +12,7 @@ targets:
   CutuqueApp:
     type: application
     platform: iOS
-    sources: [CutuqueApp, Shared]
+    sources: [CutuqueApp, Shared, SharedWatch]
     # Entitlements de push (Fase 4). aps-environment=production para TestFlight/App
     # Store (tokens de produção; o hub aponta CUTUQUE_APNS_HOST=api.push.apple.com).
     # No simulador, com CODE_SIGNING_ALLOWED=NO, o arquivo não é embutido, mas o
@@ -30,8 +30,8 @@ targets:
       properties:
         UILaunchScreen: {}
         CFBundleDisplayName: Cutuque
-        CFBundleShortVersionString: "2.1.0"
-        CFBundleVersion: "12"
+        CFBundleShortVersionString: "2.2.0"
+        CFBundleVersion: "14"
         # Live Activities (Dynamic Island / tela de bloqueio) para sessões rodando.
         NSSupportsLiveActivities: true
         # Declara criptografia isenta (ex.: TLS/HTTPS e APIs do sistema) para
@@ -82,15 +82,15 @@ targets:
     type: application
     platform: watchOS
     deploymentTarget: "10.0"
-    sources: [CutuqueWatch]
+    sources: [CutuqueWatch, SharedWatch]
     resources: [CutuqueWatch/Assets.xcassets]
     info:
       path: CutuqueWatch/Info.plist
       properties:
         CFBundleDisplayName: Cutuque
         CFBundleIconName: AppIcon
-        CFBundleShortVersionString: "2.1.0"
-        CFBundleVersion: "12"
+        CFBundleShortVersionString: "2.2.0"
+        CFBundleVersion: "14"
         ITSAppUsesNonExemptEncryption: false
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.vxfontes.cutuque
@@ -109,8 +109,8 @@ targets:
       path: CutuqueWidgets/Info.plist
       properties:
         CFBundleDisplayName: Cutuque
-        CFBundleShortVersionString: "2.1.0"
-        CFBundleVersion: "12"
+        CFBundleShortVersionString: "2.2.0"
+        CFBundleVersion: "14"
         ITSAppUsesNonExemptEncryption: false
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension

@@ -13,7 +13,7 @@ sobre a sua rede privada, **sem nuvem de terceiros**.
 <br/>
 
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-3B9EFF?style=flat-square)](./LICENSE)
-![Platform](https://img.shields.io/badge/platform-iOS%20%7C%20watchOS-0B1220?style=flat-square&logo=apple&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-iOS%20%7C%20iPadOS%20%7C%20watchOS-0B1220?style=flat-square&logo=apple&logoColor=white)
 ![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go&logoColor=white)
 ![Swift](https://img.shields.io/badge/Swift-5.9-F05138?style=flat-square&logo=swift&logoColor=white)
 ![Network](https://img.shields.io/badge/rede-Tailscale-F5A623?style=flat-square&logo=tailscale&logoColor=white)
@@ -28,12 +28,39 @@ sobre a sua rede privada, **sem nuvem de terceiros**.
 > ele te **cutuca** com uma vibração no Apple Watch. Você aprova pelo relógio e
 > segue em frente. De qualquer lugar.
 
+## 📸 Como é na prática
+
+**Apple Watch** — o cutucão chega aqui. Lista do que travou, aprovar/negar sem tirar o telefone do bolso.
+
+<div align="center">
+<img src="./assets/screenshots/watch-lista.png" alt="Lista de sessões que precisam de você, no Apple Watch" width="200" />
+<img src="./assets/screenshots/watch-acao.png" alt="Tela de ação: aprovar, negar ou responder" width="200" />
+<img src="./assets/screenshots/watch-tudo-em-dia.png" alt="Tela vazia mostrando o panorama das outras sessões" width="200" />
+</div>
+
+<sub>A tela vazia diz o que os outros agentes estão fazendo (“Tudo em dia · 2 rodando · 1 falhou”) e o rodapé conta a idade do dado — “tudo em dia” nunca é chute.</sub>
+
+**iPhone** — sessões, terminal tmux ao vivo, board e o guia embutido.
+
+| Sessões | Terminal | Board | Como funciona |
+|:---:|:---:|:---:|:---:|
+| <img src="./assets/screenshots/iphone-sessoes.png" width="190" /> | <img src="./assets/screenshots/iphone-terminal.png" width="190" /> | <img src="./assets/screenshots/iphone-board.png" width="190" /> | <img src="./assets/screenshots/iphone-ajuda.png" width="190" /> |
+
+**iPad** — as mesmas telas em split view, com a barra lateral sempre à mão.
+
+| Sessões | Terminal | Board | Como funciona |
+|:---:|:---:|:---:|:---:|
+| <img src="./assets/screenshots/ipad-sessoes.png" width="210" /> | <img src="./assets/screenshots/ipad-terminal.png" width="210" /> | <img src="./assets/screenshots/ipad-board.png" width="210" /> | <img src="./assets/screenshots/ipad-ajuda.png" width="210" /> |
+
+<sub>Capturas do simulador contra um hub de demonstração com dados fictícios.</sub>
+
 ## ✨ Destaques
 
 - 🖥️ **Multi-agente** — controla Claude Code, Codex e OpenCode; no fallback, qualquer comando de terminal.
 - 🔁 **Loop completo** — disparar → acompanhar output ao vivo → aprovar permissão → ser avisado, tudo do celular/Watch.
 - ⌚ **Cutucão confiável** — vibração _time-sensitive_ no pulso mesmo com o app fechado (fura Foco/DND quando importa).
 - 🏝️ **Live Activity** — sessões rodando aparecem na Dynamic Island e na tela de bloqueio.
+- 🪟 **iPad em split view** — barra lateral fixa e detalhe lado a lado, com o terminal ao vivo.
 - 🔒 **Privado por design** — o código-fonte nunca sai da sua rede (Tailscale); ao APNs vão só metadados (“sessão X concluiu”).
 - 🗂️ **Board Kanban** — Command Center web + CLI `cutuque` para acompanhar o que cada agente está fazendo.
 - 🎛️ **Deck físico** — plugin para o Ulanzi Stream Deck com atalhos e visão rápida das sessões.
@@ -79,6 +106,7 @@ flowchart LR
 | **`deck/`** | Plugin para o deck físico Ulanzi (atalhos e visão rápida). |
 | **`docs/`** | Visão geral, arquitetura, decisões e planos. |
 | **`config/`** | Templates de configuração (`*.example`). |
+| **`scripts/`** | Atalhos de terminal — `tmx.sh` sobe agentes em sessões tmux que o app enxerga. |
 
 ## 🚀 Começando
 
@@ -90,9 +118,11 @@ go build ./cmd/hub
 CUTUQUE_ENV=dev ./hub          # sobe local em 127.0.0.1:8787 para desenvolvimento
 ```
 
-Em produção, copie o template e preencha os valores reais (nada de segredo é versionado):
+Em produção, copie o template e preencha os valores reais (nada de segredo é
+versionado). O `config/` fica na **raiz** do repositório, não em `hub/`:
 
 ```bash
+cd ..                          # volta para a raiz do repo
 cp config/hub.env.example config/hub.env
 # edite host, token e credenciais APNs
 ```
@@ -111,6 +141,32 @@ open CutuqueApp.xcodeproj      # build & run pelo Xcode
 cd board && npm install && npm start    # Command Center web + CLI
 cd deck  && npm install                 # plugin do Ulanzi
 ```
+
+O **Command Center** (kanban dos agentes) é servido pelo próprio hub em
+`http://<seu-hub>:8787/dashboard`. A CLI `cutuque` se instala a partir dele:
+
+```bash
+curl -fsSL http://<seu-hub>:8787/install | sh
+```
+
+### 4. tmux (opcional, mas é o jeito mais rápido)
+
+[`scripts/tmx.sh`](./scripts/tmx.sh) são atalhos de tmux que sobem um agente
+já dentro de uma sessão nomeada — e é isso que faz ela aparecer no app em
+**"Continuar sessão do Mac"**:
+
+```bash
+ln -s "$PWD/scripts/tmx.sh" /usr/local/bin/tmx
+
+cd ~/meu-projeto
+tmx cc          # Claude Code na pasta atual (sessão = nome da pasta)
+tmx cx          # Codex
+tmx oc          # OpenCode
+tmx ls          # lista as sessões do grupo atual
+```
+
+Dá pra separar contextos em "grupos" (servidores tmux distintos), via
+`TMX_SRV=trabalho tmx cc` ou como 3º argumento: `tmx cc api trabalho`.
 
 ## ⚙️ Configuração
 
@@ -146,6 +202,7 @@ cutuque/
 ├── deck/       # plugin Ulanzi Stream Deck
 ├── config/     # templates de configuração
 ├── docs/       # documentação e planos
+├── scripts/    # atalhos de terminal (tmx.sh)
 └── assets/     # ícones e arte
 ```
 
