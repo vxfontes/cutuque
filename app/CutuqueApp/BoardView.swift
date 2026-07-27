@@ -221,7 +221,14 @@ struct BoardView: View {
             // travava o `⌘F` porque `AppIntent` só dispara `.onChange` na
             // transição, e um `default: nav.consume()` engolia o intent sem
             // ninguém focar o campo visível).
-            .onChange(of: nav.intent) { _, intent in
+            //
+            // Observa `nav.intentEvent` (envelope com `seq`), não `nav.intent`
+            // cru: ⌘←/⌘← seguidos sem consumo no meio mandam o MESMO
+            // `AppIntent`, e sem o `seq` o `.onChange` ficaria mudo no
+            // segundo envio (achado Critical da revisão final — ver
+            // `NavigationState.IntentEvent`).
+            .onChange(of: nav.intentEvent) { _, event in
+                let intent = event.intent
                 if intent == .focusSearch {
                     guard showsOwnFilterAndSearch else { return }
                     searchFieldFocused = true

@@ -326,7 +326,13 @@ struct SessionDetailView: View {
         // mata a sessão, então o atalho não pula o gate. A regra de "só
         // consome .interrupt" vive em `NavigationState.consumeIfInterrupt()`
         // (testada em NavigationStateTests.swift) — aqui é só fiação.
-        .onChange(of: nav.intent) { _, _ in
+        //
+        // Observa `nav.intentEvent`, não `nav.intent` cru: dois ⌘. seguidos
+        // sem ninguém consumir no meio mandam o MESMO `AppIntent`, e
+        // `.onChange` só dispara na mudança de valor — sem o `seq` do
+        // envelope o segundo ⌘. ficaria mudo (achado Critical da revisão
+        // final). `consumeIfInterrupt()` continua lendo `nav.intent`.
+        .onChange(of: nav.intentEvent) { _, _ in
             if nav.consumeIfInterrupt() {
                 confirmingInterrupt = true
             }

@@ -200,6 +200,105 @@ final class NavigationStateTests: XCTestCase {
         XCTAssertNil(nav.intent)
     }
 
+    // MARK: - IntentEvent (correção do achado Critical da revisão final:
+    // `.onChange` mudo em reenvio idêntico)
+    //
+    // `AppIntent` é `Equatable`, e todo consumidor observa via
+    // `.onChange(of: nav.intentEvent)` — não mais `nav.intent` cru. Sem o
+    // `seq` do envelope, `send(.interrupt)` seguido de outro `send(.interrupt)`
+    // sem consumo no meio produziria `oldValue == newValue` no que o
+    // `.onChange` compara, e a segunda invocação do atalho nunca dispararia:
+    // o atalho ficaria morto até algum OUTRO intent transitar e resetar por
+    // acaso. Estes testes cobrem exatamente essa transição, sem hospedar
+    // nenhuma View — `IntentEvent` é tipo puro, como o resto desta suíte.
+
+    func testReenviarOMesmoIntentSemConsumirProduzEventosDiferentes() {
+        let nav = NavigationState()
+        nav.send(.interrupt)
+        let primeiro = nav.intentEvent
+
+        nav.send(.interrupt)
+        let segundo = nav.intentEvent
+
+        XCTAssertEqual(primeiro.intent, .interrupt)
+        XCTAssertEqual(segundo.intent, .interrupt)
+        XCTAssertNotEqual(primeiro, segundo,
+                           "reenviar o mesmo AppIntent sem consumo no meio tem que ser uma transição observável")
+    }
+
+    func testEventosDeIntentsDiferentesTambemDivergem() {
+        let nav = NavigationState()
+        nav.send(.reload)
+        let primeiro = nav.intentEvent
+
+        nav.send(.newSession)
+        let segundo = nav.intentEvent
+
+        XCTAssertNotEqual(primeiro, segundo)
+    }
+
+    func testConsumeContinuaZerandoIntentComOEnvelopePresente() {
+        let nav = NavigationState()
+        nav.send(.reload)
+        XCTAssertEqual(nav.intentEvent.intent, .reload)
+
+        nav.consume()
+
+        XCTAssertNil(nav.intent, "consume() continua zerando intent — mesma semântica de sempre")
+    }
+
+    /// Cenário exato do relato da revisão: ⌘. é apertado sem sessão
+    /// selecionada (nenhum consumidor montado, ninguém chama `consume()`).
+    /// Depois, já com o consumidor vivo, a usuária aperta ⌘. de novo — esse
+    /// segundo aperto TEM que ser uma transição nova, não pode ficar mudo só
+    /// porque o `AppIntent` enviado é idêntico ao anterior.
+    func testInterruptReenviadoAposFicarSemConsumidorAindaEhConsumivel() {
+        let nav = NavigationState()
+
+        // ⌘. antes de escolher sessão: ninguém consome.
+        nav.send(.interrupt)
+        XCTAssertEqual(nav.intent, .interrupt)
+
+        // A usuária escolhe uma sessão (SessionDetailView monta agora, mas
+        // não usamos `initial: true` — o `.interrupt` pendente não é
+        // entregue retroativamente no attach, de propósito). Ela aperta ⌘.
+        // de novo, querendo de fato parar o agente:
+        let eventoAntes = nav.intentEvent
+        nav.send(.interrupt)
+
+        XCTAssertNotEqual(nav.intentEvent, eventoAntes,
+                           "o segundo ⌘. tem que ser uma nova transição — não pode ficar morto")
+
+        // E agora o consumidor (SessionDetailView, via consumeIfInterrupt)
+        // trata normalmente.
+        XCTAssertTrue(nav.consumeIfInterrupt())
+        XCTAssertNil(nav.intent)
+    }
+
+    /// `consumeIfInterrupt()` e `consumeSessionListIntent()` continuam
+    /// decidindo com base em `intent`, não em `intentEvent` — reenviar o
+    /// mesmo intent não muda QUEM reconhece o quê, só torna a transição
+    /// observável. Repete a disciplina de "só consome quem reconhece" already
+    /// coberta acima, agora atravessando dois `send()` seguidos do mesmo
+    /// intent sem consumo no meio.
+    func testConsumeIfInterruptNaoConsomeIntentDeOutroDonoMesmoAposReenvio() {
+        let nav = NavigationState()
+        nav.send(.moveCardLeft)
+        nav.send(.moveCardLeft)   // reenvio idêntico, ninguém consumiu ainda
+
+        XCTAssertFalse(nav.consumeIfInterrupt())
+        XCTAssertEqual(nav.intent, .moveCardLeft, "intent de outro consumidor não pode ser engolido")
+    }
+
+    func testConsumeSessionListIntentNaoConsomeIntentDeOutroDonoMesmoAposReenvio() {
+        let nav = NavigationState()
+        nav.send(.interrupt)
+        nav.send(.interrupt)   // reenvio idêntico, ninguém consumiu ainda
+
+        XCTAssertNil(nav.consumeSessionListIntent())
+        XCTAssertEqual(nav.intent, .interrupt, "intent de outro consumidor não pode ser engolido")
+    }
+
     /// Card aberto no inspector do board (Task 13) — alimentado também pela
     /// busca da coluna do meio, que fica num arquivo separado do `BoardView`
     /// e por isso precisa de um estado compartilhado pra abrir o card nele.
