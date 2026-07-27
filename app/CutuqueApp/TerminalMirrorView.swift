@@ -570,6 +570,47 @@ struct LiveDetailView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        LiveInfoList(entry: entry)
+            .navigationTitle("Sessão ao vivo")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { Button("Fechar") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Label("ao vivo", systemImage: "dot.radiowaves.left.and.right")
+                        .labelStyle(.iconOnly).foregroundStyle(.green)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                NavigationLink {
+                    TerminalMirrorView(machine: entry.machine, target: entry.id, title: entry.session.title)
+                } label: {
+                    Label("Abrir terminal ao vivo", systemImage: "terminal")
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .padding()
+                .background(.ultraThinMaterial)
+            }
+    }
+}
+
+/// O CORPO das informações de uma sessão viva — título, máquina, pane e a
+/// árvore de pastas — sem barra de navegação, sem botão e sem `dismiss`.
+///
+/// Nasceu de dentro do `LiveDetailView` acima quando o iPad passou a mostrar as
+/// mesmas informações ("no ao vivo do tmux nao ta abrindo as informações como
+/// temos no iphone"). Lá elas continuam num sheet com "Fechar" e o botão de
+/// abrir o terminal; aqui, num painel de split view com um seletor
+/// `Info | Terminal`. Só o miolo é comum, então só o miolo mora aqui — a
+/// alternativa (parametrizar o `LiveDetailView` com flags de "mostra toolbar?",
+/// "mostra botão?") deixaria uma view fingindo ser duas.
+struct LiveInfoList: View {
+    let entry: LiveEntry
+
+    var body: some View {
         List {
             Section("Sessão") {
                 detailRow("Nome", entry.session.title)
@@ -590,29 +631,6 @@ struct LiveDetailView: View {
                 }
                 .padding(.vertical, 2)
             }
-        }
-        .navigationTitle("Sessão ao vivo")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) { Button("Fechar") { dismiss() } }
-            ToolbarItem(placement: .topBarTrailing) {
-                Label("ao vivo", systemImage: "dot.radiowaves.left.and.right")
-                    .labelStyle(.iconOnly).foregroundStyle(.green)
-            }
-        }
-        .safeAreaInset(edge: .bottom) {
-            NavigationLink {
-                TerminalMirrorView(machine: entry.machine, target: entry.id, title: entry.session.title)
-            } label: {
-                Label("Abrir terminal ao vivo", systemImage: "terminal")
-                    .fontWeight(.semibold)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 4)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .padding()
-            .background(.ultraThinMaterial)
         }
     }
 
