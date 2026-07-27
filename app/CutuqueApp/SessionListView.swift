@@ -610,7 +610,7 @@ struct SessionListView: View {
                     Button {
                         showingDiscover = true
                     } label: {
-                        Label("Continuar sessão do Mac", systemImage: "macbook.and.iphone")
+                        Label("Continuar sessão", systemImage: "macbook.and.iphone")
                     }
                 } label: {
                     Image(systemName: "plus")

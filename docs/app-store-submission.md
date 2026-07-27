@@ -5,10 +5,15 @@ enviar o build pelo App Store Connect.
 
 ## Estado atual (já pronto no repo)
 
-- [x] **Versão / build:** `CFBundleShortVersionString 2.2.0`, `CFBundleVersion 14`
+- [x] **Versão / build:** `CFBundleShortVersionString 2.2.1`, `CFBundleVersion 15`
       (iOS, watchOS e widget alinhados — ver `app/project.yml`). Lembrete: subir o
       `CFBundleVersion` a cada upload novo ao TestFlight — o número precisa ser
       único **dentro do trem daquela versão curta**, não globalmente.
+      **2.2.1 aberta em 2026-07-27**, com a 2.2.0 build 14 já em revisão: polimento
+      do sheet de perguntas (altura sob medida, hierarquia dos botões, teclado
+      esticando o sheet) e "Continuar sessão" sem "do Mac". Como a 2.2.0 ainda não
+      foi aprovada, é preciso decidir no ASC se a 2.2.1 substitui aquela submissão
+      ou entra como versão seguinte.
       Estado no ASC em 2026-07-27: **2.2.0 build 12 já está no TestFlight**
       ("Pronta para envio"); 2.1.0 tem os builds 12 e 13. O `project.yml` está em
       14 para o próximo upload de 2.2.0 não colidir. Na página da versão 2.2.0 é

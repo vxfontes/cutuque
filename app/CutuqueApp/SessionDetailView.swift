@@ -189,6 +189,19 @@ final class SessionDetailViewModel: ObservableObject {
     }
 }
 
+// MARK: - Set de perguntas em apresentação
+
+/// O set capturado no toque do CTA, embrulhado pra servir de `item:` do
+/// sheet. A identidade é o conjunto das perguntas: se o hub emendar uma
+/// pergunta nova enquanto o sheet está aberto, o `id` muda e o SwiftUI
+/// remonta o conteúdo — inclusive o `@State` do `QuestionCardView` (página
+/// atual e respostas), que é o reset que o `.id()` de dentro daquela view
+/// nunca chegou a fazer.
+private struct QuestionSheet: Identifiable, Equatable {
+    let questions: [PendingQuestion]
+    var id: String { questions.map(\.id).joined(separator: "\u{1}") }
+}
+
 // MARK: - Tela de detalhe
 
 struct SessionDetailView: View {
@@ -218,8 +231,25 @@ struct SessionDetailView: View {
     // de needs_you enquanto o sheet está aberto (respondida por outro
     // cliente, timeout), não corremos risco de o array virar vazio debaixo
     // da view — o `.onChange` abaixo fecha o sheet nesse caso.
-    @State private var showQuestionSheet = false
-    @State private var sheetQuestions: [PendingQuestion] = []
+    //
+    // O set vai DENTRO do estado que dispara a apresentação, não num @State
+    // paralelo, e o sheet é `item:` e não `isPresented:` — card
+    // d82d78f066d26f9d. Com dois estados separados, `sheetQuestions = …` e
+    // `showQuestionSheet = true` caíam na MESMA transação e o SwiftUI
+    // apresentava com o closure capturado na avaliação ANTERIOR de `body`,
+    // onde o array ainda era `[]` → `questions[0]` estourava dentro de
+    // `presentationTransitionWillBegin`. Com `item:` o valor chega por
+    // parâmetro, então não tem como vir obsoleto.
+    @State private var questionSheet: QuestionSheet?
+    /// Altura que o `QuestionCardView` pediu pra caber inteiro — vira o detent
+    /// do sheet. Zero até a primeira medida chegar.
+    @State private var questionSheetHeight: CGFloat = 0
+    /// Detent efetivamente selecionado. Precisa ser membro do conjunto passado
+    /// pro `.presentationDetents`, então anda junto com a altura medida.
+    @State private var questionSheetDetent: PresentationDetent = .medium
+    /// Detent de antes do teclado subir, pra devolver o sheet ao tamanho em que
+    /// a usuária o deixou (pode ter arrastado pro `.large` na mão).
+    @State private var questionSheetDetentBeforeTyping: PresentationDetent?
     // Confirmação do botão de parar (card 6b74500a1fd9a1f2) — destrutivo no
     // caminho comum (mata o processo pipe-mode); hedge porque sessões
     // tmux-adotadas só pausam (ver `isTmuxBacked`).
@@ -237,6 +267,19 @@ struct SessionDetailView: View {
 
     /// Título a exibir (apelido local, se houver, senão o original).
     private var displayTitle: String { namer.displayTitle(for: model.session) }
+
+    /// Detent sob medida — a altura que o card pediu pra caber inteiro.
+    /// `.medium` enquanto a primeira medida não chegou.
+    private var fittedQuestionDetent: PresentationDetent {
+        questionSheetHeight > 0 ? .height(questionSheetHeight) : .medium
+    }
+
+    /// Detents do sheet de perguntas: o sob medida (o que abre) e `.large` de
+    /// reserva, pra arrastar quando a pergunta é maior que a tela e pra receber
+    /// o teclado.
+    private var questionSheetDetents: Set<PresentationDetent> {
+        [fittedQuestionDetent, .large]
+    }
 
     /// Chunks crus agrupados em itens de chat: linhas consecutivas do mesmo
     /// papel (usuário/assistente) se fundem num só bloco; tool + tool_result
@@ -364,17 +407,17 @@ struct SessionDetailView: View {
                 ChatDetailsView(session: model.session, displayTitle: displayTitle)
             }
         }
-        .sheet(isPresented: $showQuestionSheet) {
+        .sheet(item: $questionSheet) { sheet in
             NavigationStack {
                 QuestionCardView(
-                    questions: sheetQuestions,
+                    questions: sheet.questions,
                     actionInProgress: model.actionInProgress,
                     onSubmit: { answers in
-                        showQuestionSheet = false
+                        questionSheet = nil
                         Task { await model.answerQuestions(answers) }
                     },
                     onCancel: {
-                        showQuestionSheet = false
+                        questionSheet = nil
                         Task { await model.deny() }
                     }
                 )
@@ -385,12 +428,48 @@ struct SessionDetailView: View {
                 // QuestionCardView. Swipe-down só fecha o sheet sem decidir
                 // nada — a sessão continua needs_you e o CTA reabre depois.
             }
+            .onPreferenceChange(QuestionSheetHeightKey.self) { height in
+                guard height > 0 else { return }
+                questionSheetHeight = height
+                // Enquanto o teclado está aberto o sheet fica no `.large` — a
+                // medida nova só entra em vigor quando ele descer, e é por isso
+                // que ela também vai pro "detent de antes".
+                if questionSheetDetentBeforeTyping != nil {
+                    questionSheetDetentBeforeTyping = .height(height)
+                } else {
+                    questionSheetDetent = .height(height)
+                }
+            }
+            // Teclado subiu no campo "Outro…": estica pro `.large` enquanto
+            // durar. A altura sob medida foi medida SEM teclado, e o sistema
+            // levanta o sheet sem esticá-lo — o campo focado acabava metade
+            // escondido atrás da barra de ações.
+            .onPreferenceChange(QuestionSheetTypingKey.self) { typing in
+                if typing {
+                    guard questionSheetDetentBeforeTyping == nil else { return }
+                    questionSheetDetentBeforeTyping = questionSheetDetent
+                    withAnimation { questionSheetDetent = .large }
+                } else if let previous = questionSheetDetentBeforeTyping {
+                    questionSheetDetentBeforeTyping = nil
+                    // Devolve ao tamanho em que a usuária deixou — se ela tinha
+                    // arrastado pro `.large` na mão, continua lá.
+                    withAnimation { questionSheetDetent = previous }
+                }
+            }
+            // Veste o conteúdo em vez de cortar: abre na altura que o card
+            // pediu, e `.large` fica disponível pra arrastar quando a pergunta
+            // é longa demais pra caber.
+            .presentationDetents(questionSheetDetents, selection: $questionSheetDetent)
+            .presentationDragIndicator(.visible)
+            // Casa a barra de navegação com o fundo agrupado do card — sem
+            // isso fica uma faixa branca costurada acima do conteúdo cinza.
+            .presentationBackground(Color(.systemGroupedBackground))
         }
         // Sessão saiu de needs_you (respondida por outro cliente/terminal,
         // timeout, ou a própria resposta) enquanto o sheet estava aberto →
         // fecha sozinho, mesmo princípio do card fixo de antes.
         .onChange(of: pendingQuestions) { _, newValue in
-            if newValue == nil { showQuestionSheet = false }
+            if newValue == nil { questionSheet = nil }
         }
         .task { await model.start() }
         .onDisappear { model.stop() }
@@ -554,14 +633,18 @@ struct SessionDetailView: View {
     /// CTA fino perto do campo (card 4c76eb0d0b8f3337) — substitui os quick
     /// replies (que já se ocultam sozinhos via `hasPendingGate`) quando há
     /// perguntas pendentes. Mostra o `header` direto se for 1 pergunta só;
-    /// "N perguntas pendentes" se for um set. Ao tocar, CAPTURA o set em
-    /// `sheetQuestions` (não lê `pendingQuestions` ao vivo de dentro do
-    /// sheet) e abre o sheet paginado.
+    /// "N perguntas pendentes" se for um set. Ao tocar, CAPTURA o set dentro
+    /// do próprio `questionSheet` (não lê `pendingQuestions` ao vivo de
+    /// dentro do sheet) — uma única escrita de estado, que é o que abre o
+    /// sheet paginado.
     @ViewBuilder private var questionsBanner: some View {
         if let questions = pendingQuestions {
             Button {
-                sheetQuestions = questions
-                showQuestionSheet = true
+                // Abre sempre no sob medida: o sheet anterior pode ter ficado
+                // no `.large` (arrastado ou esticado pelo teclado).
+                questionSheetDetentBeforeTyping = nil
+                questionSheetDetent = fittedQuestionDetent
+                questionSheet = QuestionSheet(questions: questions)
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "list.bullet.rectangle.portrait")

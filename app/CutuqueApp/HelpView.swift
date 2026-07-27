@@ -127,7 +127,7 @@ enum HelpContent {
                 """),
                 .text("""
                 O nome da sessão vira o nome da pasta. Daí é só abrir o menu + \
-                aqui e tocar em "Continuar sessão do Mac": a sessão aparece na \
+                aqui e tocar em "Continuar sessão": a sessão aparece na \
                 lista, com o terminal ao vivo e o teclado.
                 """),
                 .text("""

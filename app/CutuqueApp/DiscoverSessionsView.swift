@@ -53,7 +53,7 @@ final class DiscoverViewModel: ObservableObject {
     }
 }
 
-// MARK: - Sessões do Mac (sheet)
+// MARK: - Continuar sessão (sheet)
 
 /// Lista as sessões do Claude Code já existentes numa máquina (lidas de
 /// ~/.claude/projects lá) para a usuária adotar e continuar a conversa.
@@ -98,7 +98,7 @@ struct DiscoverSessionsView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Sessões do Mac")
+            .navigationTitle("Continuar sessão")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: DiscoveredSession.self) { item in
                 DiscoverPreviewView(item: item, machine: model.machine) {
