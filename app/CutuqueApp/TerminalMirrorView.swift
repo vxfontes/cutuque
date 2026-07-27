@@ -209,6 +209,35 @@ struct TerminalMirrorView: View {
     /// Segura a rajada de resize do arraste do divisor do Split View.
     @State private var resizeDebouncer = ResizeDebouncer()
 
+    /// Tamanho do VIEWPORT do terminal — a `ScrollView`, não o painel inteiro.
+    /// Medido pelo `.background` de `terminal`, o que dispensa descontar as
+    /// barras de teclas e de input por estimativa (era a constante
+    /// `verticalChrome = 120`): elas simplesmente ficam fora do retângulo
+    /// medido.
+    @State private var viewport: CGSize = .zero
+
+    /// Largura de um caractere e altura de uma linha, medidas pela `ruler`.
+    /// `nil` até a primeira medição — enquanto isso não se pede resize nenhum
+    /// ao tmux, porque um palpite aqui é exatamente o que esta mudança veio
+    /// tirar (ver `TerminalGeometry`).
+    @State private var metrics: TerminalGeometry.TextMetrics?
+
+    /// Colunas e linhas que cabem AGORA, ou `nil` enquanto falta medição.
+    private var grid: (cols: Int, rows: Int)? {
+        guard let metrics, metrics.isUsable, viewport.width > 0, viewport.height > 0
+        else { return nil }
+        return (TerminalGeometry.columns(width: viewport.width, metrics: metrics),
+                TerminalGeometry.rows(height: viewport.height, metrics: metrics))
+    }
+
+    /// Identidade do `.task` que dispara o resize. O caso sem medição precisa
+    /// de um valor PRÓPRIO (não `"0x0"`, que poderia colidir com uma grade
+    /// real de piso) só pra o `.task` reentrar quando a medida chegar.
+    private var resizeKey: String {
+        guard let grid else { return "sem-medida" }
+        return "\(grid.cols)x\(grid.rows)"
+    }
+
     init(machine: String, target: String, title: String, isActive: Bool = true,
          ownsNavigationTitle: Bool = true) {
         self.machine = machine
@@ -220,23 +249,26 @@ struct TerminalMirrorView: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            let cols = TerminalGeometry.columns(width: geo.size.width, fontPt: fontPt)
-            let rows = TerminalGeometry.rows(height: geo.size.height, fontPt: fontPt)
-            VStack(spacing: 0) {
-                terminal
-                keyBar
-                inputBar
-            }
-            .task(id: "\(cols)x\(rows)") {
-                resizeDebouncer.schedule(cols: cols, rows: rows) { c, r in
+        VStack(spacing: 0) {
+            terminal
+            keyBar
+            inputBar
+        }
+        // Antes havia um `GeometryReader` embrulhando este `VStack` só pra ler
+        // a altura do painel INTEIRO e dela subtrair um chute de 120 pt pras
+        // duas barras. Agora quem mede é o `.background` do próprio
+        // `terminal` (a `ScrollView`), então não sobra nada pra estimar — e o
+        // `GeometryReader`, que participava do layout, sai da árvore.
+        .task(id: resizeKey) {
+            if let grid {
+                resizeDebouncer.schedule(cols: grid.cols, rows: grid.rows) { c, r in
                     model.resize(cols: c, rows: r)
                 }
-                if isActive { model.start() }
             }
-            .onChange(of: isActive) { _, active in
-                if active { model.start() } else { model.stop() }
-            }
+            if isActive { model.start() }
+        }
+        .onChange(of: isActive) { _, active in
+            if active { model.start() } else { model.stop() }
         }
         // Título de navegação: só quando esta view é dona dele (iPhone,
         // sozinha). Embutida no `SessionDetailPane` do iPad ela recebe
@@ -329,8 +361,11 @@ struct TerminalMirrorView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 10)
+                    // Os mesmos valores que `TerminalGeometry.columns/rows`
+                    // descontam — lidos de lá, não redigitados aqui, pra não
+                    // poderem divergir em silêncio.
+                    .padding(.horizontal, TerminalGeometry.horizontalTextPadding)
+                    .padding(.vertical, TerminalGeometry.verticalTextPadding)
                 Color.clear.frame(height: 1).id("bottom")
             }
             .onChange(of: model.screen) { _, _ in
@@ -342,6 +377,11 @@ struct TerminalMirrorView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(theme.bg)
+            // As duas medições que substituem os antigos números mágicos. Vão
+            // em `.background` de propósito: background não altera o tamanho
+            // de quem o hospeda, então medir aqui não realimenta o layout.
+            .background(viewportReader)
+            .background(alignment: .topLeading) { ruler }
             // Rolar o HISTÓRICO da conversa do claude (a TUI usa tela alternada,
             // sem scrollback no tmux): PageUp/PageDown pedem pro claude rolar a
             // própria view — igualzinho ao scroll no PC.
@@ -353,6 +393,41 @@ struct TerminalMirrorView: View {
                 .padding(.trailing, 10)
             }
         }
+    }
+
+    /// Mede o viewport do terminal. Mesmo padrão do `RootSplitView`:
+    /// `.background(GeometryReader { Color.clear })`, que lê a geometria sem
+    /// participar do layout.
+    private var viewportReader: some View {
+        GeometryReader { geo in
+            Color.clear.onChange(of: geo.size, initial: true) { _, size in
+                viewport = size
+            }
+        }
+    }
+
+    /// A régua: uma linha de verdade, na fonte de verdade, medida pelo próprio
+    /// SwiftUI. É o que substitui as razões 0.62/1.28 — ver o cabeçalho de
+    /// `TerminalGeometry` pra por que uma razão fixa não dá conta.
+    ///
+    /// `.fixedSize()` é obrigatório: dentro de um `.background` a proposta de
+    /// tamanho é a do terminal, e sem ele os 100 caracteres quebrariam em
+    /// várias linhas — a medida sairia com a largura do painel e a altura de
+    /// um parágrafo. Com ele, o `Text` usa o tamanho ideal: uma linha só.
+    private var ruler: some View {
+        Text(String(repeating: "M", count: TerminalGeometry.sampleLength))
+            .font(.system(size: fontPt, design: .monospaced))
+            .fixedSize()
+            .background(
+                GeometryReader { geo in
+                    Color.clear.onChange(of: geo.size, initial: true) { _, size in
+                        if let measured = TerminalGeometry.TextMetrics(sampleSize: size) {
+                            metrics = measured
+                        }
+                    }
+                }
+            )
+            .hidden()
     }
 
     private func scrollChevron(_ symbol: String, _ key: String) -> some View {
