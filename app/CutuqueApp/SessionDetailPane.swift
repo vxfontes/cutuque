@@ -24,6 +24,14 @@ struct SessionDetailPane: View {
         return nil
     }
 
+    /// A entrada ao vivo do tmux, quando é disso que se trata. É ela que dá o
+    /// painel de informações — o mesmo miolo que o iPhone mostra antes de
+    /// abrir o terminal (`LiveInfoList`).
+    private var liveEntry: LiveEntry? {
+        if case .live(let e) = selection { return e }
+        return nil
+    }
+
     /// Alvo tmux desta seleção: uma entrada ao vivo sempre tem; uma sessão do
     /// registry só se ela roda dentro do tmux. Decisão pura (testável sem
     /// hosting de View) em `SessionDetailPaneLogic.terminalTarget`.
@@ -32,6 +40,15 @@ struct SessionDetailPane: View {
     }
 
     private var showsChat: Bool { nav.paneMode == .chat }
+
+    /// O terminal só fica ATIVO quando é ele que está na frente. Antes isto
+    /// era `!showsChat` — com três modos, "não é chat" passou a incluir
+    /// `.info`, e o espelho ficaria fazendo poll por trás da tela de
+    /// informações. Ele continua MONTADO nos três casos (é o que preserva o
+    /// pane do tmux, decisão #19); o que muda é só o poll.
+    private var showsTerminal: Bool { nav.paneMode == .terminal }
+
+    private var showsInfo: Bool { nav.paneMode == .info }
 
     /// Título do chat pra entrar em `paneTitle`: prefere o ao vivo
     /// (`liveChatTitle`, subido via `LiveChatTitleKey`) e só cai pro estático
@@ -67,11 +84,25 @@ struct SessionDetailPane: View {
             }
             if let terminal {
                 TerminalMirrorView(machine: terminal.machine, target: terminal.target,
-                                   title: terminal.title, isActive: !showsChat,
+                                   title: terminal.title, isActive: showsTerminal,
                                    ownsNavigationTitle: false)
-                    .opacity(showsChat ? 0 : 1)
-                    .allowsHitTesting(!showsChat)
-                    .accessibilityHidden(showsChat)
+                    .opacity(showsTerminal ? 1 : 0)
+                    .allowsHitTesting(showsTerminal)
+                    .accessibilityHidden(!showsTerminal)
+            }
+            // As informações da sessão ao vivo. Ficam empilhadas como as
+            // outras, e é isso que faz o ✕ do terminal ser barato: sair do
+            // terminal é trocar de opacidade, não desmontar nada — o pane do
+            // tmux do outro lado segue vivo e trabalhando, que é o que a
+            // usuária pediu ("nao é pra kill, é apenas pra fechar o terminal
+            // mas ele deve continuar trabalhando na sessao tmux"). O ⊗
+            // vermelho que ENCERRA o pane continua sendo outro botão, dentro
+            // da própria `TerminalMirrorView`.
+            if let liveEntry {
+                LiveInfoList(entry: liveEntry)
+                    .opacity(showsInfo ? 1 : 0)
+                    .allowsHitTesting(showsInfo)
+                    .accessibilityHidden(!showsInfo)
             }
         }
         .navigationTitle(paneTitle)
@@ -80,30 +111,69 @@ struct SessionDetailPane: View {
         // escreve nela, sem concorrência a resolver.
         .onPreferenceChange(LiveChatTitleKey.self) { liveChatTitle = $0 }
         .toolbar {
-            if session != nil, terminal != nil {
-                ToolbarItem(placement: .principal) { paneSelector }
+            if let first = selectorFirstPane {
+                ToolbarItem(placement: .principal) { selector(first: first) }
+            }
+            if liveEntry != nil, showsTerminal {
+                ToolbarItem(placement: .topBarTrailing) { closeTerminalButton }
             }
             ToolbarItem(placement: .topBarTrailing) { expandButton }
         }
         .onAppear {
-            // Seleção sem chat só pode mostrar terminal, e vice-versa. Decisão
-            // pura (testável sem hosting de View) em
-            // `SessionDetailPaneLogic.correctedPaneMode`.
-            if let corrected = SessionDetailPaneLogic.correctedPaneMode(
-                hasChat: session != nil, hasTerminal: terminal != nil, current: nav.paneMode
+            // Onde este painel abre: seleção sem chat não pode mostrar chat, e
+            // entrada ao vivo abre nas informações. Decisão pura (testável sem
+            // hosting de View) em `SessionDetailPaneLogic.entryPaneMode`.
+            if let entry = SessionDetailPaneLogic.entryPaneMode(
+                hasChat: session != nil, hasTerminal: terminal != nil,
+                hasInfo: liveEntry != nil, current: nav.paneMode
             ) {
-                nav.paneMode = corrected
+                nav.paneMode = entry
             }
         }
     }
 
-    private var paneSelector: some View {
+    /// A ABA DA ESQUERDA do seletor do topo — a da direita é sempre Terminal.
+    /// `Chat` numa sessão do registry que roda no tmux, `Info` numa entrada ao
+    /// vivo. `nil` quando não há o que alternar (sessão fora do tmux), e aí
+    /// não entra `ToolbarItem` nenhum em `.principal`: um item vazio ali
+    /// ocuparia o lugar do título.
+    ///
+    /// Espelha a disponibilidade que `SessionDetailPaneLogic.entryPaneMode`
+    /// usa — as duas leem os mesmos três "tem/não tem". Se divergirem, o
+    /// segmentado abre sem nenhum segmento marcado.
+    private var selectorFirstPane: (label: String, mode: PaneMode)? {
+        guard terminal != nil else { return nil }
+        if liveEntry != nil { return ("Info", .info) }
+        if session != nil { return ("Chat", .chat) }
+        return nil
+    }
+
+    private func selector(first: (label: String, mode: PaneMode)) -> some View {
         Picker("Painel", selection: $nav.paneMode) {
-            Text("Chat").tag(PaneMode.chat)
+            Text(first.label).tag(first.mode)
             Text("Terminal").tag(PaneMode.terminal)
         }
         .pickerStyle(.segmented)
         .frame(maxWidth: 220)
+    }
+
+    /// O ✕ que a usuária pediu: no iPad o terminal ao vivo não tinha saída
+    /// nenhuma ("nao tem como fechar o popup como no iphone"). Ele NÃO encerra
+    /// coisa alguma — só volta pras informações da sessão. O espelho fica
+    /// montado e apenas para de fazer poll (`isActive`), então o tmux do outro
+    /// lado continua trabalhando.
+    ///
+    /// De propósito sem `role: .destructive` e sem confirmação, ao contrário
+    /// do ⊗ vermelho da `TerminalMirrorView`, que mata o pane. São dois botões
+    /// diferentes com dois efeitos diferentes, e é por isso que este é um ✕
+    /// simples e cinza.
+    private var closeTerminalButton: some View {
+        Button {
+            nav.paneMode = .info
+        } label: {
+            Image(systemName: "xmark")
+        }
+        .accessibilityLabel("Fechar o terminal")
     }
 
     private var expandButton: some View {
