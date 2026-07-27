@@ -168,11 +168,36 @@ func BoardArchiveHandler(st board.Store) http.HandlerFunc {
 	}
 }
 
+// BoardCloseOptionsHandler responde as semanas candidatas ao fechamento manual:
+// a atual e a última arquivada. É o que alimenta o popup "onde arquivar?" no
+// dashboard e nos apps. GET /board/close-options.
+func BoardCloseOptionsHandler(st board.Store) http.HandlerFunc {
+	loc := boardLoc()
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSONResp(w, http.StatusOK, st.CloseOptions(time.Now().In(loc)))
+	}
+}
+
 // BoardCloseHandler fecha a semana manualmente (arquiva concluídos + marca encalhadas).
+//
+// `?week=<rótulo>` escolhe onde arquivar. Sem o parâmetro, é a semana do relógio
+// — o comportamento de sempre. Só os dois rótulos que o `/board/close-options`
+// oferece são aceitos: qualquer outro é 400, para um typo não abrir uma semana
+// fantasma no arquivo.
 func BoardCloseHandler(st board.Store) http.HandlerFunc {
 	loc := boardLoc()
 	return func(w http.ResponseWriter, r *http.Request) {
-		archived, stalled := st.CloseWeek(time.Now().In(loc))
+		now := time.Now().In(loc)
+		week := r.URL.Query().Get("week")
+		if week != "" {
+			opts := st.CloseOptions(now)
+			allowed := week == opts.Current.Label || (opts.Last != nil && week == opts.Last.Label)
+			if !allowed {
+				writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "week_invalida"})
+				return
+			}
+		}
+		archived, stalled := st.CloseWeek(now, week)
 		writeJSONResp(w, http.StatusOK, map[string]int{"archived": archived, "stalled": stalled})
 	}
 }

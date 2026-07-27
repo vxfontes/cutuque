@@ -241,6 +241,10 @@
   .cf-cancel:hover { border-color: var(--faint); }
   .cf-delete { background: var(--error); color: #fff; border-color: var(--error); }
   .cf-delete:hover { filter: brightness(1.08); }
+  /* Escolha de semana: 3 botões não cabem lado a lado em 380px, então empilham. */
+  .confirm-actions.stack { flex-direction: column-reverse; align-items: stretch; }
+  .cf-alt { background: var(--panel2); color: var(--text); }
+  .cf-alt:hover { border-color: var(--faint); }
   .task-card {
     --tc: var(--faint); /* cor do tipo de IA (só a tag usa); default cinza */
     background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 100%);
@@ -436,8 +440,9 @@
     <div class="confirm" role="dialog" aria-modal="true">
       <h3 id="confirmTitle">Confirmar?</h3>
       <p id="confirmText">Esta ação não pode ser desfeita.</p>
-      <div class="confirm-actions">
+      <div class="confirm-actions" id="confirmActions">
         <button type="button" class="cf-cancel" id="confirmCancel">Cancelar</button>
+        <button type="button" class="cf-alt" id="confirmAlt" hidden></button>
         <button type="button" class="cf-delete" id="confirmOk">Confirmar</button>
       </div>
     </div>
@@ -914,17 +919,28 @@
   // ---- Modal de confirmação genérico (apagar card, fechar semana…) ----
   const $confirmModal = document.getElementById('confirmModal');
   let confirmCb = null;
-  function askConfirm({ title, message, confirmLabel, onConfirm }) {
+  let altCb = null;
+  // `altLabel`/`onAlt` são opcionais: com eles o modal vira uma escolha de duas
+  // ações (usado pelo fechamento da semana), sem eles é o confirmar de sempre.
+  function askConfirm({ title, message, confirmLabel, onConfirm, altLabel, onAlt }) {
     document.getElementById('confirmTitle').textContent = title;
     document.getElementById('confirmText').textContent = message;
     document.getElementById('confirmOk').textContent = confirmLabel || 'Confirmar';
+    $confirmAlt.textContent = altLabel || '';
+    $confirmAlt.hidden = !altLabel;
+    document.getElementById('confirmActions').classList.toggle('stack', !!altLabel);
     confirmCb = onConfirm;
+    altCb = onAlt || null;
     $confirmModal.hidden = false;
   }
-  function closeConfirm() { confirmCb = null; $confirmModal.hidden = true; }
+  function closeConfirm() { confirmCb = null; altCb = null; $confirmModal.hidden = true; }
   document.getElementById('confirmCancel').addEventListener('click', closeConfirm);
   document.getElementById('confirmOk').addEventListener('click', () => {
     const cb = confirmCb; closeConfirm(); if (cb) cb();
+  });
+  const $confirmAlt = document.getElementById('confirmAlt');
+  $confirmAlt.addEventListener('click', () => {
+    const cb = altCb; closeConfirm(); if (cb) cb();
   });
   $confirmModal.addEventListener('click', (e) => { if (e.target === $confirmModal) closeConfirm(); });
 
@@ -949,23 +965,51 @@
   }
 
   // Fechar a semana manualmente (arquiva concluídos + marca encalhados). Token exigido.
-  async function closeWeek() {
+  // `week` vazio = a semana do relógio; preenchido, arquiva no rótulo escolhido.
+  async function closeWeek(week) {
     try {
-      const res = await fetch('/board/close', { method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN } });
+      const url = '/board/close' + (week ? '?week=' + encodeURIComponent(week) : '');
+      const res = await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN } });
       if (!res.ok) { alert('Falha ao fechar a semana (' + res.status + ').'); return; }
       const r = await res.json();
       renderArquivo();
       alert(`Semana fechada: ${r.archived} arquivado(s), ${r.stalled} encalhado(s).`);
     } catch (e) { console.error('close-week erro:', e.message); }
   }
+
+  // Pergunta ONDE arquivar antes de fechar. Existindo uma semana anterior no
+  // arquivo, a escolha aparece — é o que salva o trabalho da virada de madrugada
+  // de virar uma semana nova de um card só. Sem ela, é o confirmar de sempre.
+  async function askCloseWeek() {
+    let opts = null;
+    try {
+      const res = await fetch('/board/close-options', { headers: { Authorization: 'Bearer ' + TOKEN } });
+      if (res.ok) opts = await res.json();
+    } catch (e) { console.error('close-options erro:', e.message); }
+    const alvo = opts
+      ? `${opts.pending} concluído${opts.pending === 1 ? '' : 's'}`
+      : 'Os cards concluídos';
+    if (!opts || !opts.last) {
+      askConfirm({
+        title: 'Fechar a semana agora?',
+        message: `${alvo} serão arquivados e saem do board; to-dos antigos não iniciados viram encalhados. Normalmente isso acontece sozinho no domingo 23:59.`,
+        confirmLabel: 'Fechar semana',
+        onConfirm: () => closeWeek(''),
+      });
+      return;
+    }
+    askConfirm({
+      title: 'Onde arquivar?',
+      message: `${alvo} vão sair do board. Se este trabalho é da virada de madrugada, junte na semana que acabou em vez de abrir uma nova.`,
+      altLabel: `Juntar em ${ptRange(opts.last.start, opts.last.end)} (${opts.last.count})`,
+      onAlt: () => closeWeek(opts.last.label),
+      confirmLabel: `Criar semana nova (${ptRange(opts.current.start, opts.current.end)})`,
+      onConfirm: () => closeWeek(opts.current.label),
+    });
+  }
   const $closeWeekBtn = document.getElementById('closeWeekBtn');
   $closeWeekBtn.innerHTML = `${ICONS.calCheck} Fechar semana`;
-  $closeWeekBtn.addEventListener('click', () => askConfirm({
-    title: 'Fechar a semana agora?',
-    message: 'Os cards concluídos serão arquivados e saem do board; to-dos antigos não iniciados viram encalhados. Normalmente isso acontece sozinho no domingo 23:59.',
-    confirmLabel: 'Fechar semana',
-    onConfirm: closeWeek,
-  }));
+  $closeWeekBtn.addEventListener('click', askCloseWeek);
 
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;

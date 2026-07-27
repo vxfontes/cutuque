@@ -113,7 +113,12 @@ type Store interface {
 	SetEncalhada(id string, v bool, actor string) (Task, bool)
 	AddComment(id, author, text string) (Task, bool)
 	Remove(id string) bool
-	CloseWeek(now time.Time) (archived, stalled int)
+	// CloseWeek arquiva os concluídos. `week` vazio = a semana de `now` (é o que
+	// o fechamento automático de domingo usa); preenchido, arquiva NAQUELE rótulo
+	// — é como o trabalho de madrugada de segunda entra na semana que acabou.
+	CloseWeek(now time.Time, week string) (archived, stalled int)
+	// CloseOptions são as semanas candidatas a receber o próximo fechamento.
+	CloseOptions(now time.Time) CloseOptions
 	ArchivedWeeks() []ArchivedWeek
 	// Search acha cards (ativos E arquivados) cujo título, descrição OU algum
 	// comentário contenha q (case-insensitive). Nos arquivados, Archived=true.
@@ -253,11 +258,33 @@ func isoWeekStartDate(year, week int) time.Time {
 	return week1Mon.AddDate(0, 0, (week-1)*7)
 }
 
-// CloseWeek arquiva os cards concluídos na semana de `now` e marca como encalhada
-// os a_fazer que já existiam antes do início dessa semana. Retorna as contagens.
-func (s *MemStore) CloseWeek(now time.Time) (archived, stalled int) {
-	label := weekLabel(now)
-	weekStart := startOfISOWeek(now)
+// weekStartFor devolve a segunda-feira 00:00 (na loc de now) da semana rotulada
+// por `label`, junto do rótulo efetivamente usado. Rótulo vazio ou malformado cai
+// na semana de `now` — o chamador HTTP já valida, isto é o cinto de segurança
+// para não gravar um arquivo em "0000-W00".
+func weekStartFor(label string, now time.Time) (time.Time, string) {
+	var y, w int
+	if n, err := fmt.Sscanf(label, "%d-W%d", &y, &w); n != 2 || err != nil ||
+		y < 2000 || y > 9999 || w < 1 || w > 53 {
+		return startOfISOWeek(now), weekLabel(now)
+	}
+	d := isoWeekStartDate(y, w)
+	return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, now.Location()), label
+}
+
+// CloseWeek arquiva os cards concluídos e marca como encalhada os a_fazer que já
+// existiam antes do início da semana fechada. Retorna as contagens.
+//
+// `week` é o rótulo de destino ("2026-W30"); vazio = a semana de `now`, que é o
+// caminho do fechamento automático de domingo 23:59. Passar um rótulo anterior é
+// o que resolve a virada de madrugada: o que foi concluído às 00:30 de segunda
+// entra na semana em que o trabalho aconteceu, em vez de abrir uma semana nova.
+//
+// O corte da encalhada acompanha o rótulo escolhido, e não o relógio: fechando na
+// W30, um a_fazer criado durante a W30 não vira encalhado no mesmo fechamento que
+// encerra a semana dele.
+func (s *MemStore) CloseWeek(now time.Time, week string) (archived, stalled int) {
+	weekStart, label := weekStartFor(week, now)
 	var removed []string
 	var updated []Task
 	s.mu.Lock()
@@ -286,6 +313,83 @@ func (s *MemStore) CloseWeek(now time.Time) (archived, stalled int) {
 		s.broadcast(t)
 	}
 	return archived, stalled
+}
+
+// WeekOption é uma semana candidata a receber o fechamento, com o intervalo já
+// resolvido para o cliente não precisar refazer aritmética de semana ISO.
+type WeekOption struct {
+	Label string `json:"label"`
+	Start string `json:"start"`
+	End   string `json:"end"`
+	// Count é quantos cards JÁ estão arquivados nessa semana.
+	Count int `json:"count"`
+}
+
+// CloseOptions é o que o fechamento manual oferece de escolha.
+//
+// `Last` é a semana arquivada mais recente que NÃO é a atual — a opção "juntar
+// no que já foi arquivado". É nula quando não existe (arquivo vazio, ou só a
+// semana atual lá dentro); nesse caso não há escolha a fazer e o cliente mostra
+// a confirmação simples de sempre.
+type CloseOptions struct {
+	Current WeekOption  `json:"current"`
+	Last    *WeekOption `json:"last,omitempty"`
+	// Pending é quantos concluídos seriam arquivados agora.
+	Pending int `json:"pending"`
+}
+
+// weekOption monta a opção a partir do rótulo (datas derivadas dele).
+func weekOption(label string, count int) WeekOption {
+	var y, w int
+	fmt.Sscanf(label, "%d-W%d", &y, &w)
+	start := isoWeekStartDate(y, w)
+	return WeekOption{
+		Label: label, Start: start.Format("2006-01-02"),
+		End: start.AddDate(0, 0, 6).Format("2006-01-02"), Count: count,
+	}
+}
+
+// lastDistinct devolve o rótulo arquivado mais recente diferente de `current`.
+func lastDistinct(counts map[string]int, current string) (string, bool) {
+	labels := make([]string, 0, len(counts))
+	for l := range counts {
+		if l != current {
+			labels = append(labels, l)
+		}
+	}
+	if len(labels) == 0 {
+		return "", false
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(labels))) // 2026-W30 antes de W29
+	return labels[0], true
+}
+
+// CloseOptions lista as semanas que podem receber o fechamento manual.
+func (s *MemStore) CloseOptions(now time.Time) CloseOptions {
+	current := weekLabel(now)
+	counts := map[string]int{}
+	pending := 0
+	s.mu.RLock()
+	for l, ts := range s.archive {
+		counts[l] = len(ts)
+	}
+	for _, t := range s.byID {
+		if t.Column == "concluido" {
+			pending++
+		}
+	}
+	s.mu.RUnlock()
+	return buildCloseOptions(current, counts, pending)
+}
+
+// buildCloseOptions é a parte pura, compartilhada pelos dois stores.
+func buildCloseOptions(current string, counts map[string]int, pending int) CloseOptions {
+	out := CloseOptions{Current: weekOption(current, counts[current]), Pending: pending}
+	if l, ok := lastDistinct(counts, current); ok {
+		opt := weekOption(l, counts[l])
+		out.Last = &opt
+	}
+	return out
 }
 
 // ArchivedWeek é uma semana do arquivo, para exibição.
@@ -362,7 +466,8 @@ func StartWeeklyCloser(s Store, loc *time.Location) {
 	go func() {
 		for {
 			time.Sleep(time.Until(nextSundayClose(time.Now().In(loc))))
-			s.CloseWeek(time.Now().In(loc))
+			// Rótulo vazio: domingo 23:59 a semana do relógio É a semana certa.
+			s.CloseWeek(time.Now().In(loc), "")
 		}
 	}()
 }
