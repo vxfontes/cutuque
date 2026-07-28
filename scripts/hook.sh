@@ -29,8 +29,8 @@ TOKEN_FILE="$HOME/.cutuque/token"
 # (ver README). Vem de $CUTUQUE_HUB ou de ~/.cutuque/hub — uma linha "host:porta",
 # ao lado do token, que é o que já não é versionado. Sem endereço configurado o
 # hook sai quieto, igual a quando falta token: nunca bloquear o claude é a regra
-# deste script, e um endereço de exemplo faria o POST falhar em silêncio contra
-# um host que não é o dela — pior que não tentar.
+# deste script. Um endereço de exemplo como padrão seria pior que não tentar —
+# faria todo POST falhar em silêncio contra um host que não é o seu.
 HUB_FILE="$HOME/.cutuque/hub"
 JQ=/usr/bin/jq
 [ -r "$TOKEN_FILE" ] || exit 0
