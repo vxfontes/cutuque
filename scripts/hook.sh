@@ -6,7 +6,7 @@
 # e é ela que o ~/.claude/settings.json chama. Para instalar/atualizar:
 #
 #   cp cutuque/scripts/hook.sh ~/.cutuque/hook.sh && chmod +x ~/.cutuque/hook.sh
-#   printf '192.0.2.10:8787\n' > ~/.cutuque/hub    # o endereço REAL do seu hub
+#   printf '192.0.2.10:8787\n' > ~/.cutuque/hub-url   # o endereço REAL do seu hub
 #
 # Reporta pane + socket do tmux ($TMUX_PANE e o socket em $TMUX) quando o claude
 # roda dentro do tmux — assim o hub sabe EXATAMENTE qual pane/servidor é a
@@ -26,19 +26,29 @@
 TOKEN_FILE="$HOME/.cutuque/token"
 # O endereço do hub NÃO fica escrito aqui: este arquivo é versionado num repo
 # público, e a convenção do projeto é que endereço real só aparece como RFC 5737
-# (ver README). Vem de $CUTUQUE_HUB ou de ~/.cutuque/hub — uma linha "host:porta",
-# ao lado do token, que é o que já não é versionado. Sem endereço configurado o
-# hook sai quieto, igual a quando falta token: nunca bloquear o claude é a regra
-# deste script. Um endereço de exemplo como padrão seria pior que não tentar —
-# faria todo POST falhar em silêncio contra um host que não é o seu.
-HUB_FILE="$HOME/.cutuque/hub"
+# (ver README). Vem de $CUTUQUE_HUB ou de ~/.cutuque/hub-url — uma linha
+# "host:porta", ao lado do token, que é o que já não é versionado. O sufixo -url é
+# de propósito: "~/.cutuque/hub" lia como se o hub morasse aqui, e o hub mora no
+# macmini. Sem endereço configurado o hook sai quieto, igual a quando falta token:
+# nunca bloquear o claude é a regra deste script. Um endereço de exemplo como
+# padrão seria pior que não tentar — faria todo POST falhar em silêncio contra um
+# host que não é o seu.
+HUB_FILE="$HOME/.cutuque/hub-url"
 JQ=/usr/bin/jq
 [ -r "$TOKEN_FILE" ] || exit 0
 [ -x "$JQ" ] || exit 0
 HUB_ADDR="${CUTUQUE_HUB:-}"
 if [ -z "$HUB_ADDR" ] && [ -r "$HUB_FILE" ]; then
-  HUB_ADDR="$(tr -d ' \t\r\n' < "$HUB_FILE")"
+  # head -n 1: se o arquivo tiver mais de uma linha, colar tudo junto formaria um
+  # endereço sem sentido ("host:8787lixo") que só ia falhar lá no curl, longe daqui.
+  HUB_ADDR="$(head -n 1 "$HUB_FILE" | tr -d ' \t\r\n')"
 fi
+# Tolerar a URL inteira: $CUTUQUE_HUB é "host:porta" no README, mas o deck aceita
+# "http://host:porta" (docs/.../cutuque-board.md), então a mesma variável circula
+# nas duas formas. Sem isso o POST iria pra http://http://... e falharia mudo.
+HUB_ADDR="${HUB_ADDR#http://}"
+HUB_ADDR="${HUB_ADDR#https://}"
+HUB_ADDR="${HUB_ADDR%/}"
 [ -n "$HUB_ADDR" ] || exit 0
 HUB="http://$HUB_ADDR/hooks/claude"
 TOKEN="$(cat "$TOKEN_FILE")"
