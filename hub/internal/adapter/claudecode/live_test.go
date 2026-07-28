@@ -295,3 +295,36 @@ func TestLiveScriptRunsAndEmitsJSON(t *testing.T) {
 		t.Fatalf("liveScript não emitiu JSON de lista: %v (out=%q)", err, out)
 	}
 }
+
+// TestLiveScriptCleansTitleLikeDiscover: a MESMA sessão aparece na lista de
+// adoção (discover) e na de vivas, e o título tem que sair igual nas duas —
+// senão a mesma sessão exibe dois nomes no app. Cobre o par de defeitos visto
+// ao vivo: eco de `<local-command-stdout>` virando título, e ANSI cru no meio
+// do texto. Ver TestDiscoverScriptDropsStdoutEchoAndANSI.
+func TestLiveScriptCleansTitleLikeDiscover(t *testing.T) {
+	const sid = "abababab-1111-2222-3333-444444444444"
+	home := t.TempDir()
+	dir := filepath.Join(home, ".claude", "projects", "-tmp-ansi")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// O \u001b é escape do próprio JSON; o json.loads do script devolve o ESC real.
+	body := strings.Join([]string{
+		`{"type":"user","cwd":"/tmp/ansi","message":{"content":"<local-command-stdout>Set model to \u001b[1mOpus\u001b[22m"}}`,
+		`{"type":"user","cwd":"/tmp/ansi","message":{"content":"subir o \u001b[0;32mhub\u001b[0m"}}`,
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(dir, sid+".jsonl"), []byte(body), 0o644); err != nil {
+		t.Fatalf("transcript: %v", err)
+	}
+
+	got, err := runLive(t, home, "#!/bin/sh\necho '4242 claude --session-id "+sid+"'\n", "/tmp/ansi")
+	if err != nil {
+		t.Fatalf("liveScript: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got = %+v, quero 1 sessão", got)
+	}
+	if got[0].Title != "subir o hub" {
+		t.Errorf("título = %q, quero %q (sem eco de slash-command e sem ANSI)", got[0].Title, "subir o hub")
+	}
+}

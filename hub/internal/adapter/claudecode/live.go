@@ -31,10 +31,13 @@ const liveScript = `import os,json,glob,re,time,subprocess
 UUID=r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 LIVE_WINDOW=900
 now=time.time()
+ANSI=re.compile(r'\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]')
 def clean(t):
-    t=' '.join(str(t).split())
+    # Ver discover.go: mesma limpeza, e as duas tem que andar juntas — a mesma
+    # sessao aparece na lista de adocao e na de vivas, com o mesmo titulo.
+    t=' '.join(ANSI.sub('',str(t)).split())
     if not t: return ''
-    for p in ('<local-command-caveat>','<command-','<task-notification>','[SYSTEM','Caveat:','<system-reminder>'):
+    for p in ('<local-command-','<command-','<task-notification>','[SYSTEM','Caveat:','<system-reminder>'):
         if t.startswith(p): return ''
     return t
 def user_text(o):

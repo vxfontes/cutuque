@@ -136,3 +136,51 @@ func TestDiscoverScriptSkipsSyntheticTitles(t *testing.T) {
 		t.Errorf("título = %q, quero espaços normalizados e sem caveat", list[0].Title)
 	}
 }
+
+// TestDiscoverScriptDropsStdoutEchoAndANSI: dois defeitos vistos AO VIVO no
+// título da sessão 127c3127 — `<local-command-stdout>Set model to \x1b[1m…`.
+// O filtro listava `<local-command-caveat>` nominalmente, então o -stdout (eco
+// de slash-command) passava e virava título; e nada tirava ANSI, que no app
+// aparece como lixo ilegível no meio do texto.
+func TestDiscoverScriptDropsStdoutEchoAndANSI(t *testing.T) {
+	py, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 ausente; pulando")
+	}
+	home := t.TempDir()
+	projDir := filepath.Join(home, ".claude", "projects", "encoded")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// 1ª: eco de slash-command com ANSI (tem que sumir inteira).
+	// 2ª: mensagem real, mas com cor no meio (fica, sem os escapes).
+	// O \u001b e escape do PROPRIO JSON: o json.loads do script o decodifica
+	// para o ESC de verdade, entao o teste exercita o byte real enquanto o .go
+	// fica em ASCII imprimivel (ESC cru dentro de string JSON e invalido).
+	sess := strings.Join([]string{
+		`{"cwd":"/p","type":"user","message":{"role":"user","content":"<local-command-stdout>Set model to \u001b[1mOpus\u001b[22m"}}`,
+		`{"type":"user","message":{"role":"user","content":"arrumar o \u001b[0;31mhub\u001b[0m agora"}}`,
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(projDir, "cccccccc-0000-0000-0000-000000000003.jsonl"), []byte(sess), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cmd := exec.Command(py, "-")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Stdin = strings.NewReader(discoverScript)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("rodar script: %v", err)
+	}
+	list, err := parseDiscovered(out)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("quero 1 sessão, got %d: %+v", len(list), list)
+	}
+	if list[0].Title != "arrumar o hub agora" {
+		t.Errorf("título = %q, quero %q (sem eco de slash-command e sem ANSI)",
+			list[0].Title, "arrumar o hub agora")
+	}
+}

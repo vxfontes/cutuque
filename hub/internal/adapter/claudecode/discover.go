@@ -16,12 +16,18 @@ import (
 // Pula mensagens sintéticas de slash-command (<local-command-caveat>,
 // <command-name>...) e normaliza espaços em branco para um título limpo.
 // Roda com o python3 do sistema (presente em macOS e no ZimaOS).
-const discoverScript = `import os,json,glob
+const discoverScript = `import os,json,glob,re
 base=os.path.expanduser('~/.claude/projects')
+# Sequencias ANSI (cor, cursor, OSC) vazam pro transcript quando o usuario cola
+# saida de terminal ou quando um slash-command ecoa. No app viram lixo ilegivel
+# no meio do titulo, entao saem antes de qualquer outra coisa.
+ANSI=re.compile(r'\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]')
 def clean(t):
-    t=' '.join(str(t).split())
+    t=' '.join(ANSI.sub('',str(t)).split())
     if not t: return ''
-    for p in ('<local-command-caveat>','<command-','<task-notification>','[SYSTEM','Caveat:','<system-reminder>'):
+    # '<local-command-' (nao so o -caveat): o -stdout tambem e eco de
+    # slash-command e virava titulo de sessao. Visto ao vivo.
+    for p in ('<local-command-','<command-','<task-notification>','[SYSTEM','Caveat:','<system-reminder>'):
         if t.startswith(p): return ''
     return t
 def user_text(o):
