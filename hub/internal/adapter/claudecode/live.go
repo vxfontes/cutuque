@@ -14,8 +14,11 @@ import (
 //     quando existe (sinal forte); senão, mapeia o cwd do processo (lsof) → os N
 //     .jsonl mais recentes daquela pasta, N = quantos processos sem flag estão
 //     nela (dois `claude` no mesmo cwd são duas sessões, não uma).
-//   - recência: só mantém sessões cujo .jsonl mudou dentro da janela (descarta as
-//     que já encerraram, mesmo com processo ainda no ar).
+//   - recência: poda por mtime, mas SÓ o que veio do palpite por cwd. Id lido do
+//     argv é prova direta de que aquele processo roda aquela sessão — a mtime não
+//     acrescenta nada e, aplicada ali, tirava da lista uma sessão viva parada num
+//     comando longo (build, suíte inteira), que o reaper então mandava para idle
+//     no meio do trabalho.
 //
 // A janela é generosa (15min) de propósito: quem estabelece a vida é o PROCESSO
 // no ps; o mtime só desempata QUAL sessão daquele processo. Janela curta cortava
@@ -95,12 +98,17 @@ def recent_sids(cwd,n):
         except OSError: pass
     fs.sort(reverse=True)
     return [os.path.basename(f)[:-6] for _,f in fs[:n]]
-cands=set()
+# Duas qualidades de candidato, e a diferenca importa la embaixo:
+#   certos  — o id veio do argv do processo. Prova direta: ESTE processo esta
+#             rodando ESTA sessao. Nao ha o que a mtime acrescente.
+#   achados — o id foi adivinhado pelo cwd. So um palpite ordenado por recencia.
+certos=set()
+achados=set()
 noflag={}
 for pid,cmd in procs():
     sid=sid_from_cmd(cmd)
     if sid:
-        cands.add(sid); continue
+        certos.add(sid); continue
     # Sem id no argv o transcript so pode ser adivinhado pelo cwd. Conta quantos
     # processos assim ha em CADA pasta em vez de resolver um por um.
     c=cwd_of(pid)
@@ -110,15 +118,22 @@ for c,n in noflag.items():
     # recente (o antigo max()) colapsava as n sessoes vivas em UMA — as outras
     # ficavam invisiveis aqui e o reaper as derrubava de running. Admite os n
     # mais recentes; a janela LIVE_WINDOW la embaixo poda quem ja encerrou.
-    for sid in recent_sids(c,n): cands.add(sid)
+    for sid in recent_sids(c,n): achados.add(sid)
+achados-=certos
 out=[]
-for sid in cands:
+for sid in certos|achados:
     fs=glob.glob(os.path.expanduser('~/.claude/projects/*/'+sid+'.jsonl'))
     if not fs: continue
     f=fs[0]
     try: mt=os.path.getmtime(f)
     except Exception: continue
-    if now-mt>LIVE_WINDOW: continue
+    # A janela existe para podar PALPITE velho: n processos na pasta, os n
+    # transcripts mais recentes, e entre eles pode vir o de uma sessao que ja
+    # encerrou. Para id vindo do argv ela so atrapalha — a sessao esta viva por
+    # prova direta, e transcript parado ha 15min e o que um comando longo
+    # (build, suite inteira) produz. Podar ai apagava da lista uma sessao viva e
+    # o reaper a mandava para idle no meio do trabalho.
+    if sid in achados and now-mt>LIVE_WINDOW: continue
     cwd='';title='';last='';count=0
     try:
         with open(f,errors='ignore') as fh:

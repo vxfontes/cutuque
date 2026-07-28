@@ -239,6 +239,38 @@ func TestLiveScriptSkipsOnlyTheDeadPid(t *testing.T) {
 	}
 }
 
+// TestLiveScriptKeepsSilentSessionProvenByArgv: sessão cujo id está no argv fica
+// viva mesmo com o transcript parado além da janela. É o caso do comando longo —
+// um build de 40min não escreve nada no .jsonl, e o processo no ps já é prova
+// direta. Podar aqui sumia com a sessão da lista e o reaper a mandava para idle
+// no meio do trabalho. O palpite por cwd, esse sim, continua sendo podado.
+func TestLiveScriptKeepsSilentSessionProvenByArgv(t *testing.T) {
+	const sid = "ffffffff-1111-2222-3333-444444444444"
+	home := liveHome(t, "-tmp-w", "/tmp/w", sid)
+	f := filepath.Join(home, ".claude", "projects", "-tmp-w", sid+".jsonl")
+	old := time.Now().Add(-2 * time.Hour) // muito além dos 900s da janela
+	if err := os.Chtimes(f, old, old); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	got, err := runLive(t, home, "#!/bin/sh\necho '4242 claude --session-id "+sid+"'\n", "/tmp/w")
+	if err != nil {
+		t.Fatalf("liveScript: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != sid {
+		t.Fatalf("got = %+v, quero [%s] (id no argv é prova direta; mtime não desmente)", got, sid)
+	}
+
+	// Mesmo transcript velho, agora só palpitado pelo cwd: aí a janela vale.
+	got, err = runLive(t, home, "#!/bin/sh\necho '4242 claude'\n", "/tmp/w")
+	if err != nil {
+		t.Fatalf("liveScript (sem flag): %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got = %+v, quero vazio (palpite por cwd fora da janela tem que ser podado)", got)
+	}
+}
+
 // TestLiveScriptRunsAndEmitsJSON garante que o liveScript é python válido e
 // sempre emite uma lista JSON (mesmo sem sessões vivas), sobre um HOME vazio —
 // não valida a detecção de processos (depende do SO), só o contrato de saída.
