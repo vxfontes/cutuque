@@ -65,15 +65,22 @@ func liveHome(t *testing.T, projDir, cwd string, sids ...string) string {
 // nada" de "o oráculo quebrou" é justamente o que alguns testes verificam.
 func runLive(t *testing.T, home, psBody, lsofCwd string) ([]session.Discovered, error) {
 	t.Helper()
+	return runLiveFakes(t, home, map[string]string{
+		"ps":   psBody,
+		"lsof": "#!/bin/sh\nprintf 'n%s\\n' " + shQuote(lsofCwd) + "\n",
+	})
+}
+
+// runLiveFakes é o runLive sem opinião sobre os fakes: quem chama entrega o
+// corpo de cada binário. Só os testes que precisam de um `lsof` fora do comum
+// (travado, sumido) usam esta forma.
+func runLiveFakes(t *testing.T, home string, fakes map[string]string) ([]session.Discovered, error) {
+	t.Helper()
 	py, err := exec.LookPath("python3")
 	if err != nil {
 		t.Skip("python3 ausente; pulando")
 	}
 	bin := t.TempDir()
-	fakes := map[string]string{
-		"ps":   psBody,
-		"lsof": "#!/bin/sh\nprintf 'n%s\\n' " + shQuote(lsofCwd) + "\n",
-	}
 	for name, body := range fakes {
 		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
 			t.Fatalf("fake %s: %v", name, err)
@@ -192,6 +199,43 @@ func TestLiveScriptFailsWhenPsFails(t *testing.T) {
 	got, err := runLive(t, home, "#!/bin/sh\necho 'ps: falhou' >&2\nexit 1\n", "/tmp/x")
 	if err == nil {
 		t.Fatalf("liveScript devolveu %+v sem erro; quero falha (ps quebrado ≠ máquina sem sessões)", got)
+	}
+}
+
+// TestLiveScriptFailsWhenLsofHangs: mesma regra do `ps`, um andar abaixo. O
+// `lsof` só é consultado para processo SEM --session-id no argv — justo a
+// sessão que não tem nenhuma outra evidência. Se o timeout virasse cwd vazio, o
+// processo sumia da varredura, o reaper via a sessão faltando e a ceifava: uma
+// máquina carregada derrubaria sessões vivas. Tem que sair como erro.
+func TestLiveScriptFailsWhenLsofHangs(t *testing.T) {
+	const sid = "dddddddd-1111-2222-3333-444444444444"
+	home := liveHome(t, "-tmp-y", "/tmp/y", sid)
+
+	got, err := runLiveFakes(t, home, map[string]string{
+		"ps":   "#!/bin/sh\necho '4242 claude'\n",
+		"lsof": "#!/bin/sh\nsleep 30\n",
+	})
+	if err == nil {
+		t.Fatalf("liveScript devolveu %+v sem erro; quero falha (lsof travado ≠ processo sem cwd)", got)
+	}
+}
+
+// TestLiveScriptSkipsOnlyTheDeadPid: o outro lado da moeda. `lsof` que roda e
+// não acha o pid (ele saiu entre o ps e o lsof — corrida normal) é conhecimento,
+// não ignorância: derruba só aquele pid e a varredura segue.
+func TestLiveScriptSkipsOnlyTheDeadPid(t *testing.T) {
+	const sid = "eeeeeeee-1111-2222-3333-444444444444"
+	home := liveHome(t, "-tmp-z", "/tmp/z", sid)
+
+	got, err := runLiveFakes(t, home, map[string]string{
+		"ps":   "#!/bin/sh\necho '4242 claude'\n",
+		"lsof": "#!/bin/sh\nexit 1\n",
+	})
+	if err != nil {
+		t.Fatalf("liveScript falhou: %v; pid que sumiu não é motivo para derrubar a máquina", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got = %+v, quero lista vazia (o único processo já tinha saído)", got)
 	}
 }
 

@@ -62,11 +62,17 @@ def procs():
         if not (('--session-id' in cmd) or base=='claude' or '/claude ' in cmd or cmd.startswith('claude')): continue
         yield pid,cmd
 def cwd_of(pid):
-    try:
-        out=subprocess.run(['lsof','-a','-p',pid,'-d','cwd','-Fn'],capture_output=True,text=True,timeout=3).stdout
-        for l in out.splitlines():
-            if l.startswith('n'): return l[1:]
-    except Exception: pass
+    # Mesmo criterio do procs(), so que por pid: distingue "esse processo nao
+    # existe mais" de "nao consegui perguntar". Sair da funcao com '' esconde um
+    # processo VIVO sem flag — justo o que nao tem outra evidencia — e o reaper
+    # depois o ceifa. Entao o que e mesmo ignorancia sobe e derruba o script
+    # inteiro (a maquina e pulada no tick); so o pid que sumiu vira ''.
+    # Sem try: lsof travado (TimeoutExpired) ou ausente (FileNotFoundError) sobem.
+    out=subprocess.run(['lsof','-a','-p',pid,'-d','cwd','-Fn'],capture_output=True,text=True,timeout=3).stdout
+    for l in out.splitlines():
+        if l.startswith('n'): return l[1:]
+    # Sem linha n e sem excecao: lsof rodou e nao achou o pid. Ele saiu entre o
+    # ps e o lsof — corrida normal, e isso E saber que nao esta mais la.
     return ''
 def sid_from_cmd(cmd):
     m=re.search(r'--(?:session-id|resume|fork-session)\s+('+UUID+')',cmd)
