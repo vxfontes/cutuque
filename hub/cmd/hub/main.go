@@ -33,6 +33,65 @@ import (
 // espera as requests em voo terminarem antes de desistir (Fase 5).
 const shutdownTimeout = 10 * time.Second
 
+// pgConnectBudget é por quanto tempo o boot insiste no Postgres antes de cair no
+// JSON. Existe por causa da queda de energia de 2026-07-28: no reboot do macmini
+// o hub sobe junto com o container do Postgres e pode chegar primeiro. Como a
+// escolha do storage é feita UMA vez no boot (abaixo), um atraso de segundos do
+// Postgres deixaria o hub em JSON até alguém reiniciar — e isso é silencioso:
+// health 200, board respondendo, nada denunciando. Corrida de boot resolve em
+// segundos; queda real de Postgres dura mais, então o fallback continua valendo
+// pro caso em que ele faz sentido.
+const pgConnectBudget = 90 * time.Second
+
+// pgRetryFirstWait/pgRetryMaxWait: backoff entre tentativas de connect. São var,
+// e não const, só para o teste poder encolhê-los — em produção ninguém escreve.
+var (
+	pgRetryFirstWait = 1 * time.Second
+	pgRetryMaxWait   = 10 * time.Second
+)
+
+// openPostgresWithRetry chama open até dar certo ou o prazo estourar, com backoff
+// dobrando de pgRetryFirstWait até pgRetryMaxWait. Retentar é seguro: os dois
+// opens (board e histórico) aplicam schema idempotente (CREATE ... IF NOT EXISTS).
+//
+// O prazo é conferido DEPOIS da primeira tentativa, de propósito: com deadline no
+// passado (dev) ainda se tenta uma vez, preservando o comportamento antigo de boot
+// rápido mesmo com CUTUQUE_DATABASE_URL apontando pra lugar nenhum.
+func openPostgresWithRetry[T any](
+	ctx context.Context,
+	logger *slog.Logger,
+	what string,
+	deadline time.Time,
+	open func(context.Context) (T, error),
+) (T, error) {
+	var zero T
+	wait := pgRetryFirstWait
+	for attempt := 1; ; attempt++ {
+		v, err := open(ctx)
+		if err == nil {
+			if attempt > 1 {
+				logger.Info("postgres respondeu depois de esperar", "para", what, "tentativas", attempt)
+			}
+			return v, nil
+		}
+		if !time.Now().Before(deadline) {
+			return zero, err
+		}
+		if attempt == 1 {
+			logger.Info("postgres ainda não respondeu; insistindo até o prazo",
+				"para", what, "err", err, "prazo_s", int(time.Until(deadline).Seconds()))
+		}
+		select {
+		case <-ctx.Done():
+			return zero, ctx.Err()
+		case <-time.After(wait):
+		}
+		if wait *= 2; wait > pgRetryMaxWait {
+			wait = pgRetryMaxWait
+		}
+	}
+}
+
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	cfg := config.Load()
@@ -64,8 +123,20 @@ func main() {
 	// CUTUQUE_DATABASE_URL; senão cai no JSON/memória (dev). No 1º boot com DB
 	// vazio, importa o board.json existente (o arquivo fica de backup).
 	dbURL := os.Getenv("CUTUQUE_DATABASE_URL")
+	// Prazo COMPARTILHADO pelos dois connects (board e histórico): é o mesmo
+	// Postgres, então quem chega depois aproveita o que sobrou e o boot nunca
+	// gasta 2× o orçamento. Só em prod — em dev o prazo já nasce vencido, isto é,
+	// uma tentativa só.
+	pgDeadline := time.Now()
+	if dbURL != "" && cfg.Env == "prod" {
+		pgDeadline = pgDeadline.Add(pgConnectBudget)
+	}
 	if dbURL != "" {
-		if pg, err := board.OpenPostgres(context.Background(), dbURL); err != nil {
+		if pg, err := openPostgresWithRetry(context.Background(), logger, "board", pgDeadline,
+			func(ctx context.Context) (*board.PostgresStore, error) {
+				return board.OpenPostgres(ctx, dbURL)
+			},
+		); err != nil {
 			logger.Warn("board Postgres indisponível; caindo no JSON", "err", err)
 			if boardPath != "" {
 				boardStore = board.NewAt(boardPath)
@@ -101,7 +172,11 @@ func main() {
 	var eng *engine.Engine
 	var hist *history.PostgresStore
 	if dbURL != "" {
-		st, err := history.Open(context.Background(), dbURL)
+		st, err := openPostgresWithRetry(context.Background(), logger, "histórico", pgDeadline,
+			func(ctx context.Context) (*history.PostgresStore, error) {
+				return history.Open(ctx, dbURL)
+			},
+		)
 		if err != nil {
 			logger.Warn("histórico Postgres indisponível; seguindo só com JSON", "err", err)
 			eng = engine.New(reg)
