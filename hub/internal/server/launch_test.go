@@ -82,7 +82,7 @@ func (f *fakeLauncher) Discover(machine string) ([]session.Discovered, error) {
 	return f.discovered, f.discoverErr
 }
 
-func (f *fakeLauncher) Live(machine string) ([]session.Discovered, error) {
+func (f *fakeLauncher) Live(machine, agent string) ([]session.Discovered, error) {
 	return f.liveSessions, f.liveErr
 }
 

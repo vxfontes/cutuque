@@ -29,7 +29,7 @@ type Launcher interface {
 	Resolve(id string) error
 	ImportHistory(id string) error
 	Discover(machine string) ([]session.Discovered, error)
-	Live(machine string) ([]session.Discovered, error)
+	Live(machine, agent string) ([]session.Discovered, error)
 	ListDirs(machine, path string) (session.DirListing, error)
 	Adopt(machine, id, cwd, title, agent string) (session.Session, error)
 	TmuxList(machine string) ([]session.Discovered, error)
@@ -288,7 +288,10 @@ func DiscoverHandler(lch Launcher) http.HandlerFunc {
 // Mesmo contrato do DiscoverHandler.
 func LiveHandler(lch Launcher) http.HandlerFunc {
 	return discoveryLikeHandler(func(machine string) ([]session.Discovered, error) {
-		return lch.Live(machine)
+		// Rota do sheet de descoberta do app, que é do Claude Code — agente
+		// vazio resolve para claude-code no Launcher. O reaper, esse sim, passa
+		// o agente da sessão, porque para ele a resposta é veredito de vida.
+		return lch.Live(machine, "")
 	})
 }
 

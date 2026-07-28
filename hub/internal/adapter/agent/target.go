@@ -47,6 +47,14 @@ type Liver interface {
 	Live(ctx context.Context) ([]session.Discovered, error)
 }
 
+// TranscriptLister lista os ids de TODAS as sessões que ainda têm transcript no
+// disco da máquina. Diferente do Discoverer, não lê o conteúdo dos arquivos nem
+// corta a lista: é a resposta EXATA para "essa sessão ainda existe lá?", que o
+// reaper usa para decidir entre marcar idle e esquecer de vez.
+type TranscriptLister interface {
+	TranscriptIDs(ctx context.Context) ([]string, error)
+}
+
 // DirLister lista subpastas de um caminho na máquina (seletor de pastas do app).
 type DirLister interface {
 	ListDirs(ctx context.Context, path string) (session.DirListing, error)

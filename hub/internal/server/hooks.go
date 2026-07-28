@@ -26,6 +26,12 @@ type hookPayload struct {
 	// EXATO dessa sessão. Vazios = sessão local fora do tmux.
 	Pane       string `json:"pane"`
 	TmuxSocket string `json:"tmux_socket"`
+	// Reason só vem no SessionEnd e diz POR QUE a sessão acabou (clear, resume,
+	// logout, prompt_input_exit, bypass_permissions_disabled, other). Não muda a
+	// decisão — todos significam "esta sessão parou" — mas vai para a linha do
+	// tempo, que é onde a diferença entre "fechei o terminal" e "dei /clear"
+	// importa na hora de entender o histórico.
+	Reason string `json:"reason"`
 }
 
 // paneTarget compõe o alvo tmux "<socket>\t<pane>" (vazio se não estiver no
@@ -135,7 +141,11 @@ const maxHookBody = 64 * 1024
 // HookHandler recebe hooks do Claude Code e os traduz em eventos para o engine:
 //
 //   - Notification → needs_input (Data = message): o agente pediu algo.
-//   - Stop        → finished: o agente terminou.
+//   - Stop        → finished: o agente terminou o turno.
+//   - SessionEnd  → session_ended: o PROCESSO saiu. Diferente do Stop, que só
+//     encerra o turno (o claude continua no ar esperando a próxima mensagem).
+//     É o único aviso de saída que a origem manda; sem ele, sessão fechada pelo
+//     terminal fica running para sempre e o reaper só a resolve meia hora depois.
 //
 // Outros hooks (PreToolUse, etc.) são aceitos e ignorados. É um canal de
 // detecção complementar ao stream-json do Runner (docs/02, docs/03).
@@ -160,10 +170,17 @@ func HookHandler(eng *engine.Engine) http.HandlerFunc {
 			return
 		}
 
+		pane := p.paneTarget()
+
 		// Qualquer sessão do Claude no Mac (não só as lançadas pelo hub) aparece
 		// e pode cutucar: registra se ainda não conhecida antes de transicionar.
-		pane := p.paneTarget()
-		eng.EnsureRegistered(p.SessionID, p.Machine, "claude-code", hookTitle(p), p.Cwd, pane)
+		// SessionEnd fica de FORA de propósito: um aviso de saída não pode criar
+		// sessão. Registrar aqui nasceria running só para virar idle no mesmo
+		// request — e um SessionEnd atrasado (o de uma sessão já esquecida pelo
+		// reaper) ressuscitaria um card morto na lista da usuária.
+		if p.HookEventName != "SessionEnd" {
+			eng.EnsureRegistered(p.SessionID, p.Machine, "claude-code", hookTitle(p), p.Cwd, pane)
+		}
 
 		switch p.HookEventName {
 		case "Notification":
@@ -179,6 +196,16 @@ func HookHandler(eng *engine.Engine) http.HandlerFunc {
 			}
 		case "Stop":
 			eng.Apply(event.Event{SessionID: p.SessionID, Type: event.Finished, At: time.Now()})
+		case "SessionEnd":
+			// Sem EnsureRegistered acima, o Apply ignora sessão desconhecida —
+			// que é o certo: ruído (probe, sessão anterior ao hub, id já
+			// esquecido) não vira card a partir de um adeus.
+			//
+			// TODOS os motivos contam como saída — inclusive `clear` e `resume`,
+			// onde o processo sobrevive mas ESTE id não é mais o ativo (o novo id
+			// chega logo depois por SessionStart). A distinção fica no Data, não
+			// na decisão. O Engine é quem recusa rebaixar done/error.
+			eng.Apply(event.Event{SessionID: p.SessionID, Type: event.SessionEnded, Data: p.Reason, At: time.Now()})
 		case "SessionStart", "UserPromptSubmit":
 			// Sessão (re)ativa: volta a running (ex.: usuária mandou novo prompt
 			// numa sessão que estava done). External:true marca que veio de hook —

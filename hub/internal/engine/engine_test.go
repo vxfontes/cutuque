@@ -345,3 +345,74 @@ func TestSetPaneDoesNotEvictCrossMachine(t *testing.T) {
 		t.Errorf("A (macbook) foi mexida por uma pane igual em outra máquina: %+v", a)
 	}
 }
+
+// semExterna registra uma sessão de hook (External) com um título já gravado —
+// o cenário real: o hub registrou a sessão pelo palpite do cwd antes de o hook
+// passar a mandar o nome do role.json.
+func semeiaExterna(reg *registry.Registry, id, titulo string) {
+	now := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	reg.Add(session.Session{ID: id, Machine: "macbook", Agent: "claude-code", Title: titulo,
+		State: session.StateRunning, External: true, CreatedAt: now, UpdatedAt: now})
+}
+
+func TestSessionStartedCorrigeTituloDeSessaoExternaJaExistente(t *testing.T) {
+	reg := registry.New()
+	eng := New(reg)
+	semeiaExterna(reg, "s", "personal") // palpite pelo cwd .maestri/roles/<uuid>
+
+	eng.Apply(event.Event{SessionID: "s", Type: event.SessionStarted, Title: "cutuque", External: true})
+
+	got, _ := reg.Get("s")
+	if got.Title != "cutuque" {
+		t.Errorf("Title = %q, quero \"cutuque\": o nome do role.json tem de corrigir o palpite do cwd numa sessão JÁ registrada", got.Title)
+	}
+	if !got.External {
+		t.Errorf("External = false; corrigir o título não pode fazer o hub reivindicar a sessão")
+	}
+}
+
+func TestSessionStartedNaoRenomeiaSessaoDoRunner(t *testing.T) {
+	reg := registry.New()
+	eng := New(reg)
+	now := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	// External:false = sessão do Runner, que é a autoridade sobre o próprio nome.
+	reg.Add(session.Session{ID: "s", Machine: "macbook", Agent: "claude-code", Title: "do-runner",
+		State: session.StateRunning, CreatedAt: now, UpdatedAt: now})
+
+	eng.Apply(event.Event{SessionID: "s", Type: event.SessionStarted, Title: "do-hook", External: true})
+
+	if got, _ := reg.Get("s"); got.Title != "do-runner" {
+		t.Errorf("Title = %q, quero \"do-runner\": hook não renomeia sessão do Runner", got.Title)
+	}
+}
+
+func TestSessionStartedTituloVazioNaoApagaOExistente(t *testing.T) {
+	reg := registry.New()
+	eng := New(reg)
+	semeiaExterna(reg, "s", "cutuque")
+
+	// Sessão comum (fora de .maestri/roles) não tem role.json: title vai vazio.
+	eng.Apply(event.Event{SessionID: "s", Type: event.SessionStarted, External: true})
+
+	if got, _ := reg.Get("s"); got.Title != "cutuque" {
+		t.Errorf("Title = %q, quero \"cutuque\": título vazio não pode apagar o que já se sabe", got.Title)
+	}
+}
+
+func TestSessionStartedDoRunnerAindaReivindicaSessaoDeHook(t *testing.T) {
+	reg := registry.New()
+	eng := New(reg)
+	semeiaExterna(reg, "s", "palpite")
+
+	// Evento do Runner (External:false): continua caindo no Reclaim, não no
+	// ramo novo — senão aprovar/negar ficaria escondido pra sempre (#1).
+	eng.Apply(event.Event{SessionID: "s", Type: event.SessionStarted, Title: "autoritativo"})
+
+	got, _ := reg.Get("s")
+	if got.External {
+		t.Errorf("External = true; o Runner tinha de ter reivindicado a sessão")
+	}
+	if got.Title != "autoritativo" {
+		t.Errorf("Title = %q, quero \"autoritativo\"", got.Title)
+	}
+}

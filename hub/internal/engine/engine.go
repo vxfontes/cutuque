@@ -115,6 +115,8 @@ func (e *Engine) Close() {
 //   - user_responded: → running (a usuária aprovou/respondeu).
 //   - finished: → done.
 //   - errored: → error.
+//   - session_ended: → idle, mas SÓ saindo de running/needs_you (o processo do
+//     agente saiu; done/error já têm veredito e não são rebaixados).
 //
 // Regra de desempate (doc 03): na dúvida, prefira needs_you a assumir done —
 // por isso needs_input/permission_requested levam a needs_you a partir de
@@ -149,6 +151,16 @@ func (e *Engine) Apply(ev event.Event) {
 	// corrida entre a resposta (goroutine HTTP) e o evento terminal do stream
 	// (goroutine do Runner) — ambos chamam Apply.
 	if ev.Type == event.UserResponded && cur.State != session.StateNeedsYou {
+		return
+	}
+	// session_ended (o processo do agente saiu) só rebaixa uma sessão que o hub
+	// ainda achava ATIVA. De running é o caso comum; de needs_you é o mais
+	// importante — uma pergunta cujo processo morreu não vai ser respondida
+	// nunca, e sem isso o notifier fica re-cutucando para sempre. De done/error
+	// é no-op: a sessão já tem veredito e trocá-lo por idle apagaria
+	// "concluída"/"falhou" do app sem ganhar nada.
+	if ev.Type == event.SessionEnded &&
+		cur.State != session.StateRunning && cur.State != session.StateNeedsYou {
 		return
 	}
 	if cur.State == target {
@@ -238,19 +250,24 @@ func (e *Engine) ensureRunning(ev event.Event) {
 	// outro já avançou (ex.: needs_you + PendingPrompt), deixando o processo real
 	// travado sem badge visível (review SEC-106, mesmo padrão do SEC-103).
 	cur, added := e.reg.AddIfAbsent(session.Session{
-		ID:        ev.SessionID,
-		Machine:   ev.Machine,
-		Agent:     ev.Agent,
-		Title:     ev.Title,
-		State:     session.StateRunning,
-		Cwd:       ev.Cwd,
-		Model:     ev.Model,
-		Pane:      ev.Pane,
+		ID:      ev.SessionID,
+		Machine: ev.Machine,
+		Agent:   ev.Agent,
+		Title:   ev.Title,
+		State:   session.StateRunning,
+		Cwd:     ev.Cwd,
+		Model:   ev.Model,
+		// Pane entra VAZIO de propósito: quem grava o pane é SEMPRE o SetPane
+		// abaixo, porque é lá (e só lá) que o dono anterior daquele pane é
+		// despejado. Nascer já com o pane preenchido era o bug que deixava três
+		// sessões "vivas" reivindicando o mesmo terminal.
+		Pane:      "",
 		External:  ev.External,
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
 	if added {
+		e.reg.SetPane(ev.SessionID, ev.Pane)
 		return
 	}
 	// Já existia (re-disparo ou corrida): reconcilia sem sobrescrever.
@@ -259,6 +276,17 @@ func (e *Engine) ensureRunning(ev event.Event) {
 	// (senão aprovar/negar ficaria escondido pra sempre — #1).
 	if !ev.External && cur.External {
 		e.reg.Reclaim(ev.SessionID, ev.Title, ev.Machine, ev.Agent)
+	} else if ev.Title != "" && ev.Title != cur.Title {
+		// Hook trouxe um título e a sessão JÁ existia. Sem isto o título só era
+		// gravado no AddIfAbsent acima, e o Reclaim (única outra escrita) exige
+		// evento do Runner — então uma sessão registrada antes de o nome ser
+		// conhecido ficava com o palpite pelo cwd PARA SEMPRE. Na prática: todo
+		// agente do Maestri aparecia como "personal", porque o cwd é
+		// .maestri/roles/<uuid> e o hub cai na pasta significativa mais próxima.
+		// O nome vem do role.json, que só existe na máquina de origem — o hub
+		// roda no macmini e não tem como descobrir sozinho.
+		// SetTitleIfExternal recusa sessão do Runner: lá a autoridade é dele.
+		e.reg.SetTitleIfExternal(ev.SessionID, ev.Title)
 	}
 	if cur.State != session.StateRunning {
 		_ = e.reg.UpdateState(ev.SessionID, session.StateRunning)
@@ -288,17 +316,56 @@ func (e *Engine) EnsureRegistered(id, machine, agent, title, cwd, pane string) {
 	// Reivindicação atômica (checa dismissed + insere no MESMO lock): fecha a
 	// corrida entre Get/Dismissed/Add e o Undismiss+AddIfAbsent do Adopt (#2).
 	e.reg.AddIfAllowed(session.Session{
-		ID:        id,
-		Machine:   machine,
-		Agent:     agent,
-		Title:     title,
-		State:     session.StateRunning,
-		Cwd:       cwd,
-		Pane:      pane,
+		ID:      id,
+		Machine: machine,
+		Agent:   agent,
+		Title:   title,
+		State:   session.StateRunning,
+		Cwd:     cwd,
+		// Pane vazio aqui pelo mesmo motivo do ensureRunning: só o SetPane
+		// abaixo despeja o dono anterior do terminal.
+		Pane:      "",
 		External:  true, // veio de hook — o hub não controla o gate dela
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
+	e.reg.SetPane(id, pane)
+}
+
+// Idle rebaixa para idle uma sessão que o reaper concluiu estar parada, mas SÓ
+// se o estado atual ainda for `from`. O compare-and-swap é o que fecha a corrida
+// inerente ao reaper: entre consultar o oráculo (ssh, até 15s) e escrever, a
+// sessão pode ter voltado a rodar ou virado needs_you. ok=false = alguém chegou
+// primeiro, e o reaper não insiste.
+//
+// idle não dispara push (o notifier trata running/idle no ramo default), então
+// ceifar N zumbis não vira N notificações falsas de "concluído" no celular.
+func (e *Engine) Idle(id string, from session.State) bool {
+	if !e.reg.UpdateStateIfCurrent(id, from, session.StateIdle) {
+		return false
+	}
+	e.reg.ClearPendingPrompt(id) // limpa PendingQuestions junto
+	e.record(event.Event{
+		SessionID: id,
+		Type:      event.Reaped,
+		Data:      "reaper: sessão parada, transcript ainda no disco → idle",
+		At:        time.Now(),
+	}, true)
+	return true
+}
+
+// RecordForgotten deixa rastro no histórico de uma sessão que o reaper apagou do
+// Registry (Registry.Forget). Sem isso a última linha em cutuque.sessions ficaria
+// congelada em "running" para sempre, e a usuária não teria como entender, dias
+// depois, por que uma sessão sumiu sem nunca ter dado Stop. upsert=false: a
+// sessão já não existe no Registry para ser relida.
+func (e *Engine) RecordForgotten(id string) {
+	e.record(event.Event{
+		SessionID: id,
+		Type:      event.Reaped,
+		Data:      "reaper: transcript não existe mais no disco → esquecida",
+		At:        time.Now(),
+	}, false)
 }
 
 // targetState mapeia um tipo de evento para o estado-alvo. ok=false quando o
@@ -313,6 +380,8 @@ func targetState(t event.Type) (session.State, bool) {
 		return session.StateDone, true
 	case event.Errored:
 		return session.StateError, true
+	case event.SessionEnded:
+		return session.StateIdle, true
 	default:
 		return "", false
 	}

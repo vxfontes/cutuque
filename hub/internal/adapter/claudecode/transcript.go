@@ -19,14 +19,21 @@ import (
 //
 // Recebe o id da sessão como argv[1] (python3 - <id>). Mantém só os últimos 500
 // chunks (casa com o teto do registry). python3 do sistema (macOS e ZimaOS).
-const transcriptScript = `import os,json,glob,sys
+const transcriptScript = `import os,json,glob,sys,re
 sid=sys.argv[1] if len(sys.argv)>1 else ''
+# Ver discover.go: ANSI cru no historico vira lixo ilegivel no app.
+ANSI=re.compile(r'\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]')
+def plain(s):
+    return ANSI.sub('',str(s))
 def trunc(s,n):
-    s=str(s)
+    # Tira o ANSI ANTES de cortar: senao o corte cai no meio de uma sequencia e
+    # o pedaco solto ('[0;3') sobra como lixo visivel no chunk.
+    s=plain(s)
     return s if len(s)<=n else s[:n]
 def synthetic(t):
-    t=str(t).lstrip()
-    for p in ('<local-command-caveat>','<command-','<task-notification>','[SYSTEM','<system-reminder>'):
+    t=ANSI.sub('',str(t)).lstrip()
+    # '<local-command-' pega tambem o -stdout, que e eco de slash-command.
+    for p in ('<local-command-','<command-','<task-notification>','[SYSTEM','<system-reminder>'):
         if t.startswith(p): return True
     return False
 def tool_summary(name,inp):
@@ -53,12 +60,12 @@ for f in matches[:1]:
                 t=o.get('type'); m=o.get('message') or {}; c=m.get('content')
                 if t=='user':
                     if isinstance(c,str):
-                        if c.strip() and not synthetic(c): out.append({'kind':'user','text':c})
+                        if c.strip() and not synthetic(c): out.append({'kind':'user','text':plain(c)})
                     elif isinstance(c,list):
                         for b in c:
                             if not isinstance(b,dict): continue
                             if b.get('type')=='text' and str(b.get('text','')).strip() and not synthetic(b.get('text','')):
-                                out.append({'kind':'user','text':b['text']})
+                                out.append({'kind':'user','text':plain(b['text'])})
                             elif b.get('type')=='tool_result':
                                 out.append({'kind':'tool_result','text':trunc(result_text(b.get('content')),200)})
                 elif t=='assistant':
@@ -66,7 +73,7 @@ for f in matches[:1]:
                         for b in c:
                             if not isinstance(b,dict): continue
                             if b.get('type')=='text' and str(b.get('text','')).strip():
-                                out.append({'kind':'assistant','text':b['text']})
+                                out.append({'kind':'assistant','text':plain(b['text'])})
                             elif b.get('type')=='tool_use':
                                 out.append({'kind':'tool','text':tool_summary(b.get('name'),b.get('input'))})
     except Exception: pass

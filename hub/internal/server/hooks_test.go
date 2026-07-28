@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vxfontes/cutuque/hub/internal/config"
+	"github.com/vxfontes/cutuque/hub/internal/registry"
 	"github.com/vxfontes/cutuque/hub/internal/session"
 )
 
@@ -160,6 +162,114 @@ func TestHookIdleDoesNotResurrectDone(t *testing.T) {
 
 	if s, _ := reg.Get("s"); s.State != session.StateDone {
 		t.Errorf("sessão concluída não pode voltar pra needs_you; State = %q", s.State)
+	}
+}
+
+// postHook manda um payload de hook autenticado e devolve o recorder. Os testes
+// de SessionEnd exercitam várias combinações do mesmo request.
+func postHook(t *testing.T, cfg config.Config, reg *registry.Registry, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/hooks/claude", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	Router(cfg, reg, nil).ServeHTTP(rec, req)
+	return rec
+}
+
+// TestHookSessionEndIdlesActiveSession é o fecho do ciclo de vida: o processo do
+// claude saiu, então a sessão para de ocupar a lista de ativas. Cobre running e
+// needs_you — needs_you é o mais importante, porque uma pergunta cujo processo
+// morreu não seria respondida nunca e o notifier ficaria re-cutucando.
+func TestHookSessionEndIdlesActiveSession(t *testing.T) {
+	casos := []struct {
+		nome   string
+		estado session.State
+		reason string
+	}{
+		{"running com terminal fechado", session.StateRunning, "prompt_input_exit"},
+		{"needs_you com processo morto", session.StateNeedsYou, "other"},
+		{"clear troca o id da sessão", session.StateRunning, "clear"},
+		{"resume abandona esta sessão", session.StateRunning, "resume"},
+		{"motivo desconhecido também encerra", session.StateRunning, "motivo-que-ainda-nao-existe"},
+	}
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			cfg, reg := testDeps()
+			now := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+			reg.Add(session.Session{ID: "s", Machine: "macbook", Agent: "claude-code", Title: "t", State: c.estado, CreatedAt: now, UpdatedAt: now})
+			if c.estado == session.StateNeedsYou {
+				reg.SetPendingPrompt("s", "posso rodar rm?")
+			}
+
+			rec := postHook(t, cfg, reg, `{"session_id":"s","hook_event_name":"SessionEnd","reason":"`+c.reason+`"}`)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, quero 200", rec.Code)
+			}
+			s, ok := reg.Get("s")
+			if !ok {
+				t.Fatal("SessionEnd não pode apagar a sessão, só rebaixar para idle")
+			}
+			if s.State != session.StateIdle {
+				t.Errorf("State = %q, quero %q", s.State, session.StateIdle)
+			}
+			if s.PendingPrompt != "" {
+				t.Errorf("PendingPrompt = %q, quero vazio: ninguém vai responder a um processo morto", s.PendingPrompt)
+			}
+		})
+	}
+}
+
+// TestHookSessionEndKeepsVerdict: done/error já têm veredito. Rebaixar para idle
+// apagaria "concluída"/"falhou" da lista da usuária sem ganhar nada — e o Stop
+// vem SEMPRE logo antes do SessionEnd quando a sessão termina de verdade.
+func TestHookSessionEndKeepsVerdict(t *testing.T) {
+	for _, estado := range []session.State{session.StateDone, session.StateError} {
+		t.Run(string(estado), func(t *testing.T) {
+			cfg, reg := testDeps()
+			now := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+			reg.Add(session.Session{ID: "s", Machine: "macbook", Agent: "claude-code", Title: "t", State: estado, CreatedAt: now, UpdatedAt: now})
+
+			postHook(t, cfg, reg, `{"session_id":"s","hook_event_name":"SessionEnd","reason":"other"}`)
+
+			if s, _ := reg.Get("s"); s.State != estado {
+				t.Errorf("State = %q, quero %q intocado", s.State, estado)
+			}
+		})
+	}
+}
+
+// TestHookSessionEndNeverRegisters: um adeus não pode CRIAR sessão. Sem isto, um
+// SessionEnd atrasado (de uma sessão que o reaper já esqueceu) ressuscitaria um
+// card morto na lista — e ele nasceria running, o zumbi que estamos matando.
+func TestHookSessionEndNeverRegisters(t *testing.T) {
+	cfg, reg := testDeps()
+
+	rec := postHook(t, cfg, reg, `{"session_id":"nunca-vista","hook_event_name":"SessionEnd","reason":"other","cwd":"/Users/example/proj","machine":"macbook"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, quero 200", rec.Code)
+	}
+	if _, ok := reg.Get("nunca-vista"); ok {
+		t.Fatal("SessionEnd de sessão desconhecida não pode auto-registrar nada")
+	}
+}
+
+// TestHookTitleFromRoleWinsOverCwd: sessão de agente Maestri roda em
+// .maestri/roles/<uuid>, um caminho que só produz "personal" pelo cwd — TODOS os
+// agentes apareciam com o mesmo nome. O hook.sh lê o role.json (que só existe na
+// máquina de origem) e manda o nome pronto; aqui ele tem que vencer o cwd.
+func TestHookTitleFromRoleWinsOverCwd(t *testing.T) {
+	cfg, reg := testDeps()
+
+	postHook(t, cfg, reg, `{"session_id":"agente-1","hook_event_name":"SessionStart","title":"cutuque","cwd":"/Users/dev/coding/personal/.maestri/roles/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","machine":"macbook"}`)
+
+	s, ok := reg.Get("agente-1")
+	if !ok {
+		t.Fatal("sessão não registrada")
+	}
+	if s.Title != "cutuque" {
+		t.Errorf("Title = %q, quero %q", s.Title, "cutuque")
 	}
 }
 

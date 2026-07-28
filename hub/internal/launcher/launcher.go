@@ -423,10 +423,20 @@ func (l *Launcher) TmuxKillServer(machine, socket string) error {
 	return nil
 }
 
-// Live lista as sessões do Claude Code que estão RODANDO agora na máquina
+// Live lista as sessões DAQUELE AGENTE que estão RODANDO agora na máquina
 // (processo vivo + transcript recente). Mesmos erros/timeout do Discover.
-func (l *Launcher) Live(machine string) ([]session.Discovered, error) {
-	tgt, ok := l.anyTarget(machine)
+// agent vazio = claude-code (mesma convenção legada do Adopt).
+//
+// O agente é obrigatório no roteamento porque este resultado virou veredito de
+// vida para o reaper. Com anyTarget, uma sessão codex era medida pelo oráculo do
+// claude-code — que obviamente não a enxerga — e ia parar em Forget. Alvo que
+// não implementa Liver devolve erro de propósito: "não tenho oráculo para este
+// agente" tem que chegar no chamador como "não sei", nunca como lista vazia.
+func (l *Launcher) Live(machine, agent string) ([]session.Discovered, error) {
+	if agent == "" {
+		agent = agentClaudeCode
+	}
+	tgt, ok := l.target(machine, agent)
 	if !ok {
 		return nil, ErrUnknownMachine
 	}
@@ -441,6 +451,47 @@ func (l *Launcher) Live(machine string) ([]session.Discovered, error) {
 		return nil, fmt.Errorf("%w: %v", ErrDiscoverFailed, err)
 	}
 	return list, nil
+}
+
+// HasHandle diz se o hub mantém um processo VIVO desta sessão (stdin/stdout
+// abertos). É o sinal de liveness mais forte que existe — não depende de ssh,
+// de ps nem de mtime de transcript — e por isso o reaper o consulta antes de
+// qualquer oráculo: nada que o próprio hub está tocando pode ser ceifado.
+func (l *Launcher) HasHandle(id string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, ok := l.handles[id]
+	return ok
+}
+
+// TranscriptIDs lista os ids de TODA sessão DAQUELE AGENTE que ainda tem
+// transcript no disco da máquina — resposta exata, sem corte, para "essa sessão
+// ainda existe lá?". agent vazio = claude-code.
+//
+// Erro (ssh caído, máquina desconhecida, agente sem lister) NUNCA pode ser lido
+// como "não existe": o chamador tem que tratar erro como "não sei" e não agir.
+// O roteamento por agente importa duplamente aqui, porque é esta lista que
+// separa "vira idle" de "some do Registry": perguntar ao ~/.claude por uma
+// sessão do codex responderia "não existe" e apagaria o card.
+func (l *Launcher) TranscriptIDs(machine, agent string) ([]string, error) {
+	if agent == "" {
+		agent = agentClaudeCode
+	}
+	tgt, ok := l.target(machine, agent)
+	if !ok {
+		return nil, ErrUnknownMachine
+	}
+	tl, ok := tgt.(claudecode.TranscriptLister)
+	if !ok {
+		return nil, ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	ids, err := tl.TranscriptIDs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrDiscoverFailed, err)
+	}
+	return ids, nil
 }
 
 // Adopt registra no Registry uma sessão descoberta (idle), para que a usuária
