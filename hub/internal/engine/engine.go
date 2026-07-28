@@ -276,6 +276,17 @@ func (e *Engine) ensureRunning(ev event.Event) {
 	// (senão aprovar/negar ficaria escondido pra sempre — #1).
 	if !ev.External && cur.External {
 		e.reg.Reclaim(ev.SessionID, ev.Title, ev.Machine, ev.Agent)
+	} else if ev.Title != "" && ev.Title != cur.Title {
+		// Hook trouxe um título e a sessão JÁ existia. Sem isto o título só era
+		// gravado no AddIfAbsent acima, e o Reclaim (única outra escrita) exige
+		// evento do Runner — então uma sessão registrada antes de o nome ser
+		// conhecido ficava com o palpite pelo cwd PARA SEMPRE. Na prática: todo
+		// agente do Maestri aparecia como "personal", porque o cwd é
+		// .maestri/roles/<uuid> e o hub cai na pasta significativa mais próxima.
+		// O nome vem do role.json, que só existe na máquina de origem — o hub
+		// roda no macmini e não tem como descobrir sozinho.
+		// SetTitleIfExternal recusa sessão do Runner: lá a autoridade é dele.
+		e.reg.SetTitleIfExternal(ev.SessionID, ev.Title)
 	}
 	if cur.State != session.StateRunning {
 		_ = e.reg.UpdateState(ev.SessionID, session.StateRunning)

@@ -202,6 +202,33 @@ func (r *Registry) AddIfAllowed(s session.Session) (existing session.Session, ad
 	return s, true
 }
 
+// SetTitleIfExternal corrige o título de uma sessão nascida de hook. Existe
+// porque o título só era escrito na CRIAÇÃO da sessão: quem já estava no
+// registry ficava com o palpite pelo cwd para sempre, mesmo depois de o hook
+// passar a mandar o nome de verdade (do role.json, que só existe na máquina de
+// origem — o hub roda no macmini e não alcança o disco do Mac).
+//
+// Só mexe em sessão External. Sessão do Runner tem o Runner como autoridade, e
+// um hook não pode renomeá-la: a checagem fica DENTRO do lock justamente para
+// não perder a corrida contra um Reclaim concorrente. Título vazio ou igual ao
+// atual é no-op — sem broadcast nem persist à toa.
+func (r *Registry) SetTitleIfExternal(id, title string) {
+	if title == "" {
+		return
+	}
+	r.mu.Lock()
+	s, ok := r.byID[id]
+	if !ok || !s.External || s.Title == title {
+		r.mu.Unlock()
+		return
+	}
+	s.Title = title
+	r.byID[id] = s
+	r.mu.Unlock()
+	r.broadcast(s)
+	r.persist()
+}
+
 // Reclaim marca a sessão como do hub (External=false) e atualiza título/máquina/
 // agente — usado quando o Runner (autoritativo) assume uma sessão que um hook
 // pode ter pré-criado como external numa corrida (senão aprovar/negar ficaria
