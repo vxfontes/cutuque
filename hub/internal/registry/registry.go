@@ -343,10 +343,20 @@ func (r *Registry) SetPane(id, pane string) {
 			// uma sessão de outra máquina seria evictada à toa (review SEC-104).
 			if oid != id && os.Pane == pane && os.Machine == s.Machine {
 				os.Pane = ""
-				if os.State == session.StateNeedsYou {
+				switch os.State {
+				case session.StateNeedsYou:
 					os.State = session.StateDone
 					os.UpdatedAt = time.Now()
 					os.PendingPrompt = ""
+				case session.StateRunning:
+					// Perder o pane para um claude NOVO é prova de que este aqui
+					// não está mais rodando naquele terminal. Antes ele só perdia
+					// a pane e continuava "running" para sempre — órfão e sem nem
+					// o pane para correlacionar depois. Vai para idle, não done:
+					// idle é a leitura honesta (foi superado, não concluído) e é o
+					// único destino que não dispara push de "concluído".
+					os.State = session.StateIdle
+					os.UpdatedAt = time.Now()
 				}
 				r.byID[oid] = os
 				evicted = append(evicted, os)
@@ -486,6 +496,31 @@ func (r *Registry) Remove(id string) bool {
 	if !hadSession && !hadOutput {
 		return false
 	}
+	r.broadcastRemoved(id)
+	return true
+}
+
+// Forget apaga a sessão do Registry SEM marcar dismissed — a diferença que
+// importa em relação a Remove. Remove significa "a usuária apagou de propósito,
+// não deixe hook nenhum recriar"; Forget significa "isso aqui é um fantasma,
+// some da lista". Banir o id seria errado: se um dia chegar um hook real com ele,
+// a sessão tem que poder voltar.
+//
+// Só apaga se o estado atual ainda for `from` (mesmo compare-and-swap de
+// UpdateStateIfCurrent). Sem essa guarda, uma sessão que virou needs_you entre o
+// reaper consultar o oráculo e escrever seria apagada às cegas — justamente a
+// que estava esperando resposta.
+func (r *Registry) Forget(id string, from session.State) bool {
+	r.mu.Lock()
+	s, exists := r.byID[id]
+	if !exists || s.State != from {
+		r.mu.Unlock()
+		return false
+	}
+	delete(r.byID, id)
+	delete(r.outputs, id)
+	r.mu.Unlock()
+	r.persist()
 	r.broadcastRemoved(id)
 	return true
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/vxfontes/cutuque/hub/internal/history"
 	"github.com/vxfontes/cutuque/hub/internal/launcher"
 	"github.com/vxfontes/cutuque/hub/internal/notifier"
+	"github.com/vxfontes/cutuque/hub/internal/reaper"
 	"github.com/vxfontes/cutuque/hub/internal/registry"
 	"github.com/vxfontes/cutuque/hub/internal/server"
 )
@@ -121,6 +122,14 @@ func main() {
 	lch := launcher.New(eng, reg, targets)
 	lch.SetMaxSessions(cfg.MaxSessions) // SEC-007: teto de sessões concorrentes
 
+	// Reaper: resolve sessões que entraram em running e nunca receberam o evento
+	// de saída (processo morto sem Stop, terminal fechado, claude novo no mesmo
+	// pane). Roda sempre — limpar zumbi é higiene do Registry, não depende de
+	// push nem de Postgres. Usa o `eng` daqui, não um Engine próprio: as
+	// transições dele são transições de verdade e precisam ir para o histórico.
+	rp := reaper.New(eng, reg, lch, logger)
+	rp.Start()
+
 	// APNs (Fase 4): opcional. Se configurado, sobe o Notifier e habilita a rota
 	// de registro de devices; senão, o hub segue normalmente sem push.
 	var ntf *notifier.Notifier
@@ -194,6 +203,10 @@ func main() {
 	if ntf != nil {
 		ntf.Close()
 	}
+	// O reaper para ANTES do launcher (usa os targets dele como oráculo) e antes
+	// do eng.Close() (as transições que ele acabou de gravar ainda precisam ser
+	// drenadas para o histórico).
+	rp.Close()
 	lch.Shutdown()
 	// Drena a fila de histórico (write-through assíncrono) e fecha a pool antes
 	// de sair, para não perder os últimos eventos nem vazar conexões.

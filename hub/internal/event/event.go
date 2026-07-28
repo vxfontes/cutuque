@@ -20,6 +20,8 @@ const (
 	UserResponded       Type = "user_responded"       // usuária respondeu/aprovou → volta a running
 	Finished            Type = "finished"             // tarefa concluída
 	Errored             Type = "errored"              // falha/crash
+	SessionEnded        Type = "session_ended"        // o PROCESSO do agente saiu (hook SessionEnd) → idle
+	Reaped              Type = "session_reaped"       // o reaper resolveu uma sessão parada; nunca vem de adapter
 )
 
 // Kinds de output_chunk: o contrato tipado exposto ao app (REST

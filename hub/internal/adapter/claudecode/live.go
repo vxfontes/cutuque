@@ -10,16 +10,23 @@ import (
 // liveScript detecta as sessões do Claude Code que estão VIVAS agora numa
 // máquina: há um processo `claude` rodando E o transcript foi escrito há pouco
 // (janela de LIVE_WINDOW segundos). Combina duas evidências para ser preciso:
-//   - processo: pega o session id de --session-id/--resume no argv quando existe
-//     (sinal forte); senão, mapeia o cwd do processo (lsof) → .jsonl mais recente.
+//   - processo: pega o session id de --session-id/--resume/--fork-session no argv
+//     quando existe (sinal forte); senão, mapeia o cwd do processo (lsof) → os N
+//     .jsonl mais recentes daquela pasta, N = quantos processos sem flag estão
+//     nela (dois `claude` no mesmo cwd são duas sessões, não uma).
 //   - recência: só mantém sessões cujo .jsonl mudou dentro da janela (descarta as
 //     que já encerraram, mesmo com processo ainda no ar).
+//
+// A janela é generosa (15min) de propósito: quem estabelece a vida é o PROCESSO
+// no ps; o mtime só desempata QUAL sessão daquele processo. Janela curta cortava
+// sessão viva no meio de uma auto-compactação (medido: mediana 143s, cauda 270s)
+// ou de uma tool call longa e silenciosa.
 //
 // Emite o MESMO shape do discover ([{id,cwd,title,last,count,modified}]), para o
 // app reutilizar o mesmo modelo e o mesmo fluxo de preview/adoção.
 const liveScript = `import os,json,glob,re,time,subprocess
 UUID=r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-LIVE_WINDOW=180
+LIVE_WINDOW=900
 now=time.time()
 def clean(t):
     t=' '.join(str(t).split())
@@ -38,10 +45,12 @@ def user_text(o):
                 if t: return t
     return ''
 def procs():
-    try:
-        out=subprocess.run(['ps','-axo','pid=,command='],capture_output=True,text=True).stdout
-    except Exception:
-        return
+    # SEM try/except de proposito. Engolir a falha do ps devolvia [] — que sai
+    # daqui indistinguivel de "nenhuma sessao viva nesta maquina". O reaper le
+    # esse [] como veredito e ceifa TODA sessao running da maquina. Deixar
+    # estourar faz o script sair !=0, o Go recebe erro e a maquina inteira e
+    # pulada no tick: "nao sei" nunca pode virar "morreu".
+    out=subprocess.run(['ps','-axo','pid=,command='],capture_output=True,text=True,check=True).stdout
     for line in out.splitlines():
         line=line.strip()
         if not line: continue
@@ -60,19 +69,42 @@ def cwd_of(pid):
     except Exception: pass
     return ''
 def sid_from_cmd(cmd):
-    m=re.search(r'--session-id\s+('+UUID+')',cmd)
+    m=re.search(r'--(?:session-id|resume|fork-session)\s+('+UUID+')',cmd)
     if m: return m.group(1)
     m=re.search('('+UUID+r')\.jsonl',cmd)
     if m: return m.group(1)
     return ''
-def newest_sid(cwd):
-    if not cwd: return ''
-    files=glob.glob(os.path.expanduser('~/.claude/projects/'+cwd.replace('/','-')+'/*.jsonl'))
-    return os.path.basename(max(files,key=os.path.getmtime))[:-6] if files else ''
+def proj_dir(cwd):
+    # O Claude Code troca TODO caractere fora de [A-Za-z0-9-] por '-' no nome da
+    # pasta de transcript (ponto, underscore, espaco, acento). Trocar so '/'
+    # errava toda sessao com ponto no caminho (.maestri/roles/...), que e
+    # justamente onde ficam os agentes.
+    return os.path.expanduser('~/.claude/projects/'+re.sub(r'[^A-Za-z0-9-]','-',cwd))
+def recent_sids(cwd,n):
+    # Os n transcripts mais recentes da pasta. Arquivo que sumiu entre o glob e
+    # o stat e so um arquivo a menos (isso E "nao existe"), nao cega a varredura.
+    fs=[]
+    for f in glob.glob(proj_dir(cwd)+'/*.jsonl'):
+        try: fs.append((os.path.getmtime(f),f))
+        except OSError: pass
+    fs.sort(reverse=True)
+    return [os.path.basename(f)[:-6] for _,f in fs[:n]]
 cands=set()
+noflag={}
 for pid,cmd in procs():
-    sid=sid_from_cmd(cmd) or newest_sid(cwd_of(pid))
-    if sid: cands.add(sid)
+    sid=sid_from_cmd(cmd)
+    if sid:
+        cands.add(sid); continue
+    # Sem id no argv o transcript so pode ser adivinhado pelo cwd. Conta quantos
+    # processos assim ha em CADA pasta em vez de resolver um por um.
+    c=cwd_of(pid)
+    if c: noflag[c]=noflag.get(c,0)+1
+for c,n in noflag.items():
+    # n processos claude sem flag na MESMA pasta: eleger so o .jsonl mais
+    # recente (o antigo max()) colapsava as n sessoes vivas em UMA — as outras
+    # ficavam invisiveis aqui e o reaper as derrubava de running. Admite os n
+    # mais recentes; a janela LIVE_WINDOW la embaixo poda quem ja encerrou.
+    for sid in recent_sids(c,n): cands.add(sid)
 out=[]
 for sid in cands:
     fs=glob.glob(os.path.expanduser('~/.claude/projects/*/'+sid+'.jsonl'))
@@ -94,8 +126,10 @@ for sid in cands:
                     if not title: title=t
                     last=t
     except Exception: continue
-    if title:
-        out.append({'id':sid,'cwd':cwd,'title':title[:100],'last':last[:200],'count':count,'modified':int(mt)})
+    # Sessao recem-aberta ainda nao tem mensagem de usuario. Ela esta VIVA (tem
+    # processo no ps), entao nao pode sumir da lista: cai no nome da pasta.
+    if not title: title=os.path.basename(cwd) or sid[:8]
+    out.append({'id':sid,'cwd':cwd,'title':title[:100],'last':last[:200],'count':count,'modified':int(mt)})
 out.sort(key=lambda x:-x['modified'])
 print(json.dumps(out))
 `
