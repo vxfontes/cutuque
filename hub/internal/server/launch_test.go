@@ -36,6 +36,10 @@ type fakeLauncher struct {
 	fsErr       error
 	fileContent session.FileContent
 	readErr     error
+	fileWrite   session.FileWrite
+	writeErr    error
+	fileBytes   []byte
+	downloadErr error
 
 	discovered   []session.Discovered
 	discoverErr  error
@@ -56,6 +60,9 @@ type fakeLauncher struct {
 	gotDirsMachine, gotDirsPath             string
 	gotFsMachine, gotFsPath                 string
 	gotReadMachine, gotReadPath             string
+	gotWriteMachine, gotWritePath           string
+	gotWriteContent                         []byte
+	gotDownloadMachine, gotDownloadPath     string
 	gotDiscoverMachine                      string
 	gotAdoptMachine, gotAdoptID             string
 	gotAdoptCwd, gotAdoptTitle              string
@@ -90,6 +97,14 @@ func (f *fakeLauncher) ListFiles(machine, path string) (session.FileListing, err
 func (f *fakeLauncher) ReadFile(machine, path string) (session.FileContent, error) {
 	f.gotReadMachine, f.gotReadPath = machine, path
 	return f.fileContent, f.readErr
+}
+func (f *fakeLauncher) WriteFile(machine, path string, content []byte) (session.FileWrite, error) {
+	f.gotWriteMachine, f.gotWritePath, f.gotWriteContent = machine, path, content
+	return f.fileWrite, f.writeErr
+}
+func (f *fakeLauncher) DownloadFile(machine, path string) ([]byte, error) {
+	f.gotDownloadMachine, f.gotDownloadPath = machine, path
+	return f.fileBytes, f.downloadErr
 }
 
 func (f *fakeLauncher) Discover(machine string) ([]session.Discovered, error) {

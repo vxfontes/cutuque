@@ -73,6 +73,18 @@ type FileReader interface {
 	ReadFile(ctx context.Context, path string) (session.FileContent, error)
 }
 
+// FileWriter salva um arquivo de texto na máquina (editor da aba Máquinas).
+// Opcional, mesmo motivo do FileLister. SÓ sobrescreve arquivo existente.
+type FileWriter interface {
+	WriteFile(ctx context.Context, path string, content []byte) (session.FileWrite, error)
+}
+
+// FileDownloader traz os bytes crus de um arquivo (download da aba Máquinas —
+// inclusive binário, que o visualizador não mostra). Opcional, mesmo motivo.
+type FileDownloader interface {
+	DownloadFile(ctx context.Context, path string) ([]byte, error)
+}
+
 // Transcriber lê o histórico completo de UMA sessão numa máquina (para popular
 // o output ao adotar / dar o recap).
 type Transcriber interface {

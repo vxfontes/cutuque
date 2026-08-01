@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -105,6 +106,101 @@ func TestReadScriptCarregaOTetoDeVerdade(t *testing.T) {
 	}
 	if strings.Contains(s, "%d") {
 		t.Errorf("sobrou verbo de formatação no script: %q", s)
+	}
+}
+
+// MARK: escrita
+
+// O conteúdo viaja base64 DENTRO do script (pelo stdin), não no argv: um
+// arquivo de 1 MB estoura o ARG_MAX do macOS se for como argumento.
+func TestWriteScriptCarregaOConteudoEmBase64(t *testing.T) {
+	s := writeScript([]byte("olá\nmundo\n"))
+	if strings.Contains(s, "olá") {
+		t.Errorf("o conteúdo cru vazou no script: %q", s)
+	}
+	if !strings.Contains(s, "b2zDoQptdW5kbwo=") {
+		t.Errorf("o base64 do conteúdo não entrou no script: %q", s)
+	}
+	if strings.Contains(s, "%s") {
+		t.Errorf("sobrou verbo de formatação no script: %q", s)
+	}
+}
+
+// Só sobrescreve arquivo que já existe (regra de segurança do spec): o script
+// tem que checar antes de abrir para escrita.
+func TestWriteScriptSoSobrescreveArquivoExistente(t *testing.T) {
+	s := writeScript([]byte("x"))
+	if !strings.Contains(s, "not_a_file") {
+		t.Errorf("o script não recusa caminho que não é arquivo: %q", s)
+	}
+	if !strings.Contains(s, "os.path.isfile") {
+		t.Errorf("o script não checa existência antes de escrever: %q", s)
+	}
+}
+
+// Escrita atômica: tmp no mesmo diretório + replace. Sem isso, uma queda no
+// meio da gravação deixa o arquivo da usuária truncado.
+func TestWriteScriptEhAtomico(t *testing.T) {
+	s := writeScript([]byte("x"))
+	if !strings.Contains(s, "os.replace") {
+		t.Errorf("o script não faz replace atômico: %q", s)
+	}
+}
+
+func TestParseFileWriteLeOTamanhoNovo(t *testing.T) {
+	fw, err := parseFileWrite([]byte(`{"path":"/a.txt","size":11,"error":""}`))
+	if err != nil {
+		t.Fatalf("parse falhou: %v", err)
+	}
+	if fw.Path != "/a.txt" || fw.Size != 11 {
+		t.Errorf("resultado errado: %+v", fw)
+	}
+}
+
+func TestParseFileWriteNaoEhArquivoViraErroTipado(t *testing.T) {
+	_, err := parseFileWrite([]byte(`{"path":"/x","size":0,"error":"not_a_file"}`))
+	if !errors.Is(err, ErrNotAFile) {
+		t.Errorf("err = %v, quero ErrNotAFile", err)
+	}
+}
+
+func TestParseFileWriteOutroErroNaoEhNotAFile(t *testing.T) {
+	_, err := parseFileWrite([]byte(`{"path":"/x","size":0,"error":"write_failed"}`))
+	if err == nil {
+		t.Fatal("erro do script tem que virar erro em Go")
+	}
+	if errors.Is(err, ErrNotAFile) {
+		t.Errorf("write_failed não é ErrNotAFile: %v", err)
+	}
+}
+
+// Saída vazia = o python3 nem rodou. Não pode virar "salvou com sucesso".
+func TestParseFileWriteVazioEhErro(t *testing.T) {
+	if _, err := parseFileWrite([]byte("  ")); err == nil {
+		t.Error("saída vazia tem que ser erro — senão o app diz 'salvo' sem ter salvo")
+	}
+}
+
+// MARK: download
+
+func TestSSHDownloadArgsMandamCaminhoQuotadoDepoisDoTracoTraco(t *testing.T) {
+	tgt := NewSSHTarget("macbook", "vx@host")
+	args := tgt.downloadArgs("/tmp/a b'; rm -rf /")
+	last := args[len(args)-1]
+	if !strings.Contains(last, `'\''`) {
+		t.Errorf("a aspa simples do caminho não foi escapada: %q", last)
+	}
+	var sepIdx, destIdx = -1, -1
+	for i, a := range args {
+		if a == "--" {
+			sepIdx = i
+		}
+		if a == "vx@host" {
+			destIdx = i
+		}
+	}
+	if sepIdx == -1 || destIdx != sepIdx+1 {
+		t.Errorf("destino deve vir logo após '--': %v", args)
 	}
 }
 

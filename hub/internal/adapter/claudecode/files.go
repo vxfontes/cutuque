@@ -2,7 +2,9 @@ package claudecode
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -122,6 +124,91 @@ func parseFileContent(out []byte) (session.FileContent, error) {
 	return fc, nil
 }
 
+// ErrNotAFile é devolvido quando o caminho a salvar não existe ou não é um
+// arquivo comum. A escrita SÓ sobrescreve arquivo existente (regra do spec):
+// criar arquivo novo, ou escrever por cima de uma pasta, não é a mesma operação
+// que "salvar o que abri".
+var ErrNotAFile = errors.New("caminho não é um arquivo existente")
+
+// writeScriptFmt salva um arquivo de texto na máquina. Recebe o caminho como
+// argv[1]; o conteúdo vem embutido no PRÓPRIO script, em base64 (%s) — no argv
+// um arquivo de 1 MB estouraria o ARG_MAX do macOS, e o stdin já está ocupado
+// carregando o script. O alfabeto do base64 é seguro dentro de uma string
+// Python, então não há o que escapar.
+//
+// Escreve em arquivo temporário no MESMO diretório e faz os.replace: uma queda
+// no meio da gravação não pode deixar o arquivo da usuária truncado. O modo do
+// original é preservado (o tempfile nasce 0600).
+//
+// Emite JSON: {"path","size","error"} — error vazio = salvou.
+const writeScriptFmt = `import os,json,sys,base64,tempfile
+p=os.path.abspath(sys.argv[1])
+data=base64.b64decode('%s')
+out={'path':p,'size':0,'error':''}
+if not os.path.isfile(p):
+    out['error']='not_a_file'
+else:
+    try:
+        d=os.path.dirname(p)
+        mode=os.stat(p).st_mode & 0o777
+        fd,tmp=tempfile.mkstemp(dir=d)
+        try:
+            with os.fdopen(fd,'wb') as f: f.write(data)
+            os.chmod(tmp,mode)
+            os.replace(tmp,p)
+        except Exception:
+            try: os.unlink(tmp)
+            except Exception: pass
+            raise
+        out['size']=os.path.getsize(p)
+    except Exception:
+        out['error']='write_failed'
+print(json.dumps(out))
+`
+
+// writeScript devolve o script com o conteúdo já embutido em base64.
+func writeScript(content []byte) string {
+	return fmt.Sprintf(writeScriptFmt, base64.StdEncoding.EncodeToString(content))
+}
+
+// runWrite executa o comando (python3 lendo o writeScript pelo stdin) e faz
+// parse do resultado.
+func runWrite(cmd *exec.Cmd, content []byte) (session.FileWrite, error) {
+	cmd.Env = childEnv()
+	cmd.Stdin = strings.NewReader(writeScript(content))
+	out, err := cmd.Output()
+	if err != nil {
+		return session.FileWrite{}, err
+	}
+	return parseFileWrite(out)
+}
+
+// parseFileWrite converte o JSON do writeScript, traduzindo o campo error em
+// erro de Go. Saída vazia é erro: o python3 nem rodou, e dizer "salvo" sem ter
+// salvo é pior do que falhar.
+func parseFileWrite(out []byte) (session.FileWrite, error) {
+	s := strings.TrimSpace(string(out))
+	if s == "" {
+		return session.FileWrite{}, errors.New("a máquina não respondeu ao salvar")
+	}
+	var r struct {
+		Path  string `json:"path"`
+		Size  int64  `json:"size"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(s), &r); err != nil {
+		return session.FileWrite{}, err
+	}
+	switch r.Error {
+	case "":
+		return session.FileWrite{Path: r.Path, Size: r.Size}, nil
+	case "not_a_file":
+		return session.FileWrite{}, ErrNotAFile
+	default:
+		return session.FileWrite{}, fmt.Errorf("não deu para salvar em %s", r.Path)
+	}
+}
+
 // ListFiles lista pastas e arquivos de path na máquina LOCAL.
 func (t *LocalTarget) ListFiles(ctx context.Context, path string) (session.FileListing, error) {
 	return runFiles(exec.CommandContext(ctx, "python3", "-", path))
@@ -130,6 +217,20 @@ func (t *LocalTarget) ListFiles(ctx context.Context, path string) (session.FileL
 // ReadFile lê um arquivo na máquina LOCAL.
 func (t *LocalTarget) ReadFile(ctx context.Context, path string) (session.FileContent, error) {
 	return runRead(exec.CommandContext(ctx, "python3", "-", path))
+}
+
+// WriteFile salva um arquivo existente na máquina LOCAL.
+func (t *LocalTarget) WriteFile(ctx context.Context, path string, content []byte) (session.FileWrite, error) {
+	return runWrite(exec.CommandContext(ctx, "python3", "-", path), content)
+}
+
+// DownloadFile traz os bytes crus de um arquivo na máquina LOCAL. Usa cat em
+// vez do python3: aqui não há nada para decidir, e cat não carrega o arquivo
+// inteiro na memória do processo filho.
+func (t *LocalTarget) DownloadFile(ctx context.Context, path string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "cat", "--", path)
+	cmd.Env = childEnv()
+	return cmd.Output()
 }
 
 // listFilesArgs monta os args do ssh. Isolado do ListFiles para ser testável
@@ -149,4 +250,24 @@ func (t *SSHTarget) ListFiles(ctx context.Context, path string) (session.FileLis
 func (t *SSHTarget) ReadFile(ctx context.Context, path string) (session.FileContent, error) {
 	args := append(sshBaseOpts(), "--", t.dest, "python3 - "+singleQuote(path))
 	return runRead(exec.CommandContext(ctx, t.prog, args...))
+}
+
+// WriteFile salva um arquivo existente na máquina remota via ssh. O caminho vai
+// single-quoted no argv; o conteúdo vai no script, pelo stdin.
+func (t *SSHTarget) WriteFile(ctx context.Context, path string, content []byte) (session.FileWrite, error) {
+	args := append(sshBaseOpts(), "--", t.dest, "python3 - "+singleQuote(path))
+	return runWrite(exec.CommandContext(ctx, t.prog, args...), content)
+}
+
+// downloadArgs monta os args do ssh do download. Isolado para ser testável sem
+// tocar a rede, igual ao listFilesArgs.
+func (t *SSHTarget) downloadArgs(path string) []string {
+	return append(sshBaseOpts(), "--", t.dest, "cat -- "+singleQuote(path))
+}
+
+// DownloadFile traz os bytes crus de um arquivo na máquina remota via ssh.
+func (t *SSHTarget) DownloadFile(ctx context.Context, path string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, t.prog, t.downloadArgs(path)...)
+	cmd.Env = childEnv()
+	return cmd.Output()
 }

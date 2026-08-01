@@ -24,6 +24,8 @@ type (
 	DirLister        = agent.DirLister
 	FileLister       = agent.FileLister
 	FileReader       = agent.FileReader
+	FileWriter       = agent.FileWriter
+	FileDownloader   = agent.FileDownloader
 	Transcriber      = agent.Transcriber
 	TranscriptChunk  = agent.TranscriptChunk
 )

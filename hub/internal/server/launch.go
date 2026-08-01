@@ -33,6 +33,8 @@ type Launcher interface {
 	ListDirs(machine, path string) (session.DirListing, error)
 	ListFiles(machine, path string) (session.FileListing, error)
 	ReadFile(machine, path string) (session.FileContent, error)
+	WriteFile(machine, path string, content []byte) (session.FileWrite, error)
+	DownloadFile(machine, path string) ([]byte, error)
 	Adopt(machine, id, cwd, title, agent string) (session.Session, error)
 	TmuxList(machine string) ([]session.Discovered, error)
 	TmuxCapture(machine, target string) (string, error)

@@ -173,3 +173,10 @@ type FileContent struct {
 	Truncated bool   `json:"truncated"`
 	Content   string `json:"content"`
 }
+
+// FileWrite é o resultado de salvar um arquivo: o tamanho novo, para o app
+// atualizar a tela sem reler.
+type FileWrite struct {
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+}

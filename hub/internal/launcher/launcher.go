@@ -641,6 +641,39 @@ func (l *Launcher) ReadFile(machine, path string) (session.FileContent, error) {
 	return reader.ReadFile(ctx, path)
 }
 
+// WriteFile salva um arquivo de texto na máquina (editor da aba Máquinas). Só
+// sobrescreve arquivo que já existe: caminho inexistente devolve
+// claudecode.ErrNotAFile, que o handler traduz em 404.
+func (l *Launcher) WriteFile(machine, path string, content []byte) (session.FileWrite, error) {
+	tgt, ok := l.anyTarget(machine)
+	if !ok {
+		return session.FileWrite{}, ErrUnknownMachine
+	}
+	writer, ok := tgt.(claudecode.FileWriter)
+	if !ok {
+		return session.FileWrite{}, ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	return writer.WriteFile(ctx, path, content)
+}
+
+// DownloadFile traz os bytes crus de um arquivo na máquina (download da aba
+// Máquinas — inclusive binário, que o visualizador não mostra).
+func (l *Launcher) DownloadFile(machine, path string) ([]byte, error) {
+	tgt, ok := l.anyTarget(machine)
+	if !ok {
+		return nil, ErrUnknownMachine
+	}
+	dl, ok := tgt.(claudecode.FileDownloader)
+	if !ok {
+		return nil, ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	return dl.DownloadFile(ctx, path)
+}
+
 // Resolve tira uma sessão de needs_you marcando-a como concluída (done), sem
 // apagá-la — usado pelo swipe "Concluir" no app quando a usuária já respondeu no
 // terminal. Não marca como dismissed: a sessão pode voltar a precisar de você e
