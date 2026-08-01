@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Aba Máquinas: lista os hosts que o hub conhece e cadastra os novos. Tocar
-/// num host abre o navegador de arquivos dele (o terminal livre entra na F4).
+/// num host abre o terminal livre e os arquivos dele (`MachineDetailView`).
 ///
 /// A lista NÃO testa a conexão de todas as máquinas ao abrir — seriam N
 /// handshakes SSH por refresh, e o alcance só importa quando se entra no host.
@@ -105,7 +105,7 @@ struct MachineListView: View {
             }
         }
         .navigationDestination(for: Machine.self) { machine in
-            FileBrowserView(machine: machine.name, path: "")
+            MachineDetailView(machine: machine)
         }
     }
 

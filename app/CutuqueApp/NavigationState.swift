@@ -50,6 +50,36 @@ enum PaneMode: String, CaseIterable {
     case chat, terminal, info
 }
 
+/// Qual painel a aba Máquinas mostra para o host aberto. Mesmo desenho do
+/// `PaneMode`: os dois ficam montados e alterna-se a opacidade, então trocar de
+/// painel não derruba o terminal (o `ssh` do outro lado morreria junto) nem
+/// perde onde a navegação de arquivos estava.
+///
+/// Fica **por host** (`@AppStorage`, chave por nome): quem usa uma máquina para
+/// editar arquivo e outra para rodar comando não quer o mesmo painel nas duas.
+enum MachinePane: String, CaseIterable {
+    case terminal, files
+
+    var label: String {
+        switch self {
+        case .terminal: return "Terminal"
+        case .files:    return "Arquivos"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .terminal: return "apple.terminal"
+        case .files:    return "folder"
+        }
+    }
+
+    /// Chave do `@AppStorage` que lembra o painel deste host.
+    static func storageKey(machine: String) -> String {
+        "cutuque.machinePane.\(machine)"
+    }
+}
+
 /// Ações disparadas por atalho de teclado que precisam do contexto de uma view
 /// (a lista de sessões, o board) para acontecer. Quem consome zera com
 /// `consume()`.

@@ -11,6 +11,16 @@ struct FileBrowserView: View {
     let machine: String
     /// Caminho a listar. Vazio = home da máquina.
     let path: String
+    /// Falso quando embutida no `MachineDetailView`, que fica montado junto com
+    /// o terminal e por isso é a ÚNICA fonte do título (ver
+    /// `OwnedNavigationTitle.swift`). Default `true` preserva o empilhamento
+    /// normal: subpasta continua dona do próprio título.
+    var ownsNavigationTitle: Bool = true
+    /// Falso quando o painel está escondido atrás do terminal. Só governa a
+    /// toolbar: `.toolbar` compõe TODAS as views montadas, e `.opacity` não
+    /// alcança a barra de navegação — sem isto o botão de ocultos apareceria
+    /// com o terminal em foco.
+    var isActive: Bool = true
 
     @State private var listing: FileListing?
     @State private var loading = false
@@ -56,14 +66,17 @@ struct FileBrowserView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .navigationTitle(titulo)
-        .navigationBarTitleDisplayMode(.inline)
+        .ownedNavigationTitle(titulo, owns: ownsNavigationTitle)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Toggle(isOn: $showHidden) {
-                    Label("Ocultos", systemImage: showHidden ? "eye" : "eye.slash")
+            // Gate no CONTEÚDO, não no modificador: não é `if` na árvore de
+            // views, então não remonta nada.
+            if isActive {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Toggle(isOn: $showHidden) {
+                        Label("Ocultos", systemImage: showHidden ? "eye" : "eye.slash")
+                    }
+                    .toggleStyle(.button)
                 }
-                .toggleStyle(.button)
             }
         }
         .overlay { if loading && listing == nil { ProgressView() } }
