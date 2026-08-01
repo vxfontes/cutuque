@@ -336,6 +336,13 @@ struct FileListing: Decodable {
 
 /// Conteúdo de um arquivo lido da máquina. Binário e acima do teto voltam
 /// marcados e sem conteúdo — quem decide o que mostrar é o app.
+/// Resultado de salvar um arquivo: o tamanho novo, para a tela se atualizar sem
+/// reler da máquina.
+struct FileWrite: Decodable {
+    let path: String
+    let size: Int64
+}
+
 struct FileContent: Decodable {
     let path: String
     let size: Int64

@@ -485,6 +485,84 @@ struct APIClient {
         )
     }
 
+    /// Salva um arquivo de texto na máquina. Só sobrescreve arquivo que já
+    /// existe: se sumiu (ou virou pasta) desde que foi aberto, o hub devolve 404
+    /// e isto vira `.notFound`. `PUT /machines/{machine}/fs/write`.
+    @discardableResult
+    func writeFile(machine: String, path: String, content: String) async throws -> FileWrite {
+        let url = baseURL
+            .appendingPathComponent("machines")
+            .appendingPathComponent(machine)
+            .appendingPathComponent("fs")
+            .appendingPathComponent("write")
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(FileWriteRequest(path: path, content: content))
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        switch http.statusCode {
+        case 200:
+            return try JSONDecoder.cutuque.decode(FileWrite.self, from: data)
+        case 404:
+            throw CutuqueError.notFound
+        case 502, 503:
+            throw CutuqueError.server(status: http.statusCode, message: "não deu para salvar (a máquina não respondeu)")
+        default:
+            throw CutuqueError.unexpected(status: http.statusCode)
+        }
+    }
+
+    /// Corpo do PUT de escrita. O conteúdo vai como string JSON (texto), não
+    /// base64: o editor só abre arquivo de texto.
+    private struct FileWriteRequest: Encodable {
+        let path: String
+        let content: String
+    }
+
+    /// URL autenticável do download de um arquivo — usada pelo `downloadFile`.
+    /// Isolada para o teste conferir a montagem sem tocar a rede.
+    func downloadURL(machine: String, path: String) -> URL {
+        let url = baseURL
+            .appendingPathComponent("machines")
+            .appendingPathComponent(machine)
+            .appendingPathComponent("fs")
+            .appendingPathComponent("download")
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "path", value: path)]
+        return comps.url!
+    }
+
+    /// Baixa os bytes crus de um arquivo (inclusive binário) para um arquivo
+    /// temporário e devolve a URL local, pronta para o ShareLink.
+    /// `GET /machines/{machine}/fs/download?path=`.
+    func downloadFile(machine: String, path: String) async throws -> URL {
+        var request = URLRequest(url: downloadURL(machine: machine, path: path))
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        switch http.statusCode {
+        case 200:
+            // Subpasta única por download: dois arquivos de mesmo nome, de
+            // máquinas diferentes, não podem se sobrescrever no tmp.
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let name = (path as NSString).lastPathComponent
+            let dest = dir.appendingPathComponent(name.isEmpty ? "arquivo" : name)
+            try data.write(to: dest)
+            return dest
+        case 404:
+            throw CutuqueError.notFound
+        case 502, 503:
+            throw CutuqueError.server(status: http.statusCode, message: "não deu para baixar (a máquina não respondeu)")
+        default:
+            throw CutuqueError.unexpected(status: http.statusCode)
+        }
+    }
+
     /// Lista as sessões do Claude RODANDO agora numa máquina (processo vivo +
     /// transcript recente) — as "ao vivo" que aparecem na home.
     /// `GET /machines/{machine}/live`. Erros são engolidos em `[]` (é um poll de

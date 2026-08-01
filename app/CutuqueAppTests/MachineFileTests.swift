@@ -116,4 +116,26 @@ final class MachineFileTests: XCTestCase {
         let c: FileContent = try decode(#"{"path":"/a.md","size":1,"binary":false,"truncated":false,"content":"x"}"#)
         XCTAssertNil(c.unreadableReason)
     }
+
+    // MARK: - FileWrite
+
+    func testFileWriteTrazOTamanhoNovo() throws {
+        let w: FileWrite = try decode(#"{"path":"/a.md","size":42}"#)
+        XCTAssertEqual(w.path, "/a.md")
+        XCTAssertEqual(w.size, 42)
+    }
+
+    // MARK: - Download
+
+    /// O caminho vai na query, percent-encoded. Sem isso, um espaço ou `#` no
+    /// nome quebraria a URL (o `#` viraria fragmento e o path chegaria cortado).
+    func testDownloadURLEscapaOCaminho() {
+        let url = APIClient().downloadURL(machine: "macbook", path: "/tmp/nota #1.txt")
+        let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        XCTAssertEqual(comps.path.hasSuffix("/machines/macbook/fs/download"), true, comps.path)
+        // O valor decodificado tem que ser o caminho ORIGINAL, inteiro.
+        let path = comps.queryItems?.first { $0.name == "path" }?.value
+        XCTAssertEqual(path, "/tmp/nota #1.txt")
+        XCTAssertNil(url.fragment, "o # virou fragmento: o caminho chegaria cortado no hub")
+    }
 }
