@@ -266,6 +266,57 @@ func TestMaquinaDoEnvNaoGanhaIdentidadeNenhuma(t *testing.T) {
 	}
 }
 
+// MARK: terminal livre
+
+// O terminal livre é o único uso de ssh que QUER um tty do outro lado. Pedir o
+// `-tt` e ao mesmo tempo deixar escapar o `-T` do uso em lote daria um shell sem
+// terminal: sem prompt, sem vim, sem htop.
+func TestShellCommandPedeTerminalENaoMandaComando(t *testing.T) {
+	tgt := NewSSHTarget("vps", "vx@192.0.2.50")
+	cmd := tgt.ShellCommand(context.Background())
+
+	args := cmd.Args[1:] // [0] é o próprio prog
+	if !slices.Contains(args, "-tt") {
+		t.Errorf("faltou -tt (shell sem terminal do outro lado): %v", args)
+	}
+	if slices.Contains(args, "-T") {
+		t.Errorf("o -T do uso em lote vazou para o terminal livre: %v", args)
+	}
+	// Nenhum comando remoto: o destino sozinho faz o ssh abrir o login shell.
+	// Se sobrar algo depois do dest, o ssh roda AQUILO e sai.
+	if args[len(args)-1] != tgt.dest {
+		t.Errorf("args terminam em %q, quero o dest %q sem comando depois: %v",
+			args[len(args)-1], tgt.dest, args)
+	}
+	// BatchMode fica: um prompt de senha num terminal que ninguém vê pendura a
+	// conexão em vez de falhar.
+	if !slices.Contains(args, "BatchMode=yes") {
+		t.Errorf("sem BatchMode o terminal penduraria num prompt de senha: %v", args)
+	}
+}
+
+// Máquina cadastrada pelo app abre terminal com a chave dela e o known_hosts
+// próprio — o terminal não pode ser a porta dos fundos que escapa do TOFU.
+func TestShellCommandUsaAIdentidadeDaMaquina(t *testing.T) {
+	tgt := NewSSHTarget("vps", "vx@192.0.2.50")
+	tgt.SetIdentity("/data/machines/keys/vps", "/data/machines/known_hosts", 2222)
+
+	args := tgt.ShellCommand(context.Background()).Args[1:]
+	for _, quero := range []string{
+		"/data/machines/keys/vps",
+		"IdentitiesOnly=yes",
+		"UserKnownHostsFile=/data/machines/known_hosts",
+		"-p", "2222",
+	} {
+		if !slices.Contains(args, quero) {
+			t.Errorf("faltou %q nos args do terminal: %v", quero, args)
+		}
+	}
+	if primeiroStrict(args) != "StrictHostKeyChecking=yes" {
+		t.Errorf("o terminal aceitaria chave nova em silêncio: %v", args)
+	}
+}
+
 // primeiroStrict devolve o valor da PRIMEIRA opção StrictHostKeyChecking — a
 // única que o ssh leva em conta.
 func primeiroStrict(args []string) string {

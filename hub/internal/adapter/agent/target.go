@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"os/exec"
 
 	"github.com/vxfontes/cutuque/hub/internal/session"
 )
@@ -83,6 +84,17 @@ type FileWriter interface {
 // inclusive binário, que o visualizador não mostra). Opcional, mesmo motivo.
 type FileDownloader interface {
 	DownloadFile(ctx context.Context, path string) ([]byte, error)
+}
+
+// ShellDialer monta o comando de um shell interativo na máquina (terminal livre
+// da aba Máquinas). Opcional como o FileLister: só os alvos por ssh
+// implementam — a máquina "local" é o próprio hub, e abrir um shell dentro do
+// container não é a mesma coisa que entrar numa máquina.
+//
+// Devolve o comando montado, e não os args crus, porque o ambiente do filho é
+// parte do contrato: sem HOME o `ssh` não acha nem a config nem as chaves.
+type ShellDialer interface {
+	ShellCommand(ctx context.Context) *exec.Cmd
 }
 
 // Transcriber lê o histórico completo de UMA sessão numa máquina (para popular

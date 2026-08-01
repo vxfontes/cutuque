@@ -26,6 +26,7 @@ type (
 	FileReader       = agent.FileReader
 	FileWriter       = agent.FileWriter
 	FileDownloader   = agent.FileDownloader
+	ShellDialer      = agent.ShellDialer
 	Transcriber      = agent.Transcriber
 	TranscriptChunk  = agent.TranscriptChunk
 )
@@ -227,6 +228,26 @@ func (t *SSHTarget) Start(ctx context.Context, resumeID, cwd, model, effort, _sa
 	return h, nil
 }
 
+// ShellCommand monta o `ssh` de um shell interativo nesta máquina — o terminal
+// livre da aba Máquinas. Só monta: quem liga o PTY e roda é o handler do
+// WebSocket.
+//
+// Duas diferenças em relação ao resto dos usos, e só elas: `-tt` no lugar do
+// `-T`, porque aqui a gente QUER um terminal do outro lado (o `-tt` dobrado
+// força mesmo com o stdin daqui não sendo um tty), e nenhum comando remoto — o
+// destino sozinho faz o ssh abrir o login shell do usuário. O `BatchMode=yes`
+// fica: sem chave instalada é melhor falhar na hora do que pendurar um prompt
+// de senha que ninguém vê.
+func (t *SSHTarget) ShellCommand(ctx context.Context) *exec.Cmd {
+	opts := agent.WithIdentity(t.identity, append(sshOptsComuns(), "-tt"))
+	// "--" separa: um dest começando com "-" nunca vira opção.
+	cmd := exec.CommandContext(ctx, t.prog, append(opts, "--", t.dest)...)
+	// Mesma allowlist do Start (SEC-006): sem HOME o ssh não acha config, chave
+	// nem known_hosts.
+	cmd.Env = childEnv()
+	return cmd
+}
+
 // startHandle liga os pipes de um cmd e o inicia, devolvendo o Handle.
 func startHandle(cmd *exec.Cmd) (*Handle, error) {
 	stdout, err := cmd.StdoutPipe()
@@ -256,17 +277,23 @@ func sendInitialPrompt(h *Handle, prompt string) error {
 	return nil
 }
 
-// sshBaseOpts são as opções de ssh compartilhadas por todo uso (o claude e a
-// descoberta). Compartilhar evita divergência entre os dois.
-func sshBaseOpts() []string {
+// sshOptsComuns são as opções que valem para QUALQUER uso de ssh — em lote ou
+// interativo. Ficam separadas do `-T` porque o terminal livre precisa do
+// oposto dele, e é a única diferença entre os dois usos.
+func sshOptsComuns() []string {
 	return []string{
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=10",
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
 		"-o", "StrictHostKeyChecking=accept-new",
-		"-T",
 	}
+}
+
+// sshBaseOpts são as opções de ssh compartilhadas por todo uso em lote (o
+// claude e a descoberta). Compartilhar evita divergência entre os dois.
+func sshBaseOpts() []string {
+	return append(sshOptsComuns(), "-T")
 }
 
 // sshClaudeArgs monta os args do `ssh` local para rodar o claude remoto. As

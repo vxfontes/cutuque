@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os/exec"
 
 	"github.com/vxfontes/cutuque/hub/internal/launcher"
 	"github.com/vxfontes/cutuque/hub/internal/session"
@@ -35,6 +36,7 @@ type Launcher interface {
 	ReadFile(machine, path string) (session.FileContent, error)
 	WriteFile(machine, path string, content []byte) (session.FileWrite, error)
 	DownloadFile(machine, path string) ([]byte, error)
+	ShellCommand(ctx context.Context, machine string) (*exec.Cmd, error)
 	Adopt(machine, id, cwd, title, agent string) (session.Session, error)
 	TmuxList(machine string) ([]session.Discovered, error)
 	TmuxCapture(machine, target string) (string, error)

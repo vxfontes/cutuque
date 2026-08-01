@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +52,12 @@ type fakeLauncher struct {
 	adoptSession session.Session
 	adoptErr     error
 
+	// Terminal livre: o teste do PTY roda um programa de verdade no lugar do
+	// `ssh` (não dá para fingir um pty com um mock).
+	shellProg string
+	shellArgs []string
+	shellErr  error
+
 	gotMachine, gotAgent, gotPrompt, gotCwd string
 	gotModel, gotEffort, gotSandbox         string
 	gotApproveID, gotDenyID                 string
@@ -63,6 +70,7 @@ type fakeLauncher struct {
 	gotWriteMachine, gotWritePath           string
 	gotWriteContent                         []byte
 	gotDownloadMachine, gotDownloadPath     string
+	gotShellMachine                         string
 	gotDiscoverMachine                      string
 	gotAdoptMachine, gotAdoptID             string
 	gotAdoptCwd, gotAdoptTitle              string
@@ -105,6 +113,16 @@ func (f *fakeLauncher) WriteFile(machine, path string, content []byte) (session.
 func (f *fakeLauncher) DownloadFile(machine, path string) ([]byte, error) {
 	f.gotDownloadMachine, f.gotDownloadPath = machine, path
 	return f.fileBytes, f.downloadErr
+}
+
+// ShellCommand devolve o comando que o fake mandar rodar (o teste do PTY troca
+// o `ssh` por um script), ou o erro programado.
+func (f *fakeLauncher) ShellCommand(ctx context.Context, machine string) (*exec.Cmd, error) {
+	f.gotShellMachine = machine
+	if f.shellErr != nil {
+		return nil, f.shellErr
+	}
+	return exec.CommandContext(ctx, f.shellProg, f.shellArgs...), nil
 }
 
 func (f *fakeLauncher) Discover(machine string) ([]session.Discovered, error) {

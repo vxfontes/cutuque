@@ -148,6 +148,8 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		mux.Handle("GET /machines/{machine}/fs/read", requireAuth(cfg.Token, FileReadHandler(lch)))
 		mux.Handle("PUT /machines/{machine}/fs/write", requireAuth(cfg.Token, FileWriteHandler(lch)))
 		mux.Handle("GET /machines/{machine}/fs/download", requireAuth(cfg.Token, FileDownloadHandler(lch)))
+		// Terminal livre: WebSocket, bytes crus nos dois sentidos.
+		mux.Handle("GET /machines/{machine}/pty", requireAuth(cfg.Token, PTYHandler(lch)))
 		mux.Handle("POST /machines/{machine}/adopt", requireAuth(cfg.Token, AdoptHandler(lch)))
 		// Ponte tmux: observar (screen) e digitar (keys) em sessões de terminal.
 		mux.Handle("GET /machines/{machine}/tmux", requireAuth(cfg.Token, TmuxListHandler(lch)))

@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
@@ -41,6 +42,7 @@ var (
 	ErrInvalidSessionID = errors.New("launcher: id de sessão inválido")
 	ErrDiscoverFailed   = errors.New("launcher: falha ao descobrir sessões na máquina")
 	ErrInvalidAnswer    = errors.New("launcher: resposta inválida (pergunta desconhecida ou vazia)")
+	ErrNoShell          = errors.New("launcher: máquina não abre terminal (é o próprio hub)")
 )
 
 // toolAskUserQuestion é o tool_name nativo da pergunta de seleção do Claude Code.
@@ -680,6 +682,28 @@ func (l *Launcher) DownloadFile(machine, path string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
 	defer cancel()
 	return dl.DownloadFile(ctx, path)
+}
+
+// ShellCommand monta (sem rodar) o comando de um shell interativo na máquina —
+// o terminal livre da aba Máquinas. Quem liga o PTY e roda é o handler do
+// WebSocket, que é quem tem a conexão para ligar nas duas pontas.
+//
+// O ctx é o da conexão, não o baseCtx com discoverTimeout: um terminal aberto
+// não tem prazo, e amarrá-lo a um timeout de descoberta o mataria em 30s.
+//
+// ErrUnknownMachine se a máquina não existe; ErrNoShell se ela existe mas é o
+// próprio hub — abrir um shell dentro do container não é entrar numa máquina, e
+// a diferença precisa chegar ao app como coisas distintas.
+func (l *Launcher) ShellCommand(ctx context.Context, machine string) (*exec.Cmd, error) {
+	tgt, ok := l.anyTarget(machine)
+	if !ok {
+		return nil, ErrUnknownMachine
+	}
+	dialer, ok := tgt.(claudecode.ShellDialer)
+	if !ok {
+		return nil, ErrNoShell
+	}
+	return dialer.ShellCommand(ctx), nil
 }
 
 // Resolve tira uma sessão de needs_you marcando-a como concluída (done), sem
