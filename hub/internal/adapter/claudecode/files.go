@@ -236,7 +236,7 @@ func (t *LocalTarget) DownloadFile(ctx context.Context, path string) ([]byte, er
 // listFilesArgs monta os args do ssh. Isolado do ListFiles para ser testável
 // sem tocar a rede.
 func (t *SSHTarget) listFilesArgs(path string) []string {
-	return append(sshBaseOpts(), "--", t.dest, "python3 - "+singleQuote(path))
+	return append(t.sshOpts(), "--", t.dest, "python3 - "+singleQuote(path))
 }
 
 // ListFiles lista pastas e arquivos de path na máquina remota via ssh. path vai
@@ -248,21 +248,21 @@ func (t *SSHTarget) ListFiles(ctx context.Context, path string) (session.FileLis
 // ReadFile lê um arquivo na máquina remota via ssh. path vai single-quoted como
 // argumento — nunca interpolado no shell.
 func (t *SSHTarget) ReadFile(ctx context.Context, path string) (session.FileContent, error) {
-	args := append(sshBaseOpts(), "--", t.dest, "python3 - "+singleQuote(path))
+	args := append(t.sshOpts(), "--", t.dest, "python3 - "+singleQuote(path))
 	return runRead(exec.CommandContext(ctx, t.prog, args...))
 }
 
 // WriteFile salva um arquivo existente na máquina remota via ssh. O caminho vai
 // single-quoted no argv; o conteúdo vai no script, pelo stdin.
 func (t *SSHTarget) WriteFile(ctx context.Context, path string, content []byte) (session.FileWrite, error) {
-	args := append(sshBaseOpts(), "--", t.dest, "python3 - "+singleQuote(path))
+	args := append(t.sshOpts(), "--", t.dest, "python3 - "+singleQuote(path))
 	return runWrite(exec.CommandContext(ctx, t.prog, args...), content)
 }
 
 // downloadArgs monta os args do ssh do download. Isolado para ser testável sem
 // tocar a rede, igual ao listFilesArgs.
 func (t *SSHTarget) downloadArgs(path string) []string {
-	return append(sshBaseOpts(), "--", t.dest, "cat -- "+singleQuote(path))
+	return append(t.sshOpts(), "--", t.dest, "cat -- "+singleQuote(path))
 }
 
 // DownloadFile traz os bytes crus de um arquivo na máquina remota via ssh.

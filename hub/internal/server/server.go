@@ -16,13 +16,14 @@ import (
 // RouterOption. Mantém a assinatura de Router/New estável quando novas
 // dependências opcionais entram (ex.: o store de devices da Fase 4).
 type routerConfig struct {
-	devices    *devices.Store
-	renudge    RenudgeController
-	foreground ForegroundController
-	history    HistoryReader
+	devices     *devices.Store
+	renudge     RenudgeController
+	foreground  ForegroundController
+	history     HistoryReader
 	board       board.Store
 	machines    *machine.Registry
 	machineKeys MachineKeys
+	machineTgts MachineTargets
 }
 
 // RouterOption configura dependências opcionais do Router.
@@ -73,6 +74,14 @@ func WithMachines(reg *machine.Registry) RouterOption {
 // serve a lista em leitura e mais nada.
 func WithMachineKeys(keys MachineKeys) RouterOption {
 	return func(rc *routerConfig) { rc.machineKeys = keys }
+}
+
+// WithMachineTargets liga o cadastro ao Launcher: confirmar a impressão digital
+// de uma máquina passa a criar os alvos ssh dela, e descadastrar os remove. Sem
+// esta opção o cadastro só alimenta a lista — a máquina apareceria no app sem
+// dar para lançar nada nela.
+func WithMachineTargets(t MachineTargets) RouterOption {
+	return func(rc *routerConfig) { rc.machineTgts = t }
 }
 
 // Router registra as rotas do hub. As rotas protegidas passam pelo middleware
@@ -159,11 +168,11 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		// não teria onde gerar a chave nem known_hosts próprio para confiar.
 		// Tudo atrás de token — cadastrar instala chave em host remoto.
 		if rc.machineKeys != nil {
-			k := rc.machineKeys
+			k, tg := rc.machineKeys, rc.machineTgts
 			mux.Handle("POST /machines", requireAuth(cfg.Token, MachineCreateHandler(rc.machines, k)))
-			mux.Handle("PATCH /machines/{machine}", requireAuth(cfg.Token, MachinePatchHandler(rc.machines)))
-			mux.Handle("DELETE /machines/{machine}", requireAuth(cfg.Token, MachineDeleteHandler(rc.machines, k)))
-			mux.Handle("POST /machines/{machine}/trust", requireAuth(cfg.Token, MachineTrustHandler(rc.machines, k)))
+			mux.Handle("PATCH /machines/{machine}", requireAuth(cfg.Token, MachinePatchHandler(rc.machines, tg)))
+			mux.Handle("DELETE /machines/{machine}", requireAuth(cfg.Token, MachineDeleteHandler(rc.machines, k, tg)))
+			mux.Handle("POST /machines/{machine}/trust", requireAuth(cfg.Token, MachineTrustHandler(rc.machines, k, tg)))
 			mux.Handle("POST /machines/{machine}/install-key", requireAuth(cfg.Token, MachineInstallKeyHandler(rc.machines, k)))
 		}
 	}

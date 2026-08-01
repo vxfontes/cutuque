@@ -50,6 +50,6 @@ func (t *LocalTarget) TranscriptIDs(ctx context.Context) ([]string, error) {
 
 // TranscriptIDs lista os transcripts existentes na máquina remota via ssh.
 func (t *SSHTarget) TranscriptIDs(ctx context.Context) ([]string, error) {
-	args := append(sshBaseOpts(), "--", t.dest, "python3 -")
+	args := append(t.sshOpts(), "--", t.dest, "python3 -")
 	return runTranscriptIDs(exec.CommandContext(ctx, t.prog, args...))
 }

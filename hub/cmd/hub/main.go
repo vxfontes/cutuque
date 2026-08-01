@@ -212,17 +212,24 @@ func main() {
 	// APNs (Fase 4): opcional. Se configurado, sobe o Notifier e habilita a rota
 	// de registro de devices; senão, o hub segue normalmente sem push.
 	var ntf *notifier.Notifier
+	mreg := buildMachineRegistry(machines, logger)
 	serverOpts := []server.RouterOption{
 		server.WithBoard(boardStore),
-		server.WithMachines(buildMachineRegistry(machines, logger)),
+		server.WithMachines(mreg),
 	}
 	// CUTUQUE_MACHINES_DIR liga o CADASTRO de máquinas pelo app (aba Máquinas):
 	// é onde ficam o registro, as chaves privadas geradas aqui e o known_hosts
 	// próprio. Sem a env var o hub só LISTA o que veio do CUTUQUE_SSH_TARGETS —
 	// gerar chave privada em disco efêmero seria perdê-la no próximo deploy.
 	if dir := os.Getenv("CUTUQUE_MACHINES_DIR"); dir != "" {
-		serverOpts = append(serverOpts, server.WithMachineKeys(machine.NewKeyStore(dir)))
-		logger.Info("cadastro de máquinas pelo app habilitado", "dir", dir)
+		ks := machine.NewKeyStore(dir)
+		// Antes de restaurar qualquer alvo: é este known_hosts que os alvos das
+		// máquinas do app consultam, e o StrictHostKeyChecking=yes delas não
+		// perdoa apontá-lo para o lugar errado.
+		lch.SetMachineKnownHosts(ks.KnownHostsPath())
+		restaurados := restauraAlvosDoApp(lch, mreg)
+		serverOpts = append(serverOpts, server.WithMachineKeys(ks), server.WithMachineTargets(lch))
+		logger.Info("cadastro de máquinas pelo app habilitado", "dir", dir, "alvos_restaurados", restaurados)
 	}
 	if cfg.APNSEnabled() {
 		client, err := apns.NewClient(cfg)
@@ -330,15 +337,31 @@ func buildTargets(machines []machine.Machine) map[string]map[string]claudecode.T
 	}
 	targets := make(map[string]map[string]claudecode.Target, len(machines))
 	for _, m := range machines {
-		ct := claudecode.NewSSHTarget(m.Name, m.Dest)
-		// Caminho absoluto do claude remoto por alvo (opcional): necessário
-		// quando o binário certo não é o primeiro no PATH do login shell remoto
-		// (ex.: no Mac, /opt/homebrew tem uma versão antiga; a boa está em
-		// ~/.local/bin). Vazio → default "claude".
-		ct.SetRemoteClaudeCmd(m.RemoteCmd)
-		targets[m.Name] = agentMap(ct, codex.NewSSHTarget(m.Name, m.Dest), opencode.NewSSHTarget(m.Name, m.Dest))
+		// O mesmo construtor do cadastro em runtime (launcher.TargetsFor): sem
+		// known_hosts próprio, porque máquina do hub.env conecta pelo ~/.ssh do
+		// container. Um só lugar monta alvo ssh — dois divergiriam.
+		targets[m.Name] = launcher.TargetsFor(m, "")
 	}
 	return targets
+}
+
+// restauraAlvosDoApp devolve ao Launcher os alvos das máquinas que o app já
+// cadastrou e cuja impressão digital já foi confirmada. Sem isto, um restart do
+// hub deixaria a máquina na lista mas inutilizável até a usuária confirmar a
+// impressão de novo — e ela não teria como saber que precisava.
+//
+// Máquina sem fingerprint fica de fora de propósito: é o mesmo critério do
+// runtime (o hub se recusa a conectar sem confirmação).
+func restauraAlvosDoApp(lch *launcher.Launcher, reg *machine.Registry) int {
+	n := 0
+	for _, m := range reg.List() {
+		if m.Source != machine.SourceApp || m.HostFingerprint == "" {
+			continue
+		}
+		lch.RegisterMachine(m)
+		n++
+	}
+	return n
 }
 
 // buildMachineRegistry monta o registro da aba Máquinas: sempre com o que veio

@@ -29,6 +29,33 @@ type MachineKeys interface {
 	InstallKey(ctx context.Context, dest string, port int, password, pub, expectedFingerprint string) error
 }
 
+// MachineTargets é o Launcher visto pelo cadastro: quem faz a máquina virar
+// alvo de verdade (lançar sessão, listar pasta, abrir arquivo). Interface para o
+// server não depender do launcher — e para o teste conferir o que foi
+// registrado sem subir um Launcher inteiro.
+type MachineTargets interface {
+	RegisterMachine(m machine.Machine)
+	UnregisterMachine(name string)
+}
+
+// sincronizaAlvo aplica a única regra que governa o mapa de alvos: a máquina é
+// alvo se, e só se, tem impressão digital confirmada. Sem fingerprint o hub se
+// recusa a conectar de qualquer jeito — deixá-la como alvo só trocaria um
+// "máquina desconhecida" honesto por um erro de ssh no meio do lançamento.
+//
+// nil é aceito de propósito: sem CUTUQUE_MACHINES_DIR o cadastro nem existe, e
+// o hub roda só com as máquinas do hub.env.
+func sincronizaAlvo(targets MachineTargets, m machine.Machine) {
+	if targets == nil {
+		return
+	}
+	if m.HostFingerprint == "" {
+		targets.UnregisterMachine(m.Name)
+		return
+	}
+	targets.RegisterMachine(m)
+}
+
 // maxMachineBody: nome, destino e senha são pequenos. Teto baixo para o corpo
 // não virar vetor de memória.
 const maxMachineBody = 8 << 10
@@ -157,9 +184,12 @@ func desfazCadastro(reg *machine.Registry, keys MachineKeys, name string) {
 // fluxo em que um host trocado é pego: sem essa segunda leitura, bastaria
 // responder o cadastro e trocar a chave depois.
 //
+// Confirmada a impressão, a máquina vira alvo: é neste ponto (e só neste) que
+// ela passa a ser conectável.
+//
 //	POST /machines/{machine}/trust {"fingerprint"}
 //	→ 200 {"machine"} | 400 | 403 | 404 | 409 | 500 | 502
-func MachineTrustHandler(reg *machine.Registry, keys MachineKeys) http.HandlerFunc {
+func MachineTrustHandler(reg *machine.Registry, keys MachineKeys, targets MachineTargets) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxMachineBody)
 		var req machineTrustReq
@@ -191,6 +221,7 @@ func MachineTrustHandler(reg *machine.Registry, keys MachineKeys) http.HandlerFu
 			return
 		}
 		atual, _ := reg.Get(m.Name)
+		sincronizaAlvo(targets, atual)
 		writeJSONResp(w, http.StatusOK, machineResp{Machine: atual})
 	}
 }
@@ -239,9 +270,12 @@ func MachineInstallKeyHandler(reg *machine.Registry, keys MachineKeys) http.Hand
 // Nome, chave e fingerprint não se mexem por aqui (o registro cuida disso:
 // mudar o destino derruba a confirmação do host).
 //
+// Mudar o destino derruba a confirmação, e com ela o alvo: a máquina volta a
+// ser desconhecida até a usuária conferir a impressão do endereço novo.
+//
 //	PATCH /machines/{machine} {"dest","port"}
 //	→ 200 {"machine"} | 400 | 403 | 404 | 500
-func MachinePatchHandler(reg *machine.Registry) http.HandlerFunc {
+func MachinePatchHandler(reg *machine.Registry, targets MachineTargets) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxMachineBody)
 		var req machinePatchReq
@@ -260,6 +294,7 @@ func MachinePatchHandler(reg *machine.Registry) http.HandlerFunc {
 		case err != nil:
 			writeJSONError(w, http.StatusInternalServerError, "register_failed")
 		default:
+			sincronizaAlvo(targets, m)
 			writeJSONResp(w, http.StatusOK, machineResp{Machine: m})
 		}
 	}
@@ -276,7 +311,7 @@ func MachinePatchHandler(reg *machine.Registry) http.HandlerFunc {
 // mantê-la faz recadastrar a mesma máquina simplesmente funcionar.
 //
 //	DELETE /machines/{machine} → 204 | 403 | 404 | 500
-func MachineDeleteHandler(reg *machine.Registry, keys MachineKeys) http.HandlerFunc {
+func MachineDeleteHandler(reg *machine.Registry, keys MachineKeys, targets MachineTargets) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		m, ok := maquinaEditavel(w, reg, r.PathValue("machine"))
 		if !ok {
@@ -289,6 +324,9 @@ func MachineDeleteHandler(reg *machine.Registry, keys MachineKeys) http.HandlerF
 		if err := reg.Remove(m.Name); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "delete_failed")
 			return
+		}
+		if targets != nil {
+			targets.UnregisterMachine(m.Name)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}

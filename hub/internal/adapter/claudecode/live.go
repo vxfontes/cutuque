@@ -165,6 +165,6 @@ func (t *LocalTarget) Live(ctx context.Context) ([]session.Discovered, error) {
 
 // Live lista as sessões vivas na máquina remota via ssh (python3 lá).
 func (t *SSHTarget) Live(ctx context.Context) ([]session.Discovered, error) {
-	args := append(sshBaseOpts(), "--", t.dest, "python3 -")
+	args := append(t.sshOpts(), "--", t.dest, "python3 -")
 	return runDiscoverScript(exec.CommandContext(ctx, t.prog, args...), liveScript)
 }

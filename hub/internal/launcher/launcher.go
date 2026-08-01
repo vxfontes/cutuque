@@ -97,7 +97,16 @@ type Launcher struct {
 	// targets é indexado por máquina → agente ("claude-code"|"codex") → alvo.
 	// Uma máquina roda mais de um agente; o launch escolhe pelo agente pedido e o
 	// resume pelo agente da sessão.
-	targets map[string]map[string]claudecode.Target
+	//
+	// Deixou de ser fixo em New: a aba Máquinas cadastra máquinas em runtime e o
+	// alvo delas nasce junto do cadastro. As mutações SUBSTITUEM o mapa
+	// (copy-on-write) em vez de escrever nele, então uma leitura em voo nunca vê
+	// o mapa pela metade — mas o ponteiro em si precisa do targetsMu.
+	targetsMu sync.RWMutex
+	targets   map[string]map[string]claudecode.Target
+	// machineKnownHosts é o known_hosts das máquinas cadastradas pelo app,
+	// fixado no boot. Vazio = cadastro desligado (sem CUTUQUE_MACHINES_DIR).
+	machineKnownHosts string
 
 	// wg rastreia as goroutines de observação (uma por Launch, rodando
 	// runner.Run) ainda vivas. Shutdown espera todas terminarem depois de
@@ -152,10 +161,9 @@ func (l *Launcher) SetMaxSessions(n int) {
 	l.mu.Unlock()
 }
 
-// target resolve o alvo de um agente específico numa máquina. targets é fixado
-// em New e nunca mutado, então é seguro ler sem lock.
+// target resolve o alvo de um agente específico numa máquina.
 func (l *Launcher) target(machine, agent string) (claudecode.Target, bool) {
-	byAgent, ok := l.targets[machine]
+	byAgent, ok := l.snapshot()[machine]
 	if !ok {
 		return nil, false
 	}
@@ -167,7 +175,7 @@ func (l *Launcher) target(machine, agent string) (claudecode.Target, bool) {
 // agente (listar pastas, tmux, descoberta). Prefere o claude-code, preservando
 // o comportamento das rotas que hoje só existem para ele.
 func (l *Launcher) anyTarget(machine string) (claudecode.Target, bool) {
-	byAgent, ok := l.targets[machine]
+	byAgent, ok := l.snapshot()[machine]
 	if !ok || len(byAgent) == 0 {
 		return nil, false
 	}
@@ -186,7 +194,7 @@ func (l *Launcher) anyTarget(machine string) (claudecode.Target, bool) {
 // envia o prompt inicial pelo stdin e espera o session_started (até launchTimeout)
 // para devolver a Session criada. cwd é a pasta onde o `claude` roda; vazio → home.
 func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt, cwd, model, effort, sandbox string) (session.Session, error) {
-	if _, known := l.targets[machine]; !known {
+	if _, known := l.snapshot()[machine]; !known {
 		return session.Session{}, ErrUnknownMachine
 	}
 	tgt, ok := l.target(machine, agent)
@@ -251,7 +259,7 @@ func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt, cwd, mode
 // ~/.claude/projects lá), inclusive as não lançadas pelo Cutuque. Retorna
 // ErrUnknownMachine se a máquina não existe ou não suporta descoberta.
 func (l *Launcher) Discover(machine string) ([]session.Discovered, error) {
-	byAgent, ok := l.targets[machine]
+	byAgent, ok := l.snapshot()[machine]
 	if !ok {
 		return nil, ErrUnknownMachine
 	}
@@ -685,11 +693,11 @@ func (l *Launcher) Resolve(id string) error {
 	return nil
 }
 
-// Machines devolve os nomes dos alvos registrados, ordenados. targets é fixado
-// em New e nunca mutado, então é seguro ler sem lock.
+// Machines devolve os nomes dos alvos registrados, ordenados.
 func (l *Launcher) Machines() []string {
-	names := make([]string, 0, len(l.targets))
-	for name := range l.targets {
+	snap := l.snapshot()
+	names := make([]string, 0, len(snap))
+	for name := range snap {
 		names = append(names, name)
 	}
 	sort.Strings(names)

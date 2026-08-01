@@ -101,6 +101,6 @@ func (t *LocalTarget) Discover(ctx context.Context) ([]session.Discovered, error
 // Discover lista as sessões do Claude Code na máquina remota via ssh (roda
 // python3 lá, lendo o script pelo stdin — reutiliza as mesmas opções de ssh).
 func (t *SSHTarget) Discover(ctx context.Context) ([]session.Discovered, error) {
-	args := append(sshBaseOpts(), "--", t.dest, "python3 -")
+	args := append(t.sshOpts(), "--", t.dest, "python3 -")
 	return runDiscover(exec.CommandContext(ctx, t.prog, args...))
 }

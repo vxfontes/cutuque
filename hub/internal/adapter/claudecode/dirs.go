@@ -66,6 +66,6 @@ func (t *LocalTarget) ListDirs(ctx context.Context, path string) (session.DirLis
 // lendo o script pelo stdin, com o caminho como argv[1]). path é single-quoted
 // (defesa em profundidade — vai como argumento, não é interpolado no shell).
 func (t *SSHTarget) ListDirs(ctx context.Context, path string) (session.DirListing, error) {
-	args := append(sshBaseOpts(), "--", t.dest, "python3 - "+singleQuote(path))
+	args := append(t.sshOpts(), "--", t.dest, "python3 - "+singleQuote(path))
 	return runDirs(exec.CommandContext(ctx, t.prog, args...))
 }

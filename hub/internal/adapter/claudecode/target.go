@@ -149,6 +149,9 @@ type SSHTarget struct {
 	remoteCmd string // caminho/comando do claude remoto (default: "claude")
 	prog      string // programa ssh local (parametrizável em teste)
 	buildArgs func(dest, remoteCmd, resumeID, cwd string) []string
+	// identity são as opções de chave/known_hosts das máquinas cadastradas
+	// pelo app (vazio nas do hub.env, que usam o ~/.ssh do container).
+	identity []string
 }
 
 // NewSSHTarget cria um SSHTarget que conecta a `dest` e roda o `claude` real lá.
@@ -170,6 +173,19 @@ func (t *SSHTarget) SetRemoteClaudeCmd(cmd string) {
 	}
 }
 
+// SetIdentity amarra o alvo à chave e ao known_hosts que o hub gerou no
+// cadastro da máquina (aba Máquinas). Sem os dois, não faz nada: a máquina
+// segue usando o ~/.ssh do container, como as do hub.env.
+func (t *SSHTarget) SetIdentity(keyPath, knownHosts string, port int) {
+	t.identity = agent.IdentityOpts(keyPath, knownHosts, port)
+}
+
+// sshOpts são as opções de ssh deste alvo: identidade da máquina (se houver)
+// antes das compartilhadas — a ordem importa, ver agent.IdentityOpts.
+func (t *SSHTarget) sshOpts() []string {
+	return agent.WithIdentity(t.identity, sshBaseOpts())
+}
+
 // Name identifica o alvo remoto (vira o campo Machine da sessão).
 func (t *SSHTarget) Name() string { return t.name }
 
@@ -183,7 +199,10 @@ func (t *SSHTarget) NewRunner(app Applier) *Runner { return NewRunner(app) }
 // cwd != "" vira um `cd <cwd> &&` antes do comando remoto. prompt != "" é
 // enviado pelo stdin logo após o start.
 func (t *SSHTarget) Start(ctx context.Context, resumeID, cwd, model, effort, _sandbox, prompt string) (*Handle, error) {
-	sshArgs := t.buildArgs(t.dest, t.remoteCmd, resumeID, cwd)
+	// A identidade entra aqui, e não no buildArgs: ele é um campo trocado por
+	// fake nos testes e não conhece o alvo. Prefixar mantém a ordem certa
+	// (identidade antes das opções base — ver agent.IdentityOpts).
+	sshArgs := agent.WithIdentity(t.identity, t.buildArgs(t.dest, t.remoteCmd, resumeID, cwd))
 	// model/effort entram como MAIS parâmetros posicionais do `exec "$0" "$@"`
 	// remoto (single-quoted, mesmo escape do SEC-101), anexados ao comando remoto
 	// (último arg). Só quando escolhidos, então o fake dos testes ("", "") não muda.
@@ -250,7 +269,10 @@ func sshBaseOpts() []string {
 	}
 }
 
-// sshClaudeArgs monta os args do `ssh` local para rodar o claude remoto.
+// sshClaudeArgs monta os args do `ssh` local para rodar o claude remoto. As
+// opções de identidade da máquina (quando há) são prefixadas pelo Start, que é
+// quem conhece o alvo — esta função é um campo configurável do SSHTarget e os
+// testes a trocam por um fake.
 func sshClaudeArgs(dest, remoteCmd, resumeID, cwd string) []string {
 	return append(sshBaseOpts(),
 		"--", // separador: um dest começando com "-" nunca é reinterpretado como opção

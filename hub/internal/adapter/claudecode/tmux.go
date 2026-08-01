@@ -210,14 +210,14 @@ var tmuxAllowedKeys = map[string]bool{
 // --- SSHTarget ---------------------------------------------------------------
 
 func (t *SSHTarget) runSSHTmux(ctx context.Context, inner string) ([]byte, error) {
-	args := append(sshBaseOpts(), "--", t.dest, tmuxPathPrefix+inner)
+	args := append(t.sshOpts(), "--", t.dest, tmuxPathPrefix+inner)
 	cmd := exec.CommandContext(ctx, t.prog, args...)
 	cmd.Env = childEnv()
 	return cmd.Output()
 }
 
 func (t *SSHTarget) TmuxList(ctx context.Context) ([]TmuxPane, error) {
-	args := append(sshBaseOpts(), "--", t.dest, "python3 -")
+	args := append(t.sshOpts(), "--", t.dest, "python3 -")
 	cmd := exec.CommandContext(ctx, t.prog, args...)
 	cmd.Env = childEnv()
 	cmd.Stdin = strings.NewReader(tmuxListScript)

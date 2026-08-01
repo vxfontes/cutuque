@@ -114,6 +114,6 @@ func (t *LocalTarget) Transcript(ctx context.Context, id string) ([]TranscriptCh
 // lendo o script pelo stdin, com o id como argv[1]). id é single-quoted (defesa
 // em profundidade — Adopt já o valida contra ^[0-9a-fA-F-]{8,64}$).
 func (t *SSHTarget) Transcript(ctx context.Context, id string) ([]TranscriptChunk, error) {
-	args := append(sshBaseOpts(), "--", t.dest, "python3 - "+singleQuote(id))
+	args := append(t.sshOpts(), "--", t.dest, "python3 - "+singleQuote(id))
 	return runTranscript(exec.CommandContext(ctx, t.prog, args...))
 }

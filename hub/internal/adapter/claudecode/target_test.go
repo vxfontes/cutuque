@@ -6,10 +6,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/vxfontes/cutuque/hub/internal/adapter/agent"
 	"github.com/vxfontes/cutuque/hub/internal/engine"
 	"github.com/vxfontes/cutuque/hub/internal/registry"
 	"github.com/vxfontes/cutuque/hub/internal/session"
@@ -196,6 +198,83 @@ func TestSSHClaudeArgsHaveKeepaliveBatchModeNoPTY(t *testing.T) {
 			t.Errorf("comando remoto = %q, quero conter %q", remote, want)
 		}
 	}
+}
+
+// MARK: identidade das máquinas cadastradas pelo app
+
+// Máquina cadastrada pela aba Máquinas conecta com a chave que o hub gerou e o
+// known_hosts próprio — não com o ~/.ssh do container.
+func TestIdentidadeDaMaquinaEntraNasOperacoesDeArquivo(t *testing.T) {
+	tgt := NewSSHTarget("vps", "vx@192.0.2.50")
+	tgt.SetIdentity("/data/machines/keys/vps", "/data/machines/known_hosts", 22)
+
+	args := tgt.downloadArgs("/tmp/notas.md")
+	for _, quero := range []string{
+		"/data/machines/keys/vps",
+		"IdentitiesOnly=yes",
+		"UserKnownHostsFile=/data/machines/known_hosts",
+		"StrictHostKeyChecking=yes",
+	} {
+		if !slices.Contains(args, quero) {
+			t.Errorf("faltou %q nos args: %v", quero, args)
+		}
+	}
+	// A primeira ocorrência de StrictHostKeyChecking é a que o ssh honra.
+	if i := primeiroStrict(args); i == "" || i != "StrictHostKeyChecking=yes" {
+		t.Errorf("o accept-new venceu a checagem estrita: %v", args)
+	}
+}
+
+// O Start também: lançar sessão numa máquina do app não pode escapar para o
+// ~/.ssh do container.
+func TestIdentidadeDaMaquinaEntraNoComandoDeLancamento(t *testing.T) {
+	tgt := NewSSHTarget("vps", "vx@192.0.2.50")
+	tgt.SetIdentity("/data/machines/keys/vps", "/data/machines/known_hosts", 22)
+
+	args := agent.WithIdentity(tgt.identity, tgt.buildArgs(tgt.dest, tgt.remoteCmd, "", ""))
+	if !slices.Contains(args, "/data/machines/keys/vps") {
+		t.Errorf("o lançamento não usa a chave da máquina: %v", args)
+	}
+	if primeiroStrict(args) != "StrictHostKeyChecking=yes" {
+		t.Errorf("o lançamento aceitaria chave nova em silêncio: %v", args)
+	}
+}
+
+// Porta fora da padrão precisa entrar na linha: o keyscan gravou a entrada como
+// "[host]:2222" no known_hosts e o ssh só casa essa linha conectando lá.
+func TestPortaDoCadastroEntraNaLinhaDeSsh(t *testing.T) {
+	tgt := NewSSHTarget("vps", "vx@192.0.2.50")
+	tgt.SetIdentity("/data/machines/keys/vps", "/data/machines/known_hosts", 2222)
+
+	args := tgt.downloadArgs("/tmp/notas.md")
+	i := slices.Index(args, "-p")
+	if i == -1 || i+1 >= len(args) || args[i+1] != "2222" {
+		t.Errorf("faltou -p 2222 nos args: %v", args)
+	}
+}
+
+// Máquina do hub.env segue exatamente como antes: sem -i, sem known_hosts
+// próprio, com o accept-new de sempre.
+func TestMaquinaDoEnvNaoGanhaIdentidadeNenhuma(t *testing.T) {
+	tgt := NewSSHTarget("macmini", "macmini")
+	args := tgt.downloadArgs("/tmp/x")
+	if slices.Contains(args, "-i") || slices.Contains(args, "IdentitiesOnly=yes") {
+		t.Errorf("máquina do env ganhou identidade que não é dela: %v", args)
+	}
+	if primeiroStrict(args) != "StrictHostKeyChecking=accept-new" {
+		t.Errorf("o comportamento da máquina do env mudou: %v", args)
+	}
+}
+
+// primeiroStrict devolve o valor da PRIMEIRA opção StrictHostKeyChecking — a
+// única que o ssh leva em conta.
+func primeiroStrict(args []string) string {
+	for _, a := range args {
+		if strings.HasPrefix(a, "StrictHostKeyChecking=") {
+			return a
+		}
+	}
+	return ""
 }
 
 // execPrefix é o wrapper que impede o `bash -lc` interno de reparsear os args

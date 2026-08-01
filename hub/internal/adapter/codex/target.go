@@ -83,8 +83,8 @@ func NewLocalTarget(name string) *LocalTarget {
 	return &LocalTarget{name: name, prog: "codex", sandbox: defaultSandbox}
 }
 
-func (t *LocalTarget) Name() string                  { return t.name }
-func (t *LocalTarget) Kind() string                  { return agentKind }
+func (t *LocalTarget) Name() string { return t.name }
+func (t *LocalTarget) Kind() string { return agentKind }
 func (t *LocalTarget) NewRunner(app agent.Applier) *agent.Runner {
 	return agent.NewRunner(app, ParseLine, agentKind)
 }
@@ -112,6 +112,9 @@ type SSHTarget struct {
 	remoteCmd string
 	prog      string
 	sandbox   string
+	// identity: chave/known_hosts das máquinas cadastradas pelo app (vazio
+	// nas do hub.env, que usam o ~/.ssh do container).
+	identity []string
 }
 
 // NewSSHTarget cria um SSHTarget que conecta a `dest` e roda o `codex` real lá.
@@ -126,8 +129,20 @@ func (t *SSHTarget) SetRemoteCodexCmd(cmd string) {
 	}
 }
 
-func (t *SSHTarget) Name() string                  { return t.name }
-func (t *SSHTarget) Kind() string                  { return agentKind }
+// SetIdentity amarra o alvo à chave e ao known_hosts que o hub gerou no
+// cadastro da máquina (aba Máquinas). Sem os dois, não faz nada.
+func (t *SSHTarget) SetIdentity(keyPath, knownHosts string, port int) {
+	t.identity = agent.IdentityOpts(keyPath, knownHosts, port)
+}
+
+// sshOpts: identidade da máquina antes das opções base — a ordem importa,
+// ver agent.IdentityOpts.
+func (t *SSHTarget) sshOpts() []string {
+	return agent.WithIdentity(t.identity, sshBaseOpts())
+}
+
+func (t *SSHTarget) Name() string { return t.name }
+func (t *SSHTarget) Kind() string { return agentKind }
 func (t *SSHTarget) NewRunner(app agent.Applier) *agent.Runner {
 	return agent.NewRunner(app, ParseLine, agentKind)
 }
@@ -135,7 +150,7 @@ func (t *SSHTarget) NewRunner(app agent.Applier) *agent.Runner {
 // Start conecta via ssh e roda o codex remoto. cwd != "" vira `cd <cwd> &&`.
 func (t *SSHTarget) Start(ctx context.Context, resumeID, cwd, model, effort, sandbox, prompt string) (*agent.Handle, error) {
 	remote := remoteCodexCommand(t.remoteCmd, codexArgs(resumeID, model, effort, t.sandboxOr(sandbox), prompt), cwd)
-	sshArgs := append(sshBaseOpts(), "--", t.dest, remote)
+	sshArgs := append(t.sshOpts(), "--", t.dest, remote)
 	cmd := exec.CommandContext(ctx, t.prog, sshArgs...)
 	cmd.Env = agent.ChildEnv()
 	return startCodex(cmd)
