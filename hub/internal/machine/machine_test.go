@@ -209,6 +209,50 @@ func TestUpdateNaoDeixaTrocarChaveNemFingerprint(t *testing.T) {
 	}
 }
 
+// O fingerprint pertence a um (dest, porta): apontar a máquina para outro host
+// invalida a confirmação anterior. Mantê-lo faria o hub achar que já confiou
+// num host que a usuária nunca conferiu.
+func TestUpdateLimpaOFingerprintQuandoODestinoMuda(t *testing.T) {
+	r := NewRegistry(nil)
+	_, _ = r.Add(Machine{Name: "vps", Dest: "vx@antigo", Port: 22})
+	_ = r.SetFingerprint("vps", "SHA256:doAntigo")
+
+	m, err := r.Update("vps", Machine{Dest: "vx@outro", Port: 22})
+	if err != nil {
+		t.Fatalf("Update falhou: %v", err)
+	}
+	if m.HostFingerprint != "" {
+		t.Errorf("fingerprint do host antigo sobreviveu à troca de destino: %q", m.HostFingerprint)
+	}
+}
+
+// Porta diferente pode ser outro serviço (ou outro container) na mesma máquina:
+// também exige reconfirmar.
+func TestUpdateLimpaOFingerprintQuandoAPortaMuda(t *testing.T) {
+	r := NewRegistry(nil)
+	_, _ = r.Add(Machine{Name: "vps", Dest: "vx@host", Port: 22})
+	_ = r.SetFingerprint("vps", "SHA256:na22")
+
+	m, _ := r.Update("vps", Machine{Dest: "vx@host", Port: 2222})
+	if m.HostFingerprint != "" {
+		t.Errorf("fingerprint sobreviveu à troca de porta: %q", m.HostFingerprint)
+	}
+}
+
+// A chave privada continua servindo o mesmo cadastro mesmo mudando o destino —
+// só o fingerprint cai. Regerar a chave obrigaria a reinstalar no destino sem
+// necessidade.
+func TestUpdateNaoApagaAChaveAoMudarODestino(t *testing.T) {
+	r := NewRegistry(nil)
+	_, _ = r.Add(Machine{Name: "vps", Dest: "vx@antigo"})
+	_ = r.SetKeyPath("vps", "/data/machines/keys/vps")
+
+	m, _ := r.Update("vps", Machine{Dest: "vx@outro"})
+	if m.KeyPath != "/data/machines/keys/vps" {
+		t.Errorf("a chave foi perdida na troca de destino: %q", m.KeyPath)
+	}
+}
+
 // Máquina do hub.env é read-only pelo app: quem manda nela é o env.
 func TestUpdateERemoveRecusamMaquinaDoEnv(t *testing.T) {
 	r := NewRegistry([]Machine{{Name: "macbook", Dest: "vx@host", Port: 22, Source: SourceEnv}})

@@ -35,6 +35,24 @@ func (k *KeyStore) privatePath(name string) (string, error) {
 	return filepath.Join(k.dir, "keys", name), nil
 }
 
+// KeyPath é o caminho da chave privada da máquina — o que vai no `ssh -i` e o
+// que o registro guarda depois do Generate.
+func (k *KeyStore) KeyPath(name string) (string, error) { return k.privatePath(name) }
+
+// PublicKey lê a pública já gerada. É o que a usuária instala no destino (na
+// mão ou pelo install-key); a privada não tem leitor fora do ssh.
+func (k *KeyStore) PublicKey(name string) (string, error) {
+	priv, err := k.privatePath(name)
+	if err != nil {
+		return "", err
+	}
+	b, err := os.ReadFile(priv + ".pub")
+	if err != nil {
+		return "", fmt.Errorf("a máquina %s não tem chave gerada: %w", name, err)
+	}
+	return strings.TrimSpace(string(b)), nil
+}
+
 // keygenTimeout / scanTimeout: gerar chave é instantâneo, mas o keyscan fala com
 // a rede e pode pendurar num host que não responde.
 const (

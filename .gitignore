@@ -37,3 +37,8 @@ DerivedData/
 
 # Brainstorming visual (superpowers) — mockups locais
 .superpowers/
+
+# Estado do hub (volume do container): device tokens, sessões e — desde a aba
+# Máquinas — as CHAVES PRIVADAS ssh geradas pelo hub em data/machines/keys.
+# Nada disso pode ir para o repositório.
+/data/

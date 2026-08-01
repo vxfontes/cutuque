@@ -214,7 +214,15 @@ func main() {
 	var ntf *notifier.Notifier
 	serverOpts := []server.RouterOption{
 		server.WithBoard(boardStore),
-		server.WithMachines(machine.NewRegistry(machinesForRegistry(machines))),
+		server.WithMachines(buildMachineRegistry(machines, logger)),
+	}
+	// CUTUQUE_MACHINES_DIR liga o CADASTRO de máquinas pelo app (aba Máquinas):
+	// é onde ficam o registro, as chaves privadas geradas aqui e o known_hosts
+	// próprio. Sem a env var o hub só LISTA o que veio do CUTUQUE_SSH_TARGETS —
+	// gerar chave privada em disco efêmero seria perdê-la no próximo deploy.
+	if dir := os.Getenv("CUTUQUE_MACHINES_DIR"); dir != "" {
+		serverOpts = append(serverOpts, server.WithMachineKeys(machine.NewKeyStore(dir)))
+		logger.Info("cadastro de máquinas pelo app habilitado", "dir", dir)
 	}
 	if cfg.APNSEnabled() {
 		client, err := apns.NewClient(cfg)
@@ -331,6 +339,21 @@ func buildTargets(machines []machine.Machine) map[string]map[string]claudecode.T
 		targets[m.Name] = agentMap(ct, codex.NewSSHTarget(m.Name, m.Dest), opencode.NewSSHTarget(m.Name, m.Dest))
 	}
 	return targets
+}
+
+// buildMachineRegistry monta o registro da aba Máquinas: sempre com o que veio
+// do CUTUQUE_SSH_TARGETS e, quando CUTUQUE_MACHINES_DIR está configurado,
+// também com os cadastros do app persistidos em disco.
+func buildMachineRegistry(ms []machine.Machine, logger *slog.Logger) *machine.Registry {
+	base := machinesForRegistry(ms)
+	dir := os.Getenv("CUTUQUE_MACHINES_DIR")
+	if dir == "" {
+		return machine.NewRegistry(base)
+	}
+	path := filepath.Join(dir, "machines.json")
+	reg := machine.NewRegistryAt(path, base)
+	logger.Info("registro de máquinas persistido", "path", path, "total", len(reg.List()))
+	return reg
 }
 
 // machinesForRegistry devolve as máquinas que o app deve enxergar na aba

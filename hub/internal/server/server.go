@@ -20,8 +20,9 @@ type routerConfig struct {
 	renudge    RenudgeController
 	foreground ForegroundController
 	history    HistoryReader
-	board      board.Store
-	machines   *machine.Registry
+	board       board.Store
+	machines    *machine.Registry
+	machineKeys MachineKeys
 }
 
 // RouterOption configura dependências opcionais do Router.
@@ -64,6 +65,14 @@ func WithBoard(st board.Store) RouterOption {
 // registro dado. Sem esta opção a rota não é registrada.
 func WithMachines(reg *machine.Registry) RouterOption {
 	return func(rc *routerConfig) { rc.machines = reg }
+}
+
+// WithMachineKeys habilita o CADASTRO de máquinas pelo app (POST/PATCH/DELETE
+// /machines, trust e install-key), apoiado no cofre de chaves em /data. Depende
+// do WithMachines: sem registro não há o que cadastrar. Sem esta opção o hub
+// serve a lista em leitura e mais nada.
+func WithMachineKeys(keys MachineKeys) RouterOption {
+	return func(rc *routerConfig) { rc.machineKeys = keys }
 }
 
 // Router registra as rotas do hub. As rotas protegidas passam pelo middleware
@@ -145,6 +154,18 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 	// depende do registro, não de haver Launcher.
 	if rc.machines != nil {
 		mux.Handle("GET /machines", requireAuth(cfg.Token, MachinesHandler(rc.machines)))
+
+		// Cadastro pelo app (F3). Só com o cofre de chaves ligado: sem ele o hub
+		// não teria onde gerar a chave nem known_hosts próprio para confiar.
+		// Tudo atrás de token — cadastrar instala chave em host remoto.
+		if rc.machineKeys != nil {
+			k := rc.machineKeys
+			mux.Handle("POST /machines", requireAuth(cfg.Token, MachineCreateHandler(rc.machines, k)))
+			mux.Handle("PATCH /machines/{machine}", requireAuth(cfg.Token, MachinePatchHandler(rc.machines)))
+			mux.Handle("DELETE /machines/{machine}", requireAuth(cfg.Token, MachineDeleteHandler(rc.machines, k)))
+			mux.Handle("POST /machines/{machine}/trust", requireAuth(cfg.Token, MachineTrustHandler(rc.machines, k)))
+			mux.Handle("POST /machines/{machine}/install-key", requireAuth(cfg.Token, MachineInstallKeyHandler(rc.machines, k)))
+		}
 	}
 
 	// Histórico de sessões (v2.4). Só quando o Postgres está ligado.

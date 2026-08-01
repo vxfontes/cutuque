@@ -92,6 +92,30 @@ func TestRemoveKeyApagaOsDoisArquivos(t *testing.T) {
 	}
 }
 
+func TestPublicKeyLeAChaveGerada(t *testing.T) {
+	ks := NewKeyStore(t.TempDir())
+	gerada, err := ks.Generate("vps")
+	if err != nil {
+		t.Fatalf("Generate falhou: %v", err)
+	}
+	lida, err := ks.PublicKey("vps")
+	if err != nil {
+		t.Fatalf("PublicKey falhou: %v", err)
+	}
+	if lida != gerada {
+		t.Errorf("PublicKey devolveu outra coisa:\n gerada=%q\n lida  =%q", gerada, lida)
+	}
+}
+
+// Máquina sem chave (cadastro antigo, arquivo apagado na mão) tem que dar erro
+// claro em vez de instalar chave vazia no destino.
+func TestPublicKeyDeMaquinaSemChaveDaErro(t *testing.T) {
+	ks := NewKeyStore(t.TempDir())
+	if _, err := ks.PublicKey("vps"); err == nil {
+		t.Error("máquina sem chave gerada devia dar erro")
+	}
+}
+
 // MARK: fingerprint
 
 func TestFingerprintDaSaidaDoSshKeygen(t *testing.T) {

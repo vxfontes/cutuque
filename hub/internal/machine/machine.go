@@ -311,7 +311,13 @@ func (r *Registry) Update(name string, patch Machine) (Machine, error) {
 	}
 	next.Source = SourceApp
 	next.KeyPath = cur.KeyPath
-	next.HostFingerprint = cur.HostFingerprint
+	// O fingerprint pertence a um (dest, porta). Apontar a máquina para outro
+	// lugar derruba a confirmação: senão o hub acharia que já confiou num host
+	// que a usuária nunca conferiu. A chave privada fica — ela continua sendo
+	// desta máquina, e regerá-la obrigaria a reinstalar no destino à toa.
+	if next.Dest == cur.Dest && next.Port == cur.Port {
+		next.HostFingerprint = cur.HostFingerprint
+	}
 	r.by[name] = next
 	r.mu.Unlock()
 

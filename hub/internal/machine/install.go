@@ -76,6 +76,13 @@ func InstallKey(ctx context.Context, dest string, port int, password, pub, expec
 	return nil
 }
 
+// InstallKey no KeyStore só delega para a função do pacote. Existe para o
+// servidor depender de uma interface única com tudo que o cadastro precisa, em
+// vez de misturar um método com uma função solta.
+func (k *KeyStore) InstallKey(ctx context.Context, dest string, port int, password, pub, expectedFingerprint string) error {
+	return InstallKey(ctx, dest, port, password, pub, expectedFingerprint)
+}
+
 // run abre uma sessão, roda o comando com stdin opcional e devolve o stdout.
 func run(c *ssh.Client, cmd, stdin string) (string, error) {
 	s, err := c.NewSession()
