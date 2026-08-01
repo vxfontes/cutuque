@@ -22,6 +22,8 @@ type (
 	Liver            = agent.Liver
 	TranscriptLister = agent.TranscriptLister
 	DirLister        = agent.DirLister
+	FileLister       = agent.FileLister
+	FileReader       = agent.FileReader
 	Transcriber      = agent.Transcriber
 	TranscriptChunk  = agent.TranscriptChunk
 )

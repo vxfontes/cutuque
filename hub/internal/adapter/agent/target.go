@@ -60,6 +60,19 @@ type DirLister interface {
 	ListDirs(ctx context.Context, path string) (session.DirListing, error)
 }
 
+// FileLister lista pastas E arquivos de um caminho na máquina (painel Arquivos
+// da aba Máquinas). Opcional como o DirLister: só o adapter claude-code
+// implementa, e o Launcher resolve por type assertion.
+type FileLister interface {
+	ListFiles(ctx context.Context, path string) (session.FileListing, error)
+}
+
+// FileReader lê um arquivo de texto na máquina (visualizador da aba Máquinas).
+// Opcional, mesmo motivo do FileLister.
+type FileReader interface {
+	ReadFile(ctx context.Context, path string) (session.FileContent, error)
+}
+
 // Transcriber lê o histórico completo de UMA sessão numa máquina (para popular
 // o output ao adotar / dar o recap).
 type Transcriber interface {

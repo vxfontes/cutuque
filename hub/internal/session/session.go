@@ -141,3 +141,35 @@ type DirListing struct {
 	Parent string     `json:"parent"`
 	Dirs   []DirEntry `json:"dirs"`
 }
+
+// FileEntry é uma entrada de diretório (pasta OU arquivo) na máquina, para o
+// painel Arquivos da aba Máquinas.
+type FileEntry struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+	// Size em bytes. Zero para pasta.
+	Size int64 `json:"size"`
+	// ModTime é o mtime em segundos desde a epoch (o app formata).
+	ModTime int64 `json:"mtime"`
+	IsDir   bool  `json:"is_dir"`
+}
+
+// FileListing é o conteúdo navegável de um diretório: pastas E arquivos.
+// Difere do DirListing, que lista só as subpastas e serve o seletor de cwd ao
+// criar sessão — mudar o contrato daquele mexeria naquele fluxo.
+type FileListing struct {
+	Path    string      `json:"path"`
+	Parent  string      `json:"parent"`
+	Entries []FileEntry `json:"entries"`
+}
+
+// FileContent é o conteúdo de um arquivo lido na máquina. Binary e Truncated
+// implicam Content vazio — nos dois casos o app oferece baixar em vez de
+// renderizar.
+type FileContent struct {
+	Path      string `json:"path"`
+	Size      int64  `json:"size"`
+	Binary    bool   `json:"binary"`
+	Truncated bool   `json:"truncated"`
+	Content   string `json:"content"`
+}
