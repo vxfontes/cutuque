@@ -23,6 +23,29 @@ func silentLogger() *slog.Logger {
 // internal/machine (com os mesmos casos, incluindo a defesa contra destino que
 // parece opção do ssh) e é testado lá.
 
+// TestMachinesForRegistryEspelhaOFallbackLocal: /machines não pode listar
+// vazio num hub que tem alvo. Sem CUTUQUE_SSH_TARGETS o buildTargets cria o
+// LocalTarget "macbook", e a aba Máquinas precisa enxergar o mesmo.
+func TestMachinesForRegistryEspelhaOFallbackLocal(t *testing.T) {
+	got := machinesForRegistry(nil)
+	if len(got) != 1 || got[0].Name != "macbook" {
+		t.Fatalf("sem env var, quero só o macbook local, veio %+v", got)
+	}
+	if got[0].Source != machine.SourceLocal {
+		t.Errorf("a máquina implícita deve ser Source=local, veio %q", got[0].Source)
+	}
+}
+
+// TestMachinesForRegistryNaoMexeQuandoHaEnv: com alvos declarados, o fallback
+// não entra — o macbook deixa de ser "grátis" (Fase 5).
+func TestMachinesForRegistryNaoMexeQuandoHaEnv(t *testing.T) {
+	in := []machine.Machine{{Name: "macmini", Dest: "vx@host", Port: 22, Source: machine.SourceEnv}}
+	got := machinesForRegistry(in)
+	if len(got) != 1 || got[0].Name != "macmini" {
+		t.Errorf("com env var, quero as máquinas do env, veio %+v", got)
+	}
+}
+
 // TestBuildTargetsFallsBackToLocalMacbookWhenEmpty cobre a compatibilidade
 // pedida na Fase 5: sem CUTUQUE_SSH_TARGETS, o comportamento é o de antes
 // (LocalTarget "macbook").

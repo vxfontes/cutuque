@@ -212,7 +212,10 @@ func main() {
 	// APNs (Fase 4): opcional. Se configurado, sobe o Notifier e habilita a rota
 	// de registro de devices; senão, o hub segue normalmente sem push.
 	var ntf *notifier.Notifier
-	serverOpts := []server.RouterOption{server.WithBoard(boardStore)}
+	serverOpts := []server.RouterOption{
+		server.WithBoard(boardStore),
+		server.WithMachines(machine.NewRegistry(machinesForRegistry(machines))),
+	}
 	if cfg.APNSEnabled() {
 		client, err := apns.NewClient(cfg)
 		if err != nil {
@@ -328,6 +331,17 @@ func buildTargets(machines []machine.Machine) map[string]map[string]claudecode.T
 		targets[m.Name] = agentMap(ct, codex.NewSSHTarget(m.Name, m.Dest), opencode.NewSSHTarget(m.Name, m.Dest))
 	}
 	return targets
+}
+
+// machinesForRegistry devolve as máquinas que o app deve enxergar na aba
+// Máquinas, espelhando o fallback do buildTargets: sem CUTUQUE_SSH_TARGETS o
+// hub roda com o LocalTarget "macbook" implícito, e /machines precisa mostrar
+// o mesmo que /targets — senão o app lista vazio num hub que tem alvo.
+func machinesForRegistry(ms []machine.Machine) []machine.Machine {
+	if len(ms) > 0 {
+		return ms
+	}
+	return []machine.Machine{{Name: "macbook", Dest: "local", Source: machine.SourceLocal}}
 }
 
 // agentMap indexa alvos pelo agente que cada um representa (t.Kind()).

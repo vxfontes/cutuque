@@ -17,6 +17,10 @@ type Source string
 const (
 	SourceEnv Source = "env"
 	SourceApp Source = "app"
+	// SourceLocal é a máquina onde o próprio hub roda, sem ssh no meio. Existe
+	// só no modo dev (sem CUTUQUE_SSH_TARGETS), espelhando o LocalTarget
+	// implícito do buildTargets.
+	SourceLocal Source = "local"
 )
 
 // defaultSSHPort é a porta usada quando a entrada não especifica outra.

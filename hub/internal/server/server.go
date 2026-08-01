@@ -8,6 +8,7 @@ import (
 	"github.com/vxfontes/cutuque/hub/internal/config"
 	"github.com/vxfontes/cutuque/hub/internal/devices"
 	"github.com/vxfontes/cutuque/hub/internal/engine"
+	"github.com/vxfontes/cutuque/hub/internal/machine"
 	"github.com/vxfontes/cutuque/hub/internal/registry"
 )
 
@@ -20,6 +21,7 @@ type routerConfig struct {
 	foreground ForegroundController
 	history    HistoryReader
 	board      board.Store
+	machines   *machine.Registry
 }
 
 // RouterOption configura dependências opcionais do Router.
@@ -56,6 +58,12 @@ func WithHistory(h HistoryReader) RouterOption {
 // board).
 func WithBoard(st board.Store) RouterOption {
 	return func(rc *routerConfig) { rc.board = st }
+}
+
+// WithMachines habilita GET /machines (aba Máquinas do app), apoiada no
+// registro dado. Sem esta opção a rota não é registrada.
+func WithMachines(reg *machine.Registry) RouterOption {
+	return func(rc *routerConfig) { rc.machines = reg }
 }
 
 // Router registra as rotas do hub. As rotas protegidas passam pelo middleware
@@ -125,6 +133,12 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		mux.Handle("POST /machines/{machine}/tmux/kill", requireAuth(cfg.Token, TmuxKillHandler(lch)))
 		mux.Handle("POST /machines/{machine}/tmux/kill-server", requireAuth(cfg.Token, TmuxKillServerHandler(lch)))
 		mux.Handle("POST /machines/{machine}/tmux/resize", requireAuth(cfg.Token, TmuxResizeHandler(lch)))
+	}
+
+	// Máquinas como recurso (aba Máquinas do app). Fora do bloco do launcher:
+	// depende do registro, não de haver Launcher.
+	if rc.machines != nil {
+		mux.Handle("GET /machines", requireAuth(cfg.Token, MachinesHandler(rc.machines)))
 	}
 
 	// Histórico de sessões (v2.4). Só quando o Postgres está ligado.
