@@ -226,6 +226,36 @@ func MachineTrustHandler(reg *machine.Registry, keys MachineKeys, targets Machin
 	}
 }
 
+// machineScanResp devolve a impressão digital que o host está apresentando
+// AGORA. Fora de uma máquina, como no cadastro: nada aqui está confiado.
+type machineScanResp struct {
+	Fingerprint string `json:"fingerprint"`
+}
+
+// MachineScanHandler relê a impressão digital do host de um cadastro que já
+// existe, para a usuária conferir.
+//
+// Existe porque o fingerprint do POST /machines vive só na resposta: quem fechar
+// o app no meio do cadastro ficaria com uma máquina pendente e sem nenhum jeito
+// de confirmá-la. Não grava nada — confiar continua sendo só do /trust, que
+// escaneia de novo por conta própria.
+//
+//	GET /machines/{machine}/scan → 200 {"fingerprint"} | 403 | 404 | 502
+func MachineScanHandler(reg *machine.Registry, keys MachineKeys) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		m, ok := maquinaEditavel(w, reg, r.PathValue("machine"))
+		if !ok {
+			return
+		}
+		_, fp, err := keys.Scan(r.Context(), m.Dest, m.Port)
+		if err != nil {
+			writeJSONErrorDetail(w, http.StatusBadGateway, "scan_failed", err.Error())
+			return
+		}
+		writeJSONResp(w, http.StatusOK, machineScanResp{Fingerprint: fp})
+	}
+}
+
 // MachineInstallKeyHandler instala a chave pública do Cutuque no destino,
 // autenticando uma vez com a senha que a usuária digitou. A senha é de uso
 // único: vive no corpo do request e na memória do processo, e não é gravada,

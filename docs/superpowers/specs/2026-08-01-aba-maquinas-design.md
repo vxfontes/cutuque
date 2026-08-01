@@ -138,6 +138,7 @@ removidas pelo app** — quem manda nelas é o `hub.env`.
 | `POST /machines` | cadastra, gera par de chaves, devolve a **pública** |
 | `PATCH/DELETE /machines/{n}` | só para `source: app` |
 | `POST /machines/{n}/install-key` | senha one-shot → instala a pública no destino |
+| `GET /machines/{n}/scan` | relê o fingerprint do host, sem confiar em nada — retoma cadastro abandonado |
 | `POST /machines/{n}/trust` | confirma o fingerprint (TOFU) e grava no `known_hosts` próprio |
 | `GET /machines/{n}/pty` | **WebSocket**: proxy de `ssh -tt` com PTY |
 | `GET /machines/{n}/fs?path=` | lista pastas **e arquivos** (estende `/dirs`) |

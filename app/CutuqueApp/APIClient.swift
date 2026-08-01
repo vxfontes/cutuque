@@ -467,6 +467,141 @@ struct APIClient {
         let machines: [Machine]
     }
 
+    // MARK: - Cadastro de máquinas (aba Máquinas)
+
+    /// Cadastra uma máquina nova. O hub gera o par de chaves e devolve a
+    /// PÚBLICA mais a impressão digital do host para conferência.
+    /// `POST /machines`.
+    ///
+    /// Nada é confiado aqui: o cadastro nasce sem impressão confirmada e a
+    /// máquina só vira utilizável depois do `trustMachine`.
+    func createMachine(name: String, dest: String, port: Int) async throws -> MachineCreated {
+        try await machineJSON(
+            "POST", ["machines"],
+            body: ["name": name, "dest": dest, "port": port],
+            ok: 201
+        )
+    }
+
+    /// Relê a impressão digital que o host está apresentando agora, para
+    /// conferência. `GET /machines/{n}/scan`.
+    ///
+    /// É o que salva um cadastro abandonado no meio: a impressão do
+    /// `createMachine` só existe naquela resposta, e sem isto a máquina ficaria
+    /// pendente para sempre.
+    func scanMachine(name: String) async throws -> String {
+        struct Resp: Decodable { let fingerprint: String }
+        let resp: Resp = try await machineJSON("GET", ["machines", name, "scan"], body: nil)
+        return resp.fingerprint
+    }
+
+    /// Confirma a impressão digital do host. O hub escaneia DE NOVO e compara —
+    /// host trocado depois do cadastro é recusado aqui. `POST /machines/{n}/trust`.
+    @discardableResult
+    func trustMachine(name: String, fingerprint: String) async throws -> Machine {
+        let envelope: MachineEnvelope = try await machineJSON(
+            "POST", ["machines", name, "trust"],
+            body: ["fingerprint": fingerprint]
+        )
+        return envelope.machine
+    }
+
+    /// Instala a chave pública do Cutuque no destino, autenticando uma vez com a
+    /// senha da máquina. `POST /machines/{n}/install-key`.
+    ///
+    /// A senha é de uso único: vai no corpo desta chamada e não é guardada nem
+    /// aqui nem no hub. Só funciona depois do trust — mandar senha para um host
+    /// não conferido seria entregá-la a quem estiver no meio.
+    func installKey(name: String, password: String) async throws {
+        let _: OKResponse = try await machineJSON(
+            "POST", ["machines", name, "install-key"],
+            body: ["password": password]
+        )
+    }
+
+    /// Altera destino e porta de uma máquina cadastrada pelo app.
+    /// `PATCH /machines/{n}`.
+    ///
+    /// Mudar o endereço derruba a confirmação do host: a máquina volta a pedir
+    /// conferência da impressão digital antes de conectar de novo.
+    @discardableResult
+    func updateMachine(name: String, dest: String, port: Int) async throws -> Machine {
+        let envelope: MachineEnvelope = try await machineJSON(
+            "PATCH", ["machines", name],
+            body: ["dest": dest, "port": port]
+        )
+        return envelope.machine
+    }
+
+    /// Descadastra a máquina e apaga a chave privada dela no hub.
+    /// `DELETE /machines/{n}`.
+    func deleteMachine(name: String) async throws {
+        _ = try await machineRequest("DELETE", ["machines", name], body: nil, ok: 204)
+    }
+
+    private struct OKResponse: Decodable { let ok: Bool }
+
+    /// Dispara uma chamada do cadastro e decodifica o corpo de sucesso.
+    private func machineJSON<T: Decodable>(
+        _ method: String, _ segments: [String],
+        body: [String: Any]?, ok: Int = 200
+    ) async throws -> T {
+        let data = try await machineRequest(method, segments, body: body, ok: ok)
+        return try JSONDecoder.cutuque.decode(T.self, from: data)
+    }
+
+    /// Chamada crua do cadastro, com o erro do hub por extenso.
+    ///
+    /// As rotas de cadastro respondem `{"error": código, "detail": "..."}`, e o
+    /// detalhe é justamente o que a usuária precisa ler: "a máquina respondeu
+    /// com SHA256:X e você confirmou SHA256:Y" é a diferença entre desistir e
+    /// entender que o host mudou. O `send` genérico jogaria isso fora.
+    private func machineRequest(
+        _ method: String, _ segments: [String],
+        body: [String: Any]?, ok: Int
+    ) async throws -> Data {
+        let url = segments.reduce(baseURL) { $0.appendingPathComponent($1) }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard http.statusCode != ok else { return data }
+        throw CutuqueError.server(
+            status: http.statusCode,
+            message: Self.machineErrorMessage(from: data, status: http.statusCode)
+        )
+    }
+
+    /// Traduz o erro do cadastro para uma frase que dá para agir. Quando o hub
+    /// manda `detail`, ele ganha: é a única parte que fala do caso concreto.
+    static func machineErrorMessage(from data: Data, status: Int) -> String {
+        struct Body: Decodable {
+            let error: String?
+            let detail: String?
+        }
+        let body = try? JSONDecoder().decode(Body.self, from: data)
+        if let detail = body?.detail, !detail.isEmpty { return detail }
+        switch body?.error {
+        case "duplicate_name":       return "já existe uma máquina com esse nome"
+        case "invalid_machine":      return "nome ou destino inválido"
+        case "read_only":            return "essa máquina vem do hub.env — quem manda nela é o hub"
+        case "unknown_machine":      return "máquina não encontrada"
+        case "not_trusted":          return "confirme a impressão digital antes de instalar a chave"
+        case "fingerprint_mismatch": return "a chave do host não é a que você confirmou"
+        case "scan_failed":          return "não deu para falar com o host (endereço, porta ou rede)"
+        case "install_failed":       return "o host recusou — confira a senha e se o usuário existe"
+        case "keygen_failed":        return "o hub não conseguiu gerar a chave"
+        case let other?:             return other
+        case nil:                    return "erro inesperado (\(status))"
+        }
+    }
+
     /// Lista pastas E arquivos de um caminho na máquina (navegador de arquivos).
     /// path vazio = home. `GET /machines/{machine}/fs?path=`.
     func listFiles(machine: String, path: String) async throws -> FileListing {

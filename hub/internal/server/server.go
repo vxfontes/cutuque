@@ -172,6 +172,7 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 			mux.Handle("POST /machines", requireAuth(cfg.Token, MachineCreateHandler(rc.machines, k)))
 			mux.Handle("PATCH /machines/{machine}", requireAuth(cfg.Token, MachinePatchHandler(rc.machines, tg)))
 			mux.Handle("DELETE /machines/{machine}", requireAuth(cfg.Token, MachineDeleteHandler(rc.machines, k, tg)))
+			mux.Handle("GET /machines/{machine}/scan", requireAuth(cfg.Token, MachineScanHandler(rc.machines, k)))
 			mux.Handle("POST /machines/{machine}/trust", requireAuth(cfg.Token, MachineTrustHandler(rc.machines, k, tg)))
 			mux.Handle("POST /machines/{machine}/install-key", requireAuth(cfg.Token, MachineInstallKeyHandler(rc.machines, k)))
 		}

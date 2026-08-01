@@ -286,10 +286,21 @@ struct Machine: Decodable, Identifiable, Hashable {
     let dest: String
     let port: Int
     let source: String
+    /// Impressão digital da chave do host, confirmada no cadastro (TOFU).
+    /// Ausente = ainda não confiada: o hub se recusa a conectar.
+    let hostFingerprint: String?
     var id: String { name }
 
     /// A máquina onde o próprio hub roda — não tem ssh no meio.
     var isLocal: Bool { source == "local" }
+
+    /// Cadastrada aqui pelo app — só essas dá para editar ou remover. As do
+    /// `hub.env` (e a local) pertencem ao hub.
+    var isEditable: Bool { source == "app" }
+
+    /// Cadastro do app que ainda não teve a impressão digital confirmada. Fica
+    /// na lista, mas não conecta: falta a usuária conferir a chave do host.
+    var needsTrust: Bool { isEditable && (hostFingerprint ?? "").isEmpty }
 
     /// Destino como a lista mostra. A porta padrão não polui; uma diferente é o
     /// que distingue duas entradas para o mesmo host.
@@ -297,6 +308,24 @@ struct Machine: Decodable, Identifiable, Hashable {
         if isLocal { return "aqui mesmo" }
         return port == 22 || port == 0 ? dest : "\(dest):\(port)"
     }
+}
+
+/// Resposta do cadastro de uma máquina nova (`POST /machines`).
+///
+/// A chave PRIVADA não vem aqui — nem em lugar nenhum. Ela nasce no hub e não
+/// sai de lá; o app recebe só a pública, para a usuária instalar no destino.
+///
+/// `fingerprint` vem solto, fora da máquina, porque nesse ponto ele ainda NÃO
+/// está confiado: é o que ela tem que conferir antes do `POST /trust`.
+struct MachineCreated: Decodable {
+    let machine: Machine
+    let publicKey: String
+    let fingerprint: String
+}
+
+/// Envelope de `{"machine": {...}}` — resposta do trust e do patch.
+struct MachineEnvelope: Decodable {
+    let machine: Machine
 }
 
 /// Uma entrada (pasta ou arquivo) no navegador de arquivos da aba Máquinas.

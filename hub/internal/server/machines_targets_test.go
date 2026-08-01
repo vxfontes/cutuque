@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -170,5 +171,61 @@ func TestCadastroSemLauncherNaoQuebra(t *testing.T) {
 		if rec.Code != c.quero {
 			t.Errorf("%s %s: status %d, esperava %d — %s", c.method, c.path, rec.Code, c.quero, rec.Body.String())
 		}
+	}
+}
+
+// --- GET /machines/{n}/scan ---
+
+// Fechar o app no meio do cadastro não pode deixar a máquina encalhada: o scan
+// relê a impressão para a usuária poder confirmar depois.
+func TestGetScanReleAImpressaoDoHost(t *testing.T) {
+	mreg := registroComVPS(t)
+	keys := newFakeKeys()
+	keys.scanFPs = []string{"SHA256:doHost"}
+
+	rec := doAdmin(t, mreg, keys, http.MethodGet, "/machines/vps/scan", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Fingerprint string `json:"fingerprint"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("corpo não é json: %v — %s", err, rec.Body.String())
+	}
+	if body.Fingerprint != "SHA256:doHost" {
+		t.Errorf("fingerprint = %q, quero SHA256:doHost", body.Fingerprint)
+	}
+}
+
+// O scan não confia em nada: relê e devolve, só isso. Confiar segue sendo do
+// /trust, que escaneia de novo por conta própria.
+func TestGetScanNaoConfiaNemCriaAlvo(t *testing.T) {
+	mreg := registroComVPS(t)
+	keys := newFakeKeys()
+	keys.scanFPs = []string{"SHA256:doHost"}
+	tg := &fakeTargets{}
+
+	doAlvos(t, mreg, keys, tg, http.MethodGet, "/machines/vps/scan", "")
+
+	m, _ := mreg.Get("vps")
+	if m.HostFingerprint != "" {
+		t.Errorf("o scan gravou a impressão sozinho: %q", m.HostFingerprint)
+	}
+	if len(tg.registradas) != 0 {
+		t.Errorf("o scan criou alvo sem confirmação: %v", tg.registradas)
+	}
+	if len(keys.trusted) != 0 {
+		t.Errorf("o scan gravou no known_hosts: %v", keys.trusted)
+	}
+}
+
+func TestGetScanDeMaquinaDoEnvE403(t *testing.T) {
+	mreg := machine.NewRegistry([]machine.Machine{
+		{Name: "macmini", Dest: "macmini", Port: 22, Source: machine.SourceEnv},
+	})
+	rec := doAdmin(t, mreg, newFakeKeys(), http.MethodGet, "/machines/macmini/scan", "")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status %d, esperava 403: %s", rec.Code, rec.Body.String())
 	}
 }

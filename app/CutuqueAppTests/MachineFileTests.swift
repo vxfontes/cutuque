@@ -39,6 +39,77 @@ final class MachineFileTests: XCTestCase {
         XCTAssertEqual(local.displayDest, "aqui mesmo")
     }
 
+    // MARK: - Cadastro (source/fingerprint)
+
+    /// Só as máquinas cadastradas pelo app dá para editar ou remover — o hub
+    /// responde 403 nas do `hub.env`, então a UI nem oferece.
+    func testSoMaquinaDoAppEhEditavel() throws {
+        let doApp: Machine = try decode(#"{"name":"a","dest":"vx@host","port":22,"source":"app","host_fingerprint":"SHA256:x"}"#)
+        let doEnv: Machine = try decode(#"{"name":"b","dest":"vx@host","port":22,"source":"env"}"#)
+        let local: Machine = try decode(#"{"name":"c","dest":"local","port":0,"source":"local"}"#)
+        XCTAssertTrue(doApp.isEditable)
+        XCTAssertFalse(doEnv.isEditable)
+        XCTAssertFalse(local.isEditable)
+    }
+
+    /// Cadastro sem impressão confirmada é cadastro pela metade: o hub recusa
+    /// conectar, então a linha tem que pedir a confirmação em vez de navegar.
+    func testCadastroSemImpressaoPedeConfirmacao() throws {
+        let pendente: Machine = try decode(#"{"name":"a","dest":"vx@host","port":22,"source":"app"}"#)
+        let vazia: Machine = try decode(#"{"name":"b","dest":"vx@host","port":22,"source":"app","host_fingerprint":""}"#)
+        let confiada: Machine = try decode(#"{"name":"c","dest":"vx@host","port":22,"source":"app","host_fingerprint":"SHA256:x"}"#)
+        XCTAssertTrue(pendente.needsTrust)
+        XCTAssertTrue(vazia.needsTrust)
+        XCTAssertFalse(confiada.needsTrust)
+    }
+
+    /// Máquina do `hub.env` não tem impressão no cadastro (o known_hosts dela é
+    /// o do sistema) — mas isso não é pendência: não há o que confirmar no app.
+    func testMaquinaDoEnvNaoFicaPendente() throws {
+        let doEnv: Machine = try decode(#"{"name":"b","dest":"vx@host","port":22,"source":"env"}"#)
+        XCTAssertFalse(doEnv.needsTrust)
+    }
+
+    /// O que volta do `POST /machines`: a máquina, a chave PÚBLICA para instalar
+    /// e a impressão para conferir. A privada não aparece — nunca sai do hub.
+    func testMachineCreatedTrazChavePublicaEImpressao() throws {
+        let c: MachineCreated = try decode("""
+        {"machine":{"name":"a","dest":"vx@host","port":2222,"source":"app"},
+         "public_key":"ssh-ed25519 AAAA... cutuque-a",
+         "fingerprint":"SHA256:abc"}
+        """)
+        XCTAssertEqual(c.machine.name, "a")
+        XCTAssertEqual(c.machine.port, 2222)
+        XCTAssertTrue(c.machine.needsTrust, "cadastro nasce sem impressão confirmada")
+        XCTAssertEqual(c.publicKey, "ssh-ed25519 AAAA... cutuque-a")
+        XCTAssertEqual(c.fingerprint, "SHA256:abc")
+    }
+
+    // MARK: - Erros do cadastro
+
+    /// Quando o hub explica o caso concreto, é o detalhe que a usuária precisa
+    /// ler — as duas impressões lado a lado é o que distingue "errei o endereço"
+    /// de "o host mudou".
+    func testErroDoCadastroPrefereODetalhe() {
+        let msg = APIClient.machineErrorMessage(
+            from: Data(#"{"error":"fingerprint_mismatch","detail":"host respondeu SHA256:X, você confirmou SHA256:Y"}"#.utf8),
+            status: 409
+        )
+        XCTAssertEqual(msg, "host respondeu SHA256:X, você confirmou SHA256:Y")
+    }
+
+    func testErroDoCadastroSemDetalheViraFrase() {
+        let msg = APIClient.machineErrorMessage(from: Data(#"{"error":"read_only"}"#.utf8), status: 403)
+        XCTAssertEqual(msg, "essa máquina vem do hub.env — quem manda nela é o hub")
+    }
+
+    /// Corpo que não é JSON (proxy no meio, hub caindo) não pode virar mensagem
+    /// vazia: sobra o status, que ao menos diz que falhou.
+    func testErroSemCorpoUsavelAindaDizAlgo() {
+        let msg = APIClient.machineErrorMessage(from: Data("<html>502</html>".utf8), status: 502)
+        XCTAssertFalse(msg.isEmpty)
+    }
+
     // MARK: - FileEntry / FileListing
 
     /// `is_dir` chega em snake_case; o decoder do app converte.
