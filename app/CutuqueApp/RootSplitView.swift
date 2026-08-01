@@ -65,12 +65,17 @@ struct RootSplitView: View {
         return size.height > size.width
     }
 
-    /// Eixos que decidem o layout agora: destino, orientação e "tem sessão
-    /// escolhida". `paneMode` sai da chave de propósito — trocar
-    /// Chat↔Terminal não pode mais mexer em `columnVisibility` (decisão
+    /// Eixos que decidem o layout agora: destino, orientação, "tem sessão
+    /// escolhida" e "tem host aberto". `paneMode` sai da chave de propósito —
+    /// trocar Chat↔Terminal não pode mais mexer em `columnVisibility` (decisão
     /// explícita da usuária).
+    ///
+    /// O host entra pelo mesmo motivo que a sessão: `layoutVisibility` o
+    /// consulta (em retrato, host aberto = `.detailOnly`), e escolher um host
+    /// não muda `geo.size` por si só — fora da chave, a regra nunca rodaria e o
+    /// terminal abriria espremido na terceira coluna.
     private var layoutRuleKey: String {
-        "\(nav.destination.rawValue)-\(isPortrait)-\(nav.selection != nil)"
+        "\(nav.destination.rawValue)-\(isPortrait)-\(nav.selection != nil)-\(nav.machineSelection != nil)"
     }
 
     var body: some View {
@@ -226,6 +231,8 @@ struct RootSplitView: View {
             } else {
                 DestinationSidebar()
             }
+        case .machines:
+            MachineListView(splitSelection: $nav.machineSelection)
         case .archive:
             ArchiveView(embedded: true, selection: $nav.archiveSelection)
         }
@@ -253,6 +260,23 @@ struct RootSplitView: View {
             // coluna da split view a barra dele é engolida e título, busca,
             // recarregar e o menu "⋯" somem (ver `BoardView.embedded`).
             BoardView(embedded: true)
+        case .machines:
+            if let machine = nav.machineSelection {
+                // `NavigationStack` própria: os arquivos empilham subpasta com
+                // `NavigationLink`, e uma coluna de detalhe sem pilha não tem
+                // pra onde empurrar.
+                //
+                // O `.id` força a troca de host a DESTRUIR o painel anterior —
+                // e é isso que fecha o WebSocket e mata o `ssh` da máquina que
+                // ficou pra trás. Sem ele o SwiftUI reaproveitaria a view e o
+                // `@StateObject` continuaria apontando pro host antigo: o nome
+                // na barra seria um e o shell, outro.
+                NavigationStack { MachineDetailView(machine: machine) }
+                    .id(machine)
+            } else {
+                ContentUnavailableView("Escolha uma máquina", systemImage: "server.rack",
+                                       description: Text("O terminal e os arquivos do host aparecem aqui."))
+            }
         case .archive:
             if let task = nav.archiveSelection {
                 ArchivedTaskPane(task: task)

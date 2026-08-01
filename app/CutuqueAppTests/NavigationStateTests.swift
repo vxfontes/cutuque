@@ -183,6 +183,89 @@ final class NavigationStateTests: XCTestCase {
         XCTAssertNotNil(nav.selection)
     }
 
+    // MARK: - Máquinas (F5, iPad)
+    //
+    // Mesma tabela das Sessões, com um motivo a mais para colapsar: a largura
+    // do painel não é estética, são as COLUNAS que o `stty` do outro lado vai
+    // ver. Um terminal na terceira coluna de um iPad em pé quebra a linha do
+    // prompt de verdade.
+
+    private func makeMachine(_ name: String = "vps") -> Machine {
+        Machine(name: name, dest: "vx@192.0.2.50", port: 22, source: "app",
+                hostFingerprint: "SHA256:abc")
+    }
+
+    func testMaquinasComHostAbertoEmRetratoColapsaDetailOnly() {
+        let nav = NavigationState()
+        nav.destination = .machines
+        nav.machineSelection = makeMachine()
+        nav.applyLayoutRule(isPortrait: true)
+        XCTAssertEqual(nav.columnVisibility, .detailOnly)
+    }
+
+    /// Em paisagem cabem as três: destinos | hosts | terminal.
+    func testMaquinasComHostAbertoEmPaisagemFicaAll() {
+        let nav = NavigationState()
+        nav.destination = .machines
+        nav.machineSelection = makeMachine()
+        nav.applyLayoutRule(isPortrait: false)
+        XCTAssertEqual(nav.columnVisibility, .all)
+    }
+
+    /// Sem host aberto não há nada a espremer — nem em pé. Diferente das
+    /// Sessões, a coluna do meio aqui tem conteúdo próprio (a lista de hosts),
+    /// então não existe a troca de coluna que lá justifica `.doubleColumn`.
+    func testMaquinasSemHostAbertoFicaAllNasDuasOrientacoes() {
+        let nav = NavigationState()
+        nav.destination = .machines
+        nav.machineSelection = nil
+
+        nav.applyLayoutRule(isPortrait: true)
+        XCTAssertEqual(nav.columnVisibility, .all)
+        nav.applyLayoutRule(isPortrait: false)
+        XCTAssertEqual(nav.columnVisibility, .all)
+    }
+
+    /// O ⤡ em Máquinas segue as Sessões: em pé, "aberto" são duas colunas.
+    /// Voltar pras três devolveria o terminal-filete que o botão existe pra
+    /// desfazer.
+    func testExpandirEmMaquinasSegueAOrientacao() {
+        let nav = NavigationState()
+        nav.destination = .machines
+
+        nav.applyLayoutRule(isPortrait: true)
+        XCTAssertEqual(nav.expandedVisibility, .doubleColumn)
+        nav.applyLayoutRule(isPortrait: false)
+        XCTAssertEqual(nav.expandedVisibility, .all)
+    }
+
+    /// Sair da coluna DESTRÓI o painel, e com ele o WebSocket — o hub mata o
+    /// `ssh` junto. Se o host continuasse escolhido, voltar remontaria a view e
+    /// abriria um shell NOVO com cara do antigo: outro diretório, outras
+    /// variáveis, o que estava aberto perdido. É o mesmo motivo pelo qual o
+    /// `PTYSession` não reconecta sozinho.
+    func testTrocarDeDestinoLimpaOHostAberto() {
+        let nav = NavigationState()
+        nav.destination = .machines
+        nav.machineSelection = makeMachine()
+
+        nav.destination = .board
+
+        XCTAssertNil(nav.machineSelection)
+    }
+
+    /// Tocar no destino já ativo (a `List(selection:)` da sidebar reescreve a
+    /// cada toque) não pode derrubar o terminal aberto ao lado.
+    func testReatribuirOMesmoDestinoNaoDerrubaOHost() {
+        let nav = NavigationState()
+        nav.destination = .machines
+        nav.machineSelection = makeMachine()
+
+        nav.destination = .machines
+
+        XCTAssertNotNil(nav.machineSelection)
+    }
+
     /// A seleção do board sobrevive à troca de destino — só `selection`
     /// participa da regra de layout, então só ela precisa cair.
     func testTrocarDeDestinoNaoMexeNaSelecaoDoBoard() {
