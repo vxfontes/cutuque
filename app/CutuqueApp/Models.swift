@@ -276,6 +276,83 @@ struct DirListing: Decodable {
     let dirs: [DirEntry]
 }
 
+// MARK: - Aba Máquinas
+
+/// Uma máquina que o hub conhece. Vem do `CUTUQUE_SSH_TARGETS` (source "env") ou
+/// é a própria máquina do hub (source "local"). `GET /machines`.
+struct Machine: Decodable, Identifiable, Hashable {
+    let name: String
+    /// Destino ssh: alias do `~/.ssh/config` ou `user@host`.
+    let dest: String
+    let port: Int
+    let source: String
+    var id: String { name }
+
+    /// A máquina onde o próprio hub roda — não tem ssh no meio.
+    var isLocal: Bool { source == "local" }
+
+    /// Destino como a lista mostra. A porta padrão não polui; uma diferente é o
+    /// que distingue duas entradas para o mesmo host.
+    var displayDest: String {
+        if isLocal { return "aqui mesmo" }
+        return port == 22 || port == 0 ? dest : "\(dest):\(port)"
+    }
+}
+
+/// Uma entrada (pasta ou arquivo) no navegador de arquivos da aba Máquinas.
+struct FileEntry: Decodable, Identifiable, Hashable {
+    let name: String
+    let path: String
+    /// Zero para pasta.
+    let size: Int64
+    /// Modificação, em segundos desde a epoch.
+    let mtime: Int64
+    let isDir: Bool
+    var id: String { path }
+
+    /// Oculto (começa com ".") — escondido por padrão, como no seletor de pastas.
+    var isHidden: Bool { name.hasPrefix(".") }
+
+    var modifiedAt: Date { Date(timeIntervalSince1970: TimeInterval(mtime)) }
+
+    /// Tamanho legível. Pasta não tem: o hub manda 0 e exibir "Zero KB" mentiria.
+    var sizeLabel: String {
+        isDir ? "" : ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+    }
+}
+
+/// Conteúdo navegável de uma pasta: caminho atual, pai (subir), entradas já
+/// ordenadas pelo hub (pastas primeiro, cada grupo em ordem alfabética).
+struct FileListing: Decodable {
+    let path: String
+    let parent: String
+    let entries: [FileEntry]
+
+    /// Filtra os ocultos sem reordenar — a ordem é a que o hub mandou.
+    func visibleEntries(showHidden: Bool) -> [FileEntry] {
+        showHidden ? entries : entries.filter { !$0.isHidden }
+    }
+}
+
+/// Conteúdo de um arquivo lido da máquina. Binário e acima do teto voltam
+/// marcados e sem conteúdo — quem decide o que mostrar é o app.
+struct FileContent: Decodable {
+    let path: String
+    let size: Int64
+    let binary: Bool
+    let truncated: Bool
+    let content: String
+
+    var isReadable: Bool { !binary && !truncated }
+
+    /// Por que não dá para mostrar como texto (nil quando dá).
+    var unreadableReason: String? {
+        if binary { return "Arquivo binário — não dá para mostrar como texto." }
+        if truncated { return "Arquivo grande demais (acima de 1 MB) para abrir aqui." }
+        return nil
+    }
+}
+
 // MARK: - Mensagens do WebSocket
 
 /// Mensagens recebidas pelo canal /ws.

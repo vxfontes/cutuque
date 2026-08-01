@@ -430,6 +430,61 @@ struct APIClient {
         }
     }
 
+    // MARK: - Aba Máquinas
+
+    /// GET autenticado que decodifica JSON, usado pelos endpoints da aba
+    /// Máquinas. Os métodos mais antigos montam o request na mão e ficam como
+    /// estão — não vale reescrever tudo agora.
+    private func getJSON<T: Decodable>(_ segments: [String], query: [URLQueryItem] = []) async throws -> T {
+        let url = segments.reduce(baseURL) { $0.appendingPathComponent($1) }
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        if !query.isEmpty { comps.queryItems = query }
+        var request = URLRequest(url: comps.url!)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        switch http.statusCode {
+        case 200:
+            return try JSONDecoder.cutuque.decode(T.self, from: data)
+        case 404:
+            throw CutuqueError.notFound
+        case 502, 503:
+            throw CutuqueError.server(status: http.statusCode, message: "a máquina não respondeu (tente de novo)")
+        default:
+            throw CutuqueError.unexpected(status: http.statusCode)
+        }
+    }
+
+    /// Lista as máquinas que o hub conhece, com destino e origem. `GET /machines`.
+    /// Diferente de `targets()`, que devolve só os nomes para criar sessão.
+    func listMachines() async throws -> [Machine] {
+        let envelope: MachinesEnvelope = try await getJSON(["machines"])
+        return envelope.machines
+    }
+
+    private struct MachinesEnvelope: Decodable {
+        let machines: [Machine]
+    }
+
+    /// Lista pastas E arquivos de um caminho na máquina (navegador de arquivos).
+    /// path vazio = home. `GET /machines/{machine}/fs?path=`.
+    func listFiles(machine: String, path: String) async throws -> FileListing {
+        try await getJSON(
+            ["machines", machine, "fs"],
+            query: path.isEmpty ? [] : [URLQueryItem(name: "path", value: path)]
+        )
+    }
+
+    /// Lê um arquivo de texto da máquina. Binário ou grande demais volta marcado
+    /// e sem conteúdo. `GET /machines/{machine}/fs/read?path=`.
+    func readFile(machine: String, path: String) async throws -> FileContent {
+        try await getJSON(
+            ["machines", machine, "fs", "read"],
+            query: [URLQueryItem(name: "path", value: path)]
+        )
+    }
+
     /// Lista as sessões do Claude RODANDO agora numa máquina (processo vivo +
     /// transcript recente) — as "ao vivo" que aparecem na home.
     /// `GET /machines/{machine}/live`. Erros são engolidos em `[]` (é um poll de
