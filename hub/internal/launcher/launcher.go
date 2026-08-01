@@ -608,6 +608,39 @@ func (l *Launcher) ListDirs(machine, path string) (session.DirListing, error) {
 	return lister.ListDirs(ctx, path)
 }
 
+// ListFiles lista pastas E arquivos de path na máquina (painel Arquivos da aba
+// Máquinas). path vazio → home. ErrUnknownMachine se a máquina não existe ou o
+// agente dela não sabe listar arquivos.
+func (l *Launcher) ListFiles(machine, path string) (session.FileListing, error) {
+	tgt, ok := l.anyTarget(machine)
+	if !ok {
+		return session.FileListing{}, ErrUnknownMachine
+	}
+	lister, ok := tgt.(claudecode.FileLister)
+	if !ok {
+		return session.FileListing{}, ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	return lister.ListFiles(ctx, path)
+}
+
+// ReadFile lê um arquivo de texto na máquina (visualizador da aba Máquinas).
+// Binário ou acima do teto volta sem conteúdo, marcado — não é erro.
+func (l *Launcher) ReadFile(machine, path string) (session.FileContent, error) {
+	tgt, ok := l.anyTarget(machine)
+	if !ok {
+		return session.FileContent{}, ErrUnknownMachine
+	}
+	reader, ok := tgt.(claudecode.FileReader)
+	if !ok {
+		return session.FileContent{}, ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	return reader.ReadFile(ctx, path)
+}
+
 // Resolve tira uma sessão de needs_you marcando-a como concluída (done), sem
 // apagá-la — usado pelo swipe "Concluir" no app quando a usuária já respondeu no
 // terminal. Não marca como dismissed: a sessão pode voltar a precisar de você e

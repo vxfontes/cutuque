@@ -31,6 +31,8 @@ type Launcher interface {
 	Discover(machine string) ([]session.Discovered, error)
 	Live(machine, agent string) ([]session.Discovered, error)
 	ListDirs(machine, path string) (session.DirListing, error)
+	ListFiles(machine, path string) (session.FileListing, error)
+	ReadFile(machine, path string) (session.FileContent, error)
 	Adopt(machine, id, cwd, title, agent string) (session.Session, error)
 	TmuxList(machine string) ([]session.Discovered, error)
 	TmuxCapture(machine, target string) (string, error)

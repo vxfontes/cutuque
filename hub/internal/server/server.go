@@ -124,6 +124,10 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		mux.Handle("GET /machines/{machine}/sessions", requireAuth(cfg.Token, DiscoverHandler(lch)))
 		mux.Handle("GET /machines/{machine}/live", requireAuth(cfg.Token, LiveHandler(lch)))
 		mux.Handle("GET /machines/{machine}/dirs", requireAuth(cfg.Token, DirsHandler(lch)))
+		// Navegador de arquivos da aba Máquinas: listar pastas+arquivos e ler
+		// um arquivo de texto.
+		mux.Handle("GET /machines/{machine}/fs", requireAuth(cfg.Token, FilesHandler(lch)))
+		mux.Handle("GET /machines/{machine}/fs/read", requireAuth(cfg.Token, FileReadHandler(lch)))
 		mux.Handle("POST /machines/{machine}/adopt", requireAuth(cfg.Token, AdoptHandler(lch)))
 		// Ponte tmux: observar (screen) e digitar (keys) em sessões de terminal.
 		mux.Handle("GET /machines/{machine}/tmux", requireAuth(cfg.Token, TmuxListHandler(lch)))

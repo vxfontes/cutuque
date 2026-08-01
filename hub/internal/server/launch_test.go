@@ -32,6 +32,11 @@ type fakeLauncher struct {
 	dirListing session.DirListing
 	dirsErr    error
 
+	fileListing session.FileListing
+	fsErr       error
+	fileContent session.FileContent
+	readErr     error
+
 	discovered   []session.Discovered
 	discoverErr  error
 	liveSessions []session.Discovered
@@ -49,6 +54,8 @@ type fakeLauncher struct {
 	gotRemoveID                             string
 	gotHistoryID                            string
 	gotDirsMachine, gotDirsPath             string
+	gotFsMachine, gotFsPath                 string
+	gotReadMachine, gotReadPath             string
 	gotDiscoverMachine                      string
 	gotAdoptMachine, gotAdoptID             string
 	gotAdoptCwd, gotAdoptTitle              string
@@ -75,6 +82,14 @@ func (f *fakeLauncher) ImportHistory(id string) error {
 func (f *fakeLauncher) ListDirs(machine, path string) (session.DirListing, error) {
 	f.gotDirsMachine, f.gotDirsPath = machine, path
 	return f.dirListing, f.dirsErr
+}
+func (f *fakeLauncher) ListFiles(machine, path string) (session.FileListing, error) {
+	f.gotFsMachine, f.gotFsPath = machine, path
+	return f.fileListing, f.fsErr
+}
+func (f *fakeLauncher) ReadFile(machine, path string) (session.FileContent, error) {
+	f.gotReadMachine, f.gotReadPath = machine, path
+	return f.fileContent, f.readErr
 }
 
 func (f *fakeLauncher) Discover(machine string) ([]session.Discovered, error) {
