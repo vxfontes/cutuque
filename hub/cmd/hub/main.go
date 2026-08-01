@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 	_ "time/tzdata" // tz embutida: LoadLocation("America/Sao_Paulo") funciona no container alpine
@@ -23,6 +22,7 @@ import (
 	"github.com/vxfontes/cutuque/hub/internal/engine"
 	"github.com/vxfontes/cutuque/hub/internal/history"
 	"github.com/vxfontes/cutuque/hub/internal/launcher"
+	"github.com/vxfontes/cutuque/hub/internal/machine"
 	"github.com/vxfontes/cutuque/hub/internal/notifier"
 	"github.com/vxfontes/cutuque/hub/internal/reaper"
 	"github.com/vxfontes/cutuque/hub/internal/registry"
@@ -193,7 +193,11 @@ func main() {
 	// LocalTarget "macbook" (dev, hub e claude na mesma máquina). Com a env
 	// var, cada entrada vira um SSHTarget (hub no servidor, claude na máquina
 	// remota via ssh) — Fase 5.
-	targets := buildTargets(os.Getenv("CUTUQUE_SSH_TARGETS"), logger)
+	machines, machineWarns := machine.ParseSSHTargets(os.Getenv("CUTUQUE_SSH_TARGETS"))
+	for _, w := range machineWarns {
+		logger.Warn("CUTUQUE_SSH_TARGETS", "aviso", w)
+	}
+	targets := buildTargets(machines)
 	lch := launcher.New(eng, reg, targets)
 	lch.SetMaxSessions(cfg.MaxSessions) // SEC-007: teto de sessões concorrentes
 
@@ -296,17 +300,15 @@ func main() {
 	logger.Info("cutuque hub encerrado")
 }
 
-// buildTargets monta o mapa de alvos do Launcher a partir de
-// CUTUQUE_SSH_TARGETS ("nome=destino,nome2=destino2", onde destino é um alias
-// do ~/.ssh/config ou user@host). Vazia: cai no LocalTarget "macbook" (mesmo
-// comportamento de antes da Fase 5). Não-vazia: cada entrada vira um
+// buildTargets monta o mapa de alvos do Launcher a partir das máquinas já
+// parseadas do CUTUQUE_SSH_TARGETS. Lista vazia: cai no LocalTarget "macbook"
+// (mesmo comportamento de antes da Fase 5). Não-vazia: cada entrada vira um
 // SSHTarget — nenhum LocalTarget implícito é adicionado, então quem quiser o
 // macbook local precisa listá-lo explicitamente (ele deixa de ser "grátis").
-func buildTargets(rawSSHTargets string, logger *slog.Logger) map[string]map[string]claudecode.Target {
-	dests := parseSSHTargets(rawSSHTargets, logger)
+func buildTargets(machines []machine.Machine) map[string]map[string]claudecode.Target {
 	// Cada máquina roda os dois agentes (claude-code + codex). O mapa é
 	// máquina → agente (t.Kind()) → alvo; o Launcher escolhe pelo agente pedido.
-	if len(dests) == 0 {
+	if len(machines) == 0 {
 		return map[string]map[string]claudecode.Target{
 			"macbook": agentMap(
 				claudecode.NewLocalTarget("macbook"),
@@ -315,15 +317,15 @@ func buildTargets(rawSSHTargets string, logger *slog.Logger) map[string]map[stri
 			),
 		}
 	}
-	targets := make(map[string]map[string]claudecode.Target, len(dests))
-	for name, d := range dests {
-		ct := claudecode.NewSSHTarget(name, d.dest)
+	targets := make(map[string]map[string]claudecode.Target, len(machines))
+	for _, m := range machines {
+		ct := claudecode.NewSSHTarget(m.Name, m.Dest)
 		// Caminho absoluto do claude remoto por alvo (opcional): necessário
 		// quando o binário certo não é o primeiro no PATH do login shell remoto
 		// (ex.: no Mac, /opt/homebrew tem uma versão antiga; a boa está em
 		// ~/.local/bin). Vazio → default "claude".
-		ct.SetRemoteClaudeCmd(d.remoteCmd)
-		targets[name] = agentMap(ct, codex.NewSSHTarget(name, d.dest), opencode.NewSSHTarget(name, d.dest))
+		ct.SetRemoteClaudeCmd(m.RemoteCmd)
+		targets[m.Name] = agentMap(ct, codex.NewSSHTarget(m.Name, m.Dest), opencode.NewSSHTarget(m.Name, m.Dest))
 	}
 	return targets
 }
@@ -337,51 +339,6 @@ func agentMap(ts ...claudecode.Target) map[string]claudecode.Target {
 	return m
 }
 
-// sshDest é um alvo SSH parseado: destino ssh + comando/caminho do claude remoto.
-type sshDest struct {
-	dest      string
-	remoteCmd string // vazio = default "claude"
-}
-
-// parseSSHTargets interpreta CUTUQUE_SSH_TARGETS num mapa nome->destino ssh.
-// Parse defensivo: entradas malformadas (sem "=", nome ou destino vazio) são
-// ignoradas com log de aviso — uma entrada ruim não deve impedir as demais nem
-// derrubar o boot do hub.
-// Formato de cada entrada: "nome=destino" ou "nome=destino=comando-claude".
-// destino = alias do ~/.ssh/config ou user@host. O 3º campo (opcional) é o
-// caminho/comando do claude remoto.
-func parseSSHTargets(raw string, logger *slog.Logger) map[string]sshDest {
-	out := make(map[string]sshDest)
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return out
-	}
-	for _, entry := range strings.Split(raw, ",") {
-		entry = strings.TrimSpace(entry)
-		if entry == "" {
-			continue
-		}
-		parts := strings.SplitN(entry, "=", 3)
-		name := strings.TrimSpace(parts[0])
-		dest := ""
-		remoteCmd := ""
-		if len(parts) >= 2 {
-			dest = strings.TrimSpace(parts[1])
-		}
-		if len(parts) == 3 {
-			remoteCmd = strings.TrimSpace(parts[2])
-		}
-		if name == "" || dest == "" {
-			logger.Warn("CUTUQUE_SSH_TARGETS: entrada malformada ignorada", "entry", entry)
-			continue
-		}
-		// Defesa: um dest começando com "-" poderia ser reinterpretado pelo ssh
-		// como opção (ex.: -oProxyCommand=...). Rejeita (review F5, injeção-ssh).
-		if strings.HasPrefix(dest, "-") {
-			logger.Warn("CUTUQUE_SSH_TARGETS: destino começa com '-', ignorado", "entry", entry)
-			continue
-		}
-		out[name] = sshDest{dest: dest, remoteCmd: remoteCmd}
-	}
-	return out
-}
+// O parse do CUTUQUE_SSH_TARGETS (e a defesa contra destino que parece opção do
+// ssh) mora em internal/machine — a aba Máquinas precisa das máquinas como
+// recurso, não só dos alvos do Launcher.
