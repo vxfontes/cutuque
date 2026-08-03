@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,15 @@ type fakeLauncher struct {
 	dirListing session.DirListing
 	dirsErr    error
 
+	fileListing session.FileListing
+	fsErr       error
+	fileContent session.FileContent
+	readErr     error
+	fileWrite   session.FileWrite
+	writeErr    error
+	fileBytes   []byte
+	downloadErr error
+
 	discovered   []session.Discovered
 	discoverErr  error
 	liveSessions []session.Discovered
@@ -42,6 +52,12 @@ type fakeLauncher struct {
 	adoptSession session.Session
 	adoptErr     error
 
+	// Terminal livre: o teste do PTY roda um programa de verdade no lugar do
+	// `ssh` (não dá para fingir um pty com um mock).
+	shellProg string
+	shellArgs []string
+	shellErr  error
+
 	gotMachine, gotAgent, gotPrompt, gotCwd string
 	gotModel, gotEffort, gotSandbox         string
 	gotApproveID, gotDenyID                 string
@@ -49,6 +65,12 @@ type fakeLauncher struct {
 	gotRemoveID                             string
 	gotHistoryID                            string
 	gotDirsMachine, gotDirsPath             string
+	gotFsMachine, gotFsPath                 string
+	gotReadMachine, gotReadPath             string
+	gotWriteMachine, gotWritePath           string
+	gotWriteContent                         []byte
+	gotDownloadMachine, gotDownloadPath     string
+	gotShellMachine                         string
 	gotDiscoverMachine                      string
 	gotAdoptMachine, gotAdoptID             string
 	gotAdoptCwd, gotAdoptTitle              string
@@ -75,6 +97,32 @@ func (f *fakeLauncher) ImportHistory(id string) error {
 func (f *fakeLauncher) ListDirs(machine, path string) (session.DirListing, error) {
 	f.gotDirsMachine, f.gotDirsPath = machine, path
 	return f.dirListing, f.dirsErr
+}
+func (f *fakeLauncher) ListFiles(machine, path string) (session.FileListing, error) {
+	f.gotFsMachine, f.gotFsPath = machine, path
+	return f.fileListing, f.fsErr
+}
+func (f *fakeLauncher) ReadFile(machine, path string) (session.FileContent, error) {
+	f.gotReadMachine, f.gotReadPath = machine, path
+	return f.fileContent, f.readErr
+}
+func (f *fakeLauncher) WriteFile(machine, path string, content []byte) (session.FileWrite, error) {
+	f.gotWriteMachine, f.gotWritePath, f.gotWriteContent = machine, path, content
+	return f.fileWrite, f.writeErr
+}
+func (f *fakeLauncher) DownloadFile(machine, path string) ([]byte, error) {
+	f.gotDownloadMachine, f.gotDownloadPath = machine, path
+	return f.fileBytes, f.downloadErr
+}
+
+// ShellCommand devolve o comando que o fake mandar rodar (o teste do PTY troca
+// o `ssh` por um script), ou o erro programado.
+func (f *fakeLauncher) ShellCommand(ctx context.Context, machine string) (*exec.Cmd, error) {
+	f.gotShellMachine = machine
+	if f.shellErr != nil {
+		return nil, f.shellErr
+	}
+	return exec.CommandContext(ctx, f.shellProg, f.shellArgs...), nil
 }
 
 func (f *fakeLauncher) Discover(machine string) ([]session.Discovered, error) {

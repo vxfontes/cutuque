@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 	_ "time/tzdata" // tz embutida: LoadLocation("America/Sao_Paulo") funciona no container alpine
@@ -23,6 +22,7 @@ import (
 	"github.com/vxfontes/cutuque/hub/internal/engine"
 	"github.com/vxfontes/cutuque/hub/internal/history"
 	"github.com/vxfontes/cutuque/hub/internal/launcher"
+	"github.com/vxfontes/cutuque/hub/internal/machine"
 	"github.com/vxfontes/cutuque/hub/internal/notifier"
 	"github.com/vxfontes/cutuque/hub/internal/reaper"
 	"github.com/vxfontes/cutuque/hub/internal/registry"
@@ -193,7 +193,11 @@ func main() {
 	// LocalTarget "macbook" (dev, hub e claude na mesma máquina). Com a env
 	// var, cada entrada vira um SSHTarget (hub no servidor, claude na máquina
 	// remota via ssh) — Fase 5.
-	targets := buildTargets(os.Getenv("CUTUQUE_SSH_TARGETS"), logger)
+	machines, machineWarns := machine.ParseSSHTargets(os.Getenv("CUTUQUE_SSH_TARGETS"))
+	for _, w := range machineWarns {
+		logger.Warn("CUTUQUE_SSH_TARGETS", "aviso", w)
+	}
+	targets := buildTargets(machines)
 	lch := launcher.New(eng, reg, targets)
 	lch.SetMaxSessions(cfg.MaxSessions) // SEC-007: teto de sessões concorrentes
 
@@ -208,7 +212,26 @@ func main() {
 	// APNs (Fase 4): opcional. Se configurado, sobe o Notifier e habilita a rota
 	// de registro de devices; senão, o hub segue normalmente sem push.
 	var ntf *notifier.Notifier
-	serverOpts := []server.RouterOption{server.WithBoard(boardStore)}
+	mreg, idents := buildMachineRegistry(machines, logger)
+	serverOpts := []server.RouterOption{
+		server.WithBoard(boardStore),
+		server.WithMachines(mreg),
+	}
+	// CUTUQUE_MACHINES_DIR liga o CADASTRO de máquinas pelo app (aba Máquinas):
+	// é onde ficam o registro, as chaves privadas geradas aqui e o known_hosts
+	// próprio. Sem a env var o hub só LISTA o que veio do CUTUQUE_SSH_TARGETS —
+	// gerar chave privada em disco efêmero seria perdê-la no próximo deploy.
+	if dir := os.Getenv("CUTUQUE_MACHINES_DIR"); dir != "" {
+		ks := machine.NewKeyStore(dir)
+		// Antes de restaurar qualquer alvo: é este known_hosts que os alvos das
+		// máquinas do app consultam, e o StrictHostKeyChecking=yes delas não
+		// perdoa apontá-lo para o lugar errado.
+		lch.SetMachineKnownHosts(ks.KnownHostsPath())
+		restaurados := restauraAlvosDoApp(lch, mreg)
+		serverOpts = append(serverOpts,
+			server.WithMachineKeys(ks), server.WithMachineTargets(lch), server.WithIdentities(idents))
+		logger.Info("cadastro de máquinas pelo app habilitado", "dir", dir, "alvos_restaurados", restaurados)
+	}
 	if cfg.APNSEnabled() {
 		client, err := apns.NewClient(cfg)
 		if err != nil {
@@ -296,17 +319,15 @@ func main() {
 	logger.Info("cutuque hub encerrado")
 }
 
-// buildTargets monta o mapa de alvos do Launcher a partir de
-// CUTUQUE_SSH_TARGETS ("nome=destino,nome2=destino2", onde destino é um alias
-// do ~/.ssh/config ou user@host). Vazia: cai no LocalTarget "macbook" (mesmo
-// comportamento de antes da Fase 5). Não-vazia: cada entrada vira um
+// buildTargets monta o mapa de alvos do Launcher a partir das máquinas já
+// parseadas do CUTUQUE_SSH_TARGETS. Lista vazia: cai no LocalTarget "macbook"
+// (mesmo comportamento de antes da Fase 5). Não-vazia: cada entrada vira um
 // SSHTarget — nenhum LocalTarget implícito é adicionado, então quem quiser o
 // macbook local precisa listá-lo explicitamente (ele deixa de ser "grátis").
-func buildTargets(rawSSHTargets string, logger *slog.Logger) map[string]map[string]claudecode.Target {
-	dests := parseSSHTargets(rawSSHTargets, logger)
+func buildTargets(machines []machine.Machine) map[string]map[string]claudecode.Target {
 	// Cada máquina roda os dois agentes (claude-code + codex). O mapa é
 	// máquina → agente (t.Kind()) → alvo; o Launcher escolhe pelo agente pedido.
-	if len(dests) == 0 {
+	if len(machines) == 0 {
 		return map[string]map[string]claudecode.Target{
 			"macbook": agentMap(
 				claudecode.NewLocalTarget("macbook"),
@@ -315,17 +336,78 @@ func buildTargets(rawSSHTargets string, logger *slog.Logger) map[string]map[stri
 			),
 		}
 	}
-	targets := make(map[string]map[string]claudecode.Target, len(dests))
-	for name, d := range dests {
-		ct := claudecode.NewSSHTarget(name, d.dest)
-		// Caminho absoluto do claude remoto por alvo (opcional): necessário
-		// quando o binário certo não é o primeiro no PATH do login shell remoto
-		// (ex.: no Mac, /opt/homebrew tem uma versão antiga; a boa está em
-		// ~/.local/bin). Vazio → default "claude".
-		ct.SetRemoteClaudeCmd(d.remoteCmd)
-		targets[name] = agentMap(ct, codex.NewSSHTarget(name, d.dest), opencode.NewSSHTarget(name, d.dest))
+	targets := make(map[string]map[string]claudecode.Target, len(machines))
+	for _, m := range machines {
+		// O mesmo construtor do cadastro em runtime (launcher.TargetsFor): sem
+		// known_hosts próprio, porque máquina do hub.env conecta pelo ~/.ssh do
+		// container. Um só lugar monta alvo ssh — dois divergiriam.
+		targets[m.Name] = launcher.TargetsFor(m, "")
 	}
 	return targets
+}
+
+// restauraAlvosDoApp devolve ao Launcher os alvos das máquinas que o app já
+// cadastrou e cuja impressão digital já foi confirmada. Sem isto, um restart do
+// hub deixaria a máquina na lista mas inutilizável até a usuária confirmar a
+// impressão de novo — e ela não teria como saber que precisava.
+//
+// Máquina sem fingerprint fica de fora de propósito: é o mesmo critério do
+// runtime (o hub se recusa a conectar sem confirmação).
+func restauraAlvosDoApp(lch *launcher.Launcher, reg *machine.Registry) int {
+	n := 0
+	for _, m := range reg.List() {
+		if m.Source != machine.SourceApp || m.HostFingerprint == "" {
+			continue
+		}
+		lch.RegisterMachine(m)
+		n++
+	}
+	return n
+}
+
+// buildMachineRegistry monta o registro da aba Máquinas: sempre com o que veio
+// do CUTUQUE_SSH_TARGETS e, quando CUTUQUE_MACHINES_DIR está configurado,
+// também com os cadastros do app persistidos em disco, junto das identidades.
+//
+// Devolve o registro e o store de identidades (nil sem CUTUQUE_MACHINES_DIR).
+func buildMachineRegistry(ms []machine.Machine, logger *slog.Logger) (*machine.Registry, *machine.IdentityStore) {
+	base := machinesForRegistry(ms)
+	dir := os.Getenv("CUTUQUE_MACHINES_DIR")
+	if dir == "" {
+		return machine.NewRegistry(base), nil
+	}
+
+	// A chave da cifra vem do ambiente, não de /data: é o que faz um backup do
+	// volume não carregar as senhas junto. Ausente, o hub sobe sem guardar senha
+	// — cadastrar máquina continua funcionando, só pede a senha na hora.
+	idents, err := machine.NewIdentityStoreAt(
+		filepath.Join(dir, "identities.json"),
+		os.Getenv("CUTUQUE_IDENTITY_KEY"),
+	)
+	if err != nil {
+		// Chave presente e inválida: falhar alto. Subir sem cifra depois de a
+		// usuária ter configurado uma faria o hub recusar senha sem explicar.
+		logger.Error("CUTUQUE_IDENTITY_KEY inválida — o hub não vai guardar senha", "erro", err)
+		idents, _ = machine.NewIdentityStoreAt(filepath.Join(dir, "identities.json"), "")
+	}
+
+	path := filepath.Join(dir, "machines.json")
+	reg := machine.NewRegistryAt(path, base, idents)
+	logger.Info("registro de máquinas persistido",
+		"path", path, "total", len(reg.List()),
+		"identidades", len(idents.List()), "guarda_senha", idents.CanStorePassword())
+	return reg, idents
+}
+
+// machinesForRegistry devolve as máquinas que o app deve enxergar na aba
+// Máquinas, espelhando o fallback do buildTargets: sem CUTUQUE_SSH_TARGETS o
+// hub roda com o LocalTarget "macbook" implícito, e /machines precisa mostrar
+// o mesmo que /targets — senão o app lista vazio num hub que tem alvo.
+func machinesForRegistry(ms []machine.Machine) []machine.Machine {
+	if len(ms) > 0 {
+		return ms
+	}
+	return []machine.Machine{{Name: "macbook", Dest: "local", Source: machine.SourceLocal}}
 }
 
 // agentMap indexa alvos pelo agente que cada um representa (t.Kind()).
@@ -337,51 +419,6 @@ func agentMap(ts ...claudecode.Target) map[string]claudecode.Target {
 	return m
 }
 
-// sshDest é um alvo SSH parseado: destino ssh + comando/caminho do claude remoto.
-type sshDest struct {
-	dest      string
-	remoteCmd string // vazio = default "claude"
-}
-
-// parseSSHTargets interpreta CUTUQUE_SSH_TARGETS num mapa nome->destino ssh.
-// Parse defensivo: entradas malformadas (sem "=", nome ou destino vazio) são
-// ignoradas com log de aviso — uma entrada ruim não deve impedir as demais nem
-// derrubar o boot do hub.
-// Formato de cada entrada: "nome=destino" ou "nome=destino=comando-claude".
-// destino = alias do ~/.ssh/config ou user@host. O 3º campo (opcional) é o
-// caminho/comando do claude remoto.
-func parseSSHTargets(raw string, logger *slog.Logger) map[string]sshDest {
-	out := make(map[string]sshDest)
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return out
-	}
-	for _, entry := range strings.Split(raw, ",") {
-		entry = strings.TrimSpace(entry)
-		if entry == "" {
-			continue
-		}
-		parts := strings.SplitN(entry, "=", 3)
-		name := strings.TrimSpace(parts[0])
-		dest := ""
-		remoteCmd := ""
-		if len(parts) >= 2 {
-			dest = strings.TrimSpace(parts[1])
-		}
-		if len(parts) == 3 {
-			remoteCmd = strings.TrimSpace(parts[2])
-		}
-		if name == "" || dest == "" {
-			logger.Warn("CUTUQUE_SSH_TARGETS: entrada malformada ignorada", "entry", entry)
-			continue
-		}
-		// Defesa: um dest começando com "-" poderia ser reinterpretado pelo ssh
-		// como opção (ex.: -oProxyCommand=...). Rejeita (review F5, injeção-ssh).
-		if strings.HasPrefix(dest, "-") {
-			logger.Warn("CUTUQUE_SSH_TARGETS: destino começa com '-', ignorado", "entry", entry)
-			continue
-		}
-		out[name] = sshDest{dest: dest, remoteCmd: remoteCmd}
-	}
-	return out
-}
+// O parse do CUTUQUE_SSH_TARGETS (e a defesa contra destino que parece opção do
+// ssh) mora em internal/machine — a aba Máquinas precisa das máquinas como
+// recurso, não só dos alvos do Launcher.

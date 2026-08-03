@@ -87,6 +87,9 @@ type SSHTarget struct {
 	dest      string
 	remoteCmd string
 	prog      string
+	// identity: chave/known_hosts das máquinas cadastradas pelo app (vazio
+	// nas do hub.env, que usam o ~/.ssh do container).
+	identity []string
 }
 
 func NewSSHTarget(name, dest string) *SSHTarget {
@@ -100,6 +103,18 @@ func (t *SSHTarget) SetRemoteOpencodeCmd(cmd string) {
 	}
 }
 
+// SetIdentity amarra o alvo à chave e ao known_hosts que o hub gerou no
+// cadastro da máquina (aba Máquinas). Sem os dois, não faz nada.
+func (t *SSHTarget) SetIdentity(keyPath, knownHosts string, port int) {
+	t.identity = agent.IdentityOpts(keyPath, knownHosts, port)
+}
+
+// sshOpts: identidade da máquina antes das opções base — a ordem importa,
+// ver agent.IdentityOpts.
+func (t *SSHTarget) sshOpts() []string {
+	return agent.WithIdentity(t.identity, sshBaseOpts())
+}
+
 func (t *SSHTarget) Name() string { return t.name }
 func (t *SSHTarget) Kind() string { return agentKind }
 func (t *SSHTarget) NewRunner(app agent.Applier) *agent.Runner {
@@ -110,7 +125,7 @@ func (t *SSHTarget) Start(ctx context.Context, resumeID, cwd, model, effort, _sa
 	// cwd vai no --dir do próprio opencode (não num cd), porque o remoto pode
 	// não ter a pasta no PATH do login shell; --dir é explícito.
 	remote := remoteOCCommand(t.remoteCmd, ocArgs(resumeID, cwd, model, effort, prompt))
-	sshArgs := append(sshBaseOpts(), "--", t.dest, remote)
+	sshArgs := append(t.sshOpts(), "--", t.dest, remote)
 	cmd := exec.CommandContext(ctx, t.prog, sshArgs...)
 	cmd.Env = agent.ChildEnv()
 	return startOC(cmd)

@@ -57,7 +57,7 @@ struct CutuqueApp: App {
     }
 }
 
-/// Raiz do app: TabView com bottom bar alternando Sessões e Board.
+/// Raiz do app: TabView com bottom bar alternando Sessões, Board e Máquinas.
 struct RootTabView: View {
     @EnvironmentObject private var router: Router
     @State private var tab = 0
@@ -70,6 +70,9 @@ struct RootTabView: View {
             BoardView()
                 .tabItem { Label("Board", systemImage: "rectangle.split.3x1") }
                 .tag(1)
+            MachineListView()
+                .tabItem { Label("Máquinas", systemImage: "server.rack") }
+                .tag(2)
         }
         // Deep-link de sessão (push / Live Activity) volta pra aba Sessões.
         .onChange(of: router.pendingSessionID) { _, id in

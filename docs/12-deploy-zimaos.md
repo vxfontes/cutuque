@@ -39,6 +39,23 @@ MacBook via `ssh`) e produz uma imagem self-contained.
    env var o hub cairia no `LocalTarget` (rodaria o `claude` dentro do próprio
    container do servidor, que não é o que se quer aqui).
 
+   `CUTUQUE_IDENTITY_KEY` cifra as senhas guardadas nas identidades da aba
+   Máquinas (AES-256-GCM). Gere com `openssl rand -base64 32` — precisa dar
+   exatamente 32 bytes depois do base64, e o hub recusa subir com a cifra meio
+   configurada. Deixar vazia é uma escolha válida: o hub sobe e passa a
+   **recusar** guardar senha (o app deixa de oferecer o campo, e cada instalação
+   de chave pede a senha na hora). Guardar em claro nunca é a alternativa.
+
+   Esta chave mora aqui e **não** num arquivo em `/data` de propósito: é o que
+   muda num vazamento. Um backup ou snapshot do volume de dados não abre senha
+   nenhuma — só abre quem tiver também este `hub.env`. O que ela não protege é
+   hub invadido: um processo rodando como o hub lê a env var e decifra tudo.
+
+   Trocar a chave depois **invalida as senhas já guardadas** — elas param de
+   decifrar, e o sintoma aparece longe da causa (a identidade continua marcada
+   como "tem senha" e a instalação da chave falha). Na prática, trocar a chave é
+   apagar as senhas: recadastre-as.
+
 3. **Garantir a chave ssh server→MacBook.** O `docker-compose.yml` monta
    `/DATA/.ssh:/root/.ssh:ro` (ajuste o path se as chaves ficarem em
    `/DATA/AppData/cutuque/ssh/` em vez disso). É preciso:
@@ -85,8 +102,10 @@ precisam ser relançadas depois de um restart.
 
 Apps no ZimaOS aparecem no dashboard quando instalados via **App Store →
 "Install a customized app"**, apontando para este `docker-compose.yml`. Dados
-do app (se algum dia precisar de volume gerenciado pelo ZimaOS, hoje o hub é
-stateless em disco fora de `./config`) ficam em `/DATA/AppData/cutuque/`. Como
+do app (se algum dia precisar de volume gerenciado pelo ZimaOS) ficam em
+`/DATA/AppData/cutuque/`; hoje o estado em disco do hub é o `./data` montado
+pelo compose — device tokens, sessões, e desde a aba Máquinas o cadastro de
+máquinas e identidades com as chaves ssh privadas em `data/machines/keys`. Como
 o hub usa `network_mode: host`, ele **não** aparece com uma porta mapeada
 tradicional no dashboard — o healthcheck do passo 5 é a forma de confirmar que
 subiu, já que o compose não expõe `ports:` (desnecessário com host network).
@@ -99,3 +118,8 @@ subiu, já que o compose não expõe `ports:` (desnecessário com host network).
   `git status` antes de qualquer commit feito a partir do servidor).
 - Não escrever nada fora de `/DATA` no host (o `/` do ZimaOS é uma imagem de
   sistema de 1.2GB, cheia por design).
+- Não copiar `data/machines/` para lugar aberto (Drive, repo, pasta
+  compartilhada): são as chaves ssh privadas que abrem as máquinas cadastradas.
+- Não colocar `CUTUQUE_IDENTITY_KEY` num arquivo dentro de `./data`. Ela existe
+  para que uma cópia do volume não abra as senhas; guardada ao lado do que
+  cifra, viraria enfeite.

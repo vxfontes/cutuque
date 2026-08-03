@@ -8,6 +8,15 @@ options:
 configFiles:
   Debug: Local.xcconfig
   Release: Local.xcconfig
+# Primeira (e única) dependência externa do app. SwiftTerm é um emulador VT100/
+# xterm de verdade — o AnsiRenderer daqui só entende SGR e descarta movimento de
+# cursor, o que basta para o espelho do tmux (que já chega como tela pronta) mas
+# não para o fluxo de bytes cru do terminal livre, onde posicionar o cursor É o
+# conteúdo. MIT, compatível com a AGPL-3.0 do projeto.
+packages:
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    from: 1.15.0
 targets:
   CutuqueApp:
     type: application
@@ -30,8 +39,8 @@ targets:
       properties:
         UILaunchScreen: {}
         CFBundleDisplayName: Cutuque
-        CFBundleShortVersionString: "2.2.1"
-        CFBundleVersion: "15"
+        CFBundleShortVersionString: "2.4.0"
+        CFBundleVersion: "17"
         # Live Activities (Dynamic Island / tela de bloqueio) para sessões rodando.
         NSSupportsLiveActivities: true
         # Declara criptografia isenta (ex.: TLS/HTTPS e APIs do sistema) para
@@ -70,6 +79,10 @@ targets:
       - target: CutuqueWidgets
       - target: CutuqueWatch
         embed: true
+      # Só o app do iPhone/iPad: o widget não desenha terminal e o relógio nem
+      # alcança o hub.
+      - package: SwiftTerm
+        product: SwiftTerm
     # Liga o bundle de testes ao scheme do app, para `xcodebuild test` achar.
     scheme:
       testTargets:
@@ -89,8 +102,8 @@ targets:
       properties:
         CFBundleDisplayName: Cutuque
         CFBundleIconName: AppIcon
-        CFBundleShortVersionString: "2.2.1"
-        CFBundleVersion: "15"
+        CFBundleShortVersionString: "2.4.0"
+        CFBundleVersion: "17"
         ITSAppUsesNonExemptEncryption: false
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.vxfontes.cutuque
@@ -109,8 +122,8 @@ targets:
       path: CutuqueWidgets/Info.plist
       properties:
         CFBundleDisplayName: Cutuque
-        CFBundleShortVersionString: "2.2.1"
-        CFBundleVersion: "15"
+        CFBundleShortVersionString: "2.4.0"
+        CFBundleVersion: "17"
         ITSAppUsesNonExemptEncryption: false
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension

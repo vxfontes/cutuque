@@ -22,6 +22,11 @@ type (
 	Liver            = agent.Liver
 	TranscriptLister = agent.TranscriptLister
 	DirLister        = agent.DirLister
+	FileLister       = agent.FileLister
+	FileReader       = agent.FileReader
+	FileWriter       = agent.FileWriter
+	FileDownloader   = agent.FileDownloader
+	ShellDialer      = agent.ShellDialer
 	Transcriber      = agent.Transcriber
 	TranscriptChunk  = agent.TranscriptChunk
 )
@@ -145,6 +150,9 @@ type SSHTarget struct {
 	remoteCmd string // caminho/comando do claude remoto (default: "claude")
 	prog      string // programa ssh local (parametrizável em teste)
 	buildArgs func(dest, remoteCmd, resumeID, cwd string) []string
+	// identity são as opções de chave/known_hosts das máquinas cadastradas
+	// pelo app (vazio nas do hub.env, que usam o ~/.ssh do container).
+	identity []string
 }
 
 // NewSSHTarget cria um SSHTarget que conecta a `dest` e roda o `claude` real lá.
@@ -166,6 +174,19 @@ func (t *SSHTarget) SetRemoteClaudeCmd(cmd string) {
 	}
 }
 
+// SetIdentity amarra o alvo à chave e ao known_hosts que o hub gerou no
+// cadastro da máquina (aba Máquinas). Sem os dois, não faz nada: a máquina
+// segue usando o ~/.ssh do container, como as do hub.env.
+func (t *SSHTarget) SetIdentity(keyPath, knownHosts string, port int) {
+	t.identity = agent.IdentityOpts(keyPath, knownHosts, port)
+}
+
+// sshOpts são as opções de ssh deste alvo: identidade da máquina (se houver)
+// antes das compartilhadas — a ordem importa, ver agent.IdentityOpts.
+func (t *SSHTarget) sshOpts() []string {
+	return agent.WithIdentity(t.identity, sshBaseOpts())
+}
+
 // Name identifica o alvo remoto (vira o campo Machine da sessão).
 func (t *SSHTarget) Name() string { return t.name }
 
@@ -179,7 +200,10 @@ func (t *SSHTarget) NewRunner(app Applier) *Runner { return NewRunner(app) }
 // cwd != "" vira um `cd <cwd> &&` antes do comando remoto. prompt != "" é
 // enviado pelo stdin logo após o start.
 func (t *SSHTarget) Start(ctx context.Context, resumeID, cwd, model, effort, _sandbox, prompt string) (*Handle, error) {
-	sshArgs := t.buildArgs(t.dest, t.remoteCmd, resumeID, cwd)
+	// A identidade entra aqui, e não no buildArgs: ele é um campo trocado por
+	// fake nos testes e não conhece o alvo. Prefixar mantém a ordem certa
+	// (identidade antes das opções base — ver agent.IdentityOpts).
+	sshArgs := agent.WithIdentity(t.identity, t.buildArgs(t.dest, t.remoteCmd, resumeID, cwd))
 	// model/effort entram como MAIS parâmetros posicionais do `exec "$0" "$@"`
 	// remoto (single-quoted, mesmo escape do SEC-101), anexados ao comando remoto
 	// (último arg). Só quando escolhidos, então o fake dos testes ("", "") não muda.
@@ -202,6 +226,26 @@ func (t *SSHTarget) Start(ctx context.Context, resumeID, cwd, model, effort, _sa
 		return nil, err
 	}
 	return h, nil
+}
+
+// ShellCommand monta o `ssh` de um shell interativo nesta máquina — o terminal
+// livre da aba Máquinas. Só monta: quem liga o PTY e roda é o handler do
+// WebSocket.
+//
+// Duas diferenças em relação ao resto dos usos, e só elas: `-tt` no lugar do
+// `-T`, porque aqui a gente QUER um terminal do outro lado (o `-tt` dobrado
+// força mesmo com o stdin daqui não sendo um tty), e nenhum comando remoto — o
+// destino sozinho faz o ssh abrir o login shell do usuário. O `BatchMode=yes`
+// fica: sem chave instalada é melhor falhar na hora do que pendurar um prompt
+// de senha que ninguém vê.
+func (t *SSHTarget) ShellCommand(ctx context.Context) *exec.Cmd {
+	opts := agent.WithIdentity(t.identity, append(sshOptsComuns(), "-tt"))
+	// "--" separa: um dest começando com "-" nunca vira opção.
+	cmd := exec.CommandContext(ctx, t.prog, append(opts, "--", t.dest)...)
+	// Mesma allowlist do Start (SEC-006): sem HOME o ssh não acha config, chave
+	// nem known_hosts.
+	cmd.Env = childEnv()
+	return cmd
 }
 
 // startHandle liga os pipes de um cmd e o inicia, devolvendo o Handle.
@@ -233,20 +277,29 @@ func sendInitialPrompt(h *Handle, prompt string) error {
 	return nil
 }
 
-// sshBaseOpts são as opções de ssh compartilhadas por todo uso (o claude e a
-// descoberta). Compartilhar evita divergência entre os dois.
-func sshBaseOpts() []string {
+// sshOptsComuns são as opções que valem para QUALQUER uso de ssh — em lote ou
+// interativo. Ficam separadas do `-T` porque o terminal livre precisa do
+// oposto dele, e é a única diferença entre os dois usos.
+func sshOptsComuns() []string {
 	return []string{
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=10",
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
 		"-o", "StrictHostKeyChecking=accept-new",
-		"-T",
 	}
 }
 
-// sshClaudeArgs monta os args do `ssh` local para rodar o claude remoto.
+// sshBaseOpts são as opções de ssh compartilhadas por todo uso em lote (o
+// claude e a descoberta). Compartilhar evita divergência entre os dois.
+func sshBaseOpts() []string {
+	return append(sshOptsComuns(), "-T")
+}
+
+// sshClaudeArgs monta os args do `ssh` local para rodar o claude remoto. As
+// opções de identidade da máquina (quando há) são prefixadas pelo Start, que é
+// quem conhece o alvo — esta função é um campo configurável do SSHTarget e os
+// testes a trocam por um fake.
 func sshClaudeArgs(dest, remoteCmd, resumeID, cwd string) []string {
 	return append(sshBaseOpts(),
 		"--", // separador: um dest começando com "-" nunca é reinterpretado como opção

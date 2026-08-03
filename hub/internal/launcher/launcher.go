@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
@@ -41,6 +42,7 @@ var (
 	ErrInvalidSessionID = errors.New("launcher: id de sessão inválido")
 	ErrDiscoverFailed   = errors.New("launcher: falha ao descobrir sessões na máquina")
 	ErrInvalidAnswer    = errors.New("launcher: resposta inválida (pergunta desconhecida ou vazia)")
+	ErrNoShell          = errors.New("launcher: máquina não abre terminal (é o próprio hub)")
 )
 
 // toolAskUserQuestion é o tool_name nativo da pergunta de seleção do Claude Code.
@@ -97,7 +99,16 @@ type Launcher struct {
 	// targets é indexado por máquina → agente ("claude-code"|"codex") → alvo.
 	// Uma máquina roda mais de um agente; o launch escolhe pelo agente pedido e o
 	// resume pelo agente da sessão.
-	targets map[string]map[string]claudecode.Target
+	//
+	// Deixou de ser fixo em New: a aba Máquinas cadastra máquinas em runtime e o
+	// alvo delas nasce junto do cadastro. As mutações SUBSTITUEM o mapa
+	// (copy-on-write) em vez de escrever nele, então uma leitura em voo nunca vê
+	// o mapa pela metade — mas o ponteiro em si precisa do targetsMu.
+	targetsMu sync.RWMutex
+	targets   map[string]map[string]claudecode.Target
+	// machineKnownHosts é o known_hosts das máquinas cadastradas pelo app,
+	// fixado no boot. Vazio = cadastro desligado (sem CUTUQUE_MACHINES_DIR).
+	machineKnownHosts string
 
 	// wg rastreia as goroutines de observação (uma por Launch, rodando
 	// runner.Run) ainda vivas. Shutdown espera todas terminarem depois de
@@ -152,10 +163,9 @@ func (l *Launcher) SetMaxSessions(n int) {
 	l.mu.Unlock()
 }
 
-// target resolve o alvo de um agente específico numa máquina. targets é fixado
-// em New e nunca mutado, então é seguro ler sem lock.
+// target resolve o alvo de um agente específico numa máquina.
 func (l *Launcher) target(machine, agent string) (claudecode.Target, bool) {
-	byAgent, ok := l.targets[machine]
+	byAgent, ok := l.snapshot()[machine]
 	if !ok {
 		return nil, false
 	}
@@ -167,7 +177,7 @@ func (l *Launcher) target(machine, agent string) (claudecode.Target, bool) {
 // agente (listar pastas, tmux, descoberta). Prefere o claude-code, preservando
 // o comportamento das rotas que hoje só existem para ele.
 func (l *Launcher) anyTarget(machine string) (claudecode.Target, bool) {
-	byAgent, ok := l.targets[machine]
+	byAgent, ok := l.snapshot()[machine]
 	if !ok || len(byAgent) == 0 {
 		return nil, false
 	}
@@ -186,7 +196,7 @@ func (l *Launcher) anyTarget(machine string) (claudecode.Target, bool) {
 // envia o prompt inicial pelo stdin e espera o session_started (até launchTimeout)
 // para devolver a Session criada. cwd é a pasta onde o `claude` roda; vazio → home.
 func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt, cwd, model, effort, sandbox string) (session.Session, error) {
-	if _, known := l.targets[machine]; !known {
+	if _, known := l.snapshot()[machine]; !known {
 		return session.Session{}, ErrUnknownMachine
 	}
 	tgt, ok := l.target(machine, agent)
@@ -251,7 +261,7 @@ func (l *Launcher) Launch(ctx context.Context, machine, agent, prompt, cwd, mode
 // ~/.claude/projects lá), inclusive as não lançadas pelo Cutuque. Retorna
 // ErrUnknownMachine se a máquina não existe ou não suporta descoberta.
 func (l *Launcher) Discover(machine string) ([]session.Discovered, error) {
-	byAgent, ok := l.targets[machine]
+	byAgent, ok := l.snapshot()[machine]
 	if !ok {
 		return nil, ErrUnknownMachine
 	}
@@ -608,6 +618,94 @@ func (l *Launcher) ListDirs(machine, path string) (session.DirListing, error) {
 	return lister.ListDirs(ctx, path)
 }
 
+// ListFiles lista pastas E arquivos de path na máquina (painel Arquivos da aba
+// Máquinas). path vazio → home. ErrUnknownMachine se a máquina não existe ou o
+// agente dela não sabe listar arquivos.
+func (l *Launcher) ListFiles(machine, path string) (session.FileListing, error) {
+	tgt, ok := l.anyTarget(machine)
+	if !ok {
+		return session.FileListing{}, ErrUnknownMachine
+	}
+	lister, ok := tgt.(claudecode.FileLister)
+	if !ok {
+		return session.FileListing{}, ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	return lister.ListFiles(ctx, path)
+}
+
+// ReadFile lê um arquivo de texto na máquina (visualizador da aba Máquinas).
+// Binário ou acima do teto volta sem conteúdo, marcado — não é erro.
+func (l *Launcher) ReadFile(machine, path string) (session.FileContent, error) {
+	tgt, ok := l.anyTarget(machine)
+	if !ok {
+		return session.FileContent{}, ErrUnknownMachine
+	}
+	reader, ok := tgt.(claudecode.FileReader)
+	if !ok {
+		return session.FileContent{}, ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	return reader.ReadFile(ctx, path)
+}
+
+// WriteFile salva um arquivo de texto na máquina (editor da aba Máquinas). Só
+// sobrescreve arquivo que já existe: caminho inexistente devolve
+// claudecode.ErrNotAFile, que o handler traduz em 404.
+func (l *Launcher) WriteFile(machine, path string, content []byte) (session.FileWrite, error) {
+	tgt, ok := l.anyTarget(machine)
+	if !ok {
+		return session.FileWrite{}, ErrUnknownMachine
+	}
+	writer, ok := tgt.(claudecode.FileWriter)
+	if !ok {
+		return session.FileWrite{}, ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	return writer.WriteFile(ctx, path, content)
+}
+
+// DownloadFile traz os bytes crus de um arquivo na máquina (download da aba
+// Máquinas — inclusive binário, que o visualizador não mostra).
+func (l *Launcher) DownloadFile(machine, path string) ([]byte, error) {
+	tgt, ok := l.anyTarget(machine)
+	if !ok {
+		return nil, ErrUnknownMachine
+	}
+	dl, ok := tgt.(claudecode.FileDownloader)
+	if !ok {
+		return nil, ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	return dl.DownloadFile(ctx, path)
+}
+
+// ShellCommand monta (sem rodar) o comando de um shell interativo na máquina —
+// o terminal livre da aba Máquinas. Quem liga o PTY e roda é o handler do
+// WebSocket, que é quem tem a conexão para ligar nas duas pontas.
+//
+// O ctx é o da conexão, não o baseCtx com discoverTimeout: um terminal aberto
+// não tem prazo, e amarrá-lo a um timeout de descoberta o mataria em 30s.
+//
+// ErrUnknownMachine se a máquina não existe; ErrNoShell se ela existe mas é o
+// próprio hub — abrir um shell dentro do container não é entrar numa máquina, e
+// a diferença precisa chegar ao app como coisas distintas.
+func (l *Launcher) ShellCommand(ctx context.Context, machine string) (*exec.Cmd, error) {
+	tgt, ok := l.anyTarget(machine)
+	if !ok {
+		return nil, ErrUnknownMachine
+	}
+	dialer, ok := tgt.(claudecode.ShellDialer)
+	if !ok {
+		return nil, ErrNoShell
+	}
+	return dialer.ShellCommand(ctx), nil
+}
+
 // Resolve tira uma sessão de needs_you marcando-a como concluída (done), sem
 // apagá-la — usado pelo swipe "Concluir" no app quando a usuária já respondeu no
 // terminal. Não marca como dismissed: a sessão pode voltar a precisar de você e
@@ -619,11 +717,11 @@ func (l *Launcher) Resolve(id string) error {
 	return nil
 }
 
-// Machines devolve os nomes dos alvos registrados, ordenados. targets é fixado
-// em New e nunca mutado, então é seguro ler sem lock.
+// Machines devolve os nomes dos alvos registrados, ordenados.
 func (l *Launcher) Machines() []string {
-	names := make([]string, 0, len(l.targets))
-	for name := range l.targets {
+	snap := l.snapshot()
+	names := make([]string, 0, len(snap))
+	for name := range snap {
 		names = append(names, name)
 	}
 	sort.Strings(names)

@@ -4,7 +4,10 @@ import SwiftUI
 /// Histórico, Hub e Ajustes também moram na sidebar, mas abrem em sheet — não
 /// são destinos de coluna (ver `DestinationSidebar`).
 enum PadDestination: String, CaseIterable, Identifiable, Hashable {
-    case sessions, board, archive
+    /// A ordem é a da sidebar, e é a mesma da barra de abas do iPhone
+    /// (`RootTabView`) até onde as duas coincidem — quem alterna entre os dois
+    /// aparelhos não deveria reaprender o lugar das coisas.
+    case sessions, board, machines, archive
 
     var id: String { rawValue }
 
@@ -12,6 +15,7 @@ enum PadDestination: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .sessions: return "Sessões"
         case .board:    return "Board"
+        case .machines: return "Máquinas"
         case .archive:  return "Arquivo"
         }
     }
@@ -20,6 +24,7 @@ enum PadDestination: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .sessions: return "list.bullet.rectangle"
         case .board:    return "rectangle.split.3x1"
+        case .machines: return "server.rack"
         case .archive:  return "archivebox"
         }
     }
@@ -48,6 +53,36 @@ enum DetailSelection: Hashable {
 /// sabendo).
 enum PaneMode: String, CaseIterable {
     case chat, terminal, info
+}
+
+/// Qual painel a aba Máquinas mostra para o host aberto. Mesmo desenho do
+/// `PaneMode`: os dois ficam montados e alterna-se a opacidade, então trocar de
+/// painel não derruba o terminal (o `ssh` do outro lado morreria junto) nem
+/// perde onde a navegação de arquivos estava.
+///
+/// Fica **por host** (`@AppStorage`, chave por nome): quem usa uma máquina para
+/// editar arquivo e outra para rodar comando não quer o mesmo painel nas duas.
+enum MachinePane: String, CaseIterable {
+    case terminal, files
+
+    var label: String {
+        switch self {
+        case .terminal: return "Terminal"
+        case .files:    return "Arquivos"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .terminal: return "apple.terminal"
+        case .files:    return "folder"
+        }
+    }
+
+    /// Chave do `@AppStorage` que lembra o painel deste host.
+    static func storageKey(machine: String) -> String {
+        "cutuque.machinePane.\(machine)"
+    }
 }
 
 /// Ações disparadas por atalho de teclado que precisam do contexto de uma view
@@ -94,20 +129,29 @@ final class NavigationState: ObservableObject {
     /// pra `.detailOnly` quando há seleção, então a lista simplesmente não
     /// aparecia (reportado pela Vanessa testando no iPad).
     ///
-    /// Só `selection` é limpa, e não `boardSelection`/`archiveSelection`,
-    /// porque só ela participa de `layoutVisibility` — deixar um card do
-    /// board aberto pra quando você voltar é lembrança útil; deixar uma
-    /// sessão selecionada é esconder a lista.
+    /// `boardSelection`/`archiveSelection` NÃO são limpas: não participam de
+    /// `layoutVisibility`, e deixar um card aberto pra quando você voltar é
+    /// lembrança útil. `selection` e `machineSelection` são, por dois motivos
+    /// que se somam: as duas participam do layout (uma seleção pendurada
+    /// esconde a lista em retrato) e as duas guardam conexão viva — sair da
+    /// coluna destrói o painel, e voltar reabriria um terminal NOVO com cara
+    /// do antigo, que é justamente o que o `PTYSession` evita não
+    /// reconectando sozinho.
     @Published var destination: PadDestination = .sessions {
         didSet {
             guard oldValue != destination else { return }
             selection = nil
+            machineSelection = nil
         }
     }
     @Published var selection: DetailSelection?
     @Published var paneMode: PaneMode = .chat
     @Published var columnVisibility: NavigationSplitViewVisibility = .all
     @Published var archiveSelection: BoardTask?
+    /// Host aberto na aba Máquinas. Diferente das outras seleções, esta tem um
+    /// `ssh` do outro lado: enquanto ela aponta pra uma máquina, existe um
+    /// shell vivo no hub (ver `MachineDetailView`).
+    @Published var machineSelection: Machine?
     /// Card aberto no inspector do board (também alimentado pela busca).
     @Published var boardSelection: BoardTask?
     @Published var intent: AppIntent?
@@ -154,6 +198,13 @@ final class NavigationState: ObservableObject {
     ///   `case` sozinho engana.
     /// - Arquivo: sempre `.all` — fora do escopo desta correção, mantém o
     ///   comportamento de sempre (nunca disputou largura).
+    /// - Máquinas em RETRATO, com host aberto: `.detailOnly`, pela mesma razão
+    ///   das Sessões — um terminal na terceira coluna de um iPad em pé vira um
+    ///   filete, e aqui a largura não é estética: são as colunas que o `stty`
+    ///   do outro lado vai ver.
+    /// - Máquinas nos demais casos: `.all`. Sem host aberto não há nada a
+    ///   espremer, e a coluna do meio tem conteúdo próprio (a lista de hosts) —
+    ///   não precisa da troca de coluna que as Sessões fazem.
     func layoutVisibility(isPortrait: Bool) -> NavigationSplitViewVisibility {
         switch destination {
         case .board:
@@ -161,6 +212,8 @@ final class NavigationState: ObservableObject {
         case .sessions:
             guard isPortrait else { return .all }
             return selection != nil ? .detailOnly : .doubleColumn
+        case .machines:
+            return (isPortrait && machineSelection != nil) ? .detailOnly : .all
         case .archive:
             return .all
         }
@@ -196,7 +249,11 @@ final class NavigationState: ObservableObject {
         switch destination {
         case .board:
             return .doubleColumn
-        case .sessions:
+        case .sessions, .machines:
+            // Máquinas segue as Sessões: em retrato, "aberto" são duas colunas
+            // (lista de hosts | painéis) com a sidebar atrás do ☰. Três num
+            // iPad em pé devolveriam o terminal-filete que o ⤡ existe pra
+            // desfazer.
             return lastIsPortrait ? .doubleColumn : .all
         case .archive:
             return .all

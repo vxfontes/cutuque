@@ -5,10 +5,35 @@ enviar o build pelo App Store Connect.
 
 ## Estado atual (já pronto no repo)
 
-- [x] **Versão / build:** `CFBundleShortVersionString 2.2.1`, `CFBundleVersion 15`
+- [x] **Versão / build:** `CFBundleShortVersionString 2.4.0`, `CFBundleVersion 17`
       (iOS, watchOS e widget alinhados — ver `app/project.yml`). Lembrete: subir o
       `CFBundleVersion` a cada upload novo ao TestFlight — o número precisa ser
       único **dentro do trem daquela versão curta**, não globalmente.
+      **2.4.0 aberta em 2026-08-03**, na mesma branch `aba-maquinas`: o cadastro de
+      host foi **refeito no modelo do Termius** — host (label, hostname, porta) e
+      **identidade** (usuário + autenticação) passam a ser coisas separadas, e a
+      identidade é reutilizável entre hosts. A chave SSH agora pertence à
+      identidade, não à máquina; a senha do host pode ficar guardada no hub
+      cifrada com AES-256-GCM (chave em `CUTUQUE_IDENTITY_KEY`, no ambiente —
+      sem chave configurada o hub **recusa** guardar em vez de gravar em claro).
+      Entram também **temas de terminal** por host e **detecção do SO** no
+      cadastro, que passa a mostrar o ícone do sistema na lista (a maçã pro Mac).
+      Telnet ficou **fora de escopo** de propósito: é texto em claro e seria um
+      segundo protocolo sem TOFU. Como a 2.3.0 **nunca subiu** ao ASC (a branch
+      nunca saiu daqui), a 2.4.0 não substitui submissão nenhuma — ela ocupa o
+      lugar que a 2.3.0 ia ocupar, e o build 17 é o primeiro do trem 2.4.0.
+      **2.3.0 aberta em 2026-08-03** (nunca enviada), na branch `aba-maquinas`: a aba **Máquinas** —
+      hosts SSH cadastráveis pelo app, terminal livre com PTY de verdade (SwiftTerm,
+      primeira dependência SPM do projeto) e navegador de arquivos com editar,
+      salvar e baixar. Minor, não patch: é funcionalidade nova e visível, não
+      polimento.
+      Duas coisas a resolver no ASC **antes** de subir este build: (1) a **2.2.1
+      build 15 está parada em Guideline 2.1 (Information Needed)** esperando vídeo
+      de demonstração — subir a 2.3.0 não destrava aquilo, e é preciso decidir se a
+      2.3.0 substitui a submissão ou entra depois; (2) o vídeo de demo será exigido
+      **de novo** nesta submissão (é o recado explícito da Apple), então o "modo
+      demonstração" no app deixa de ser opcional. Ver o card
+      `6f1393d9cd09e627` no board.
       **2.2.1 aberta em 2026-07-27**, com a 2.2.0 build 14 já em revisão: polimento
       do sheet de perguntas (altura sob medida, hierarquia dos botões, teclado
       esticando o sheet) e "Continuar sessão" sem "do Mac". Como a 2.2.0 ainda não

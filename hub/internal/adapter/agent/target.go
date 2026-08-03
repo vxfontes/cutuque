@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"os/exec"
 
 	"github.com/vxfontes/cutuque/hub/internal/session"
 )
@@ -58,6 +59,42 @@ type TranscriptLister interface {
 // DirLister lista subpastas de um caminho na máquina (seletor de pastas do app).
 type DirLister interface {
 	ListDirs(ctx context.Context, path string) (session.DirListing, error)
+}
+
+// FileLister lista pastas E arquivos de um caminho na máquina (painel Arquivos
+// da aba Máquinas). Opcional como o DirLister: só o adapter claude-code
+// implementa, e o Launcher resolve por type assertion.
+type FileLister interface {
+	ListFiles(ctx context.Context, path string) (session.FileListing, error)
+}
+
+// FileReader lê um arquivo de texto na máquina (visualizador da aba Máquinas).
+// Opcional, mesmo motivo do FileLister.
+type FileReader interface {
+	ReadFile(ctx context.Context, path string) (session.FileContent, error)
+}
+
+// FileWriter salva um arquivo de texto na máquina (editor da aba Máquinas).
+// Opcional, mesmo motivo do FileLister. SÓ sobrescreve arquivo existente.
+type FileWriter interface {
+	WriteFile(ctx context.Context, path string, content []byte) (session.FileWrite, error)
+}
+
+// FileDownloader traz os bytes crus de um arquivo (download da aba Máquinas —
+// inclusive binário, que o visualizador não mostra). Opcional, mesmo motivo.
+type FileDownloader interface {
+	DownloadFile(ctx context.Context, path string) ([]byte, error)
+}
+
+// ShellDialer monta o comando de um shell interativo na máquina (terminal livre
+// da aba Máquinas). Opcional como o FileLister: só os alvos por ssh
+// implementam — a máquina "local" é o próprio hub, e abrir um shell dentro do
+// container não é a mesma coisa que entrar numa máquina.
+//
+// Devolve o comando montado, e não os args crus, porque o ambiente do filho é
+// parte do contrato: sem HOME o `ssh` não acha nem a config nem as chaves.
+type ShellDialer interface {
+	ShellCommand(ctx context.Context) *exec.Cmd
 }
 
 // Transcriber lê o histórico completo de UMA sessão numa máquina (para popular

@@ -8,6 +8,7 @@ import (
 	"github.com/vxfontes/cutuque/hub/internal/config"
 	"github.com/vxfontes/cutuque/hub/internal/devices"
 	"github.com/vxfontes/cutuque/hub/internal/engine"
+	"github.com/vxfontes/cutuque/hub/internal/machine"
 	"github.com/vxfontes/cutuque/hub/internal/registry"
 )
 
@@ -15,11 +16,15 @@ import (
 // RouterOption. Mantém a assinatura de Router/New estável quando novas
 // dependências opcionais entram (ex.: o store de devices da Fase 4).
 type routerConfig struct {
-	devices    *devices.Store
-	renudge    RenudgeController
-	foreground ForegroundController
-	history    HistoryReader
-	board      board.Store
+	devices     *devices.Store
+	renudge     RenudgeController
+	foreground  ForegroundController
+	history     HistoryReader
+	board       board.Store
+	machines    *machine.Registry
+	machineKeys MachineKeys
+	machineTgts MachineTargets
+	identities  Identities
 }
 
 // RouterOption configura dependências opcionais do Router.
@@ -56,6 +61,37 @@ func WithHistory(h HistoryReader) RouterOption {
 // board).
 func WithBoard(st board.Store) RouterOption {
 	return func(rc *routerConfig) { rc.board = st }
+}
+
+// WithMachines habilita GET /machines (aba Máquinas do app), apoiada no
+// registro dado. Sem esta opção a rota não é registrada.
+func WithMachines(reg *machine.Registry) RouterOption {
+	return func(rc *routerConfig) { rc.machines = reg }
+}
+
+// WithMachineKeys habilita o CADASTRO de máquinas pelo app (POST/PATCH/DELETE
+// /machines, trust e install-key), apoiado no cofre de chaves em /data. Depende
+// do WithMachines: sem registro não há o que cadastrar. Sem esta opção o hub
+// serve a lista em leitura e mais nada.
+func WithMachineKeys(keys MachineKeys) RouterOption {
+	return func(rc *routerConfig) { rc.machineKeys = keys }
+}
+
+// WithIdentities habilita as rotas /identities (as credenciais reutilizáveis do
+// cadastro) e liga o store ao cadastro de máquinas — sem ele o hub não sabe qual
+// conta remota nem qual chave usar numa máquina do app, e o cadastro pelo app
+// não é registrado. Depende do WithMachineKeys: a identidade nasce com um par de
+// chaves, e sem cofre não há onde gerá-lo.
+func WithIdentities(idents Identities) RouterOption {
+	return func(rc *routerConfig) { rc.identities = idents }
+}
+
+// WithMachineTargets liga o cadastro ao Launcher: confirmar a impressão digital
+// de uma máquina passa a criar os alvos ssh dela, e descadastrar os remove. Sem
+// esta opção o cadastro só alimenta a lista — a máquina apareceria no app sem
+// dar para lançar nada nela.
+func WithMachineTargets(t MachineTargets) RouterOption {
+	return func(rc *routerConfig) { rc.machineTgts = t }
 }
 
 // Router registra as rotas do hub. As rotas protegidas passam pelo middleware
@@ -116,6 +152,14 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		mux.Handle("GET /machines/{machine}/sessions", requireAuth(cfg.Token, DiscoverHandler(lch)))
 		mux.Handle("GET /machines/{machine}/live", requireAuth(cfg.Token, LiveHandler(lch)))
 		mux.Handle("GET /machines/{machine}/dirs", requireAuth(cfg.Token, DirsHandler(lch)))
+		// Navegador de arquivos da aba Máquinas: listar pastas+arquivos e ler
+		// um arquivo de texto.
+		mux.Handle("GET /machines/{machine}/fs", requireAuth(cfg.Token, FilesHandler(lch)))
+		mux.Handle("GET /machines/{machine}/fs/read", requireAuth(cfg.Token, FileReadHandler(lch)))
+		mux.Handle("PUT /machines/{machine}/fs/write", requireAuth(cfg.Token, FileWriteHandler(lch)))
+		mux.Handle("GET /machines/{machine}/fs/download", requireAuth(cfg.Token, FileDownloadHandler(lch)))
+		// Terminal livre: WebSocket, bytes crus nos dois sentidos.
+		mux.Handle("GET /machines/{machine}/pty", requireAuth(cfg.Token, PTYHandler(lch)))
 		mux.Handle("POST /machines/{machine}/adopt", requireAuth(cfg.Token, AdoptHandler(lch)))
 		// Ponte tmux: observar (screen) e digitar (keys) em sessões de terminal.
 		mux.Handle("GET /machines/{machine}/tmux", requireAuth(cfg.Token, TmuxListHandler(lch)))
@@ -125,6 +169,35 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		mux.Handle("POST /machines/{machine}/tmux/kill", requireAuth(cfg.Token, TmuxKillHandler(lch)))
 		mux.Handle("POST /machines/{machine}/tmux/kill-server", requireAuth(cfg.Token, TmuxKillServerHandler(lch)))
 		mux.Handle("POST /machines/{machine}/tmux/resize", requireAuth(cfg.Token, TmuxResizeHandler(lch)))
+	}
+
+	// Máquinas como recurso (aba Máquinas do app). Fora do bloco do launcher:
+	// depende do registro, não de haver Launcher.
+	if rc.machines != nil {
+		mux.Handle("GET /machines", requireAuth(cfg.Token, MachinesHandler(rc.machines)))
+
+		// Cadastro pelo app (F3). Exige o cofre de chaves E o store de
+		// identidades: sem cofre não há onde gerar a chave nem known_hosts para
+		// confiar; sem identidade a máquina não tem conta remota nem chave, e o
+		// cadastro nasceria inconectável. Tudo atrás de token — cadastrar instala
+		// chave em host remoto.
+		if rc.machineKeys != nil && rc.identities != nil {
+			k, tg, ids := rc.machineKeys, rc.machineTgts, rc.identities
+
+			// Identidades: o objeto que o app escolhe antes de cadastrar o host.
+			mux.Handle("GET /identities", requireAuth(cfg.Token, IdentitiesHandler(ids)))
+			mux.Handle("POST /identities", requireAuth(cfg.Token, IdentityCreateHandler(ids, k)))
+			mux.Handle("PATCH /identities/{identity}", requireAuth(cfg.Token, IdentityPatchHandler(ids)))
+			mux.Handle("DELETE /identities/{identity}", requireAuth(cfg.Token, IdentityDeleteHandler(ids, k, rc.machines)))
+
+			mux.Handle("POST /machines", requireAuth(cfg.Token, MachineCreateHandler(rc.machines, k, ids)))
+			mux.Handle("PATCH /machines/{machine}", requireAuth(cfg.Token, MachinePatchHandler(rc.machines, tg, ids)))
+			mux.Handle("DELETE /machines/{machine}", requireAuth(cfg.Token, MachineDeleteHandler(rc.machines, tg)))
+			mux.Handle("GET /machines/{machine}/scan", requireAuth(cfg.Token, MachineScanHandler(rc.machines, k)))
+			mux.Handle("POST /machines/{machine}/trust", requireAuth(cfg.Token, MachineTrustHandler(rc.machines, k, tg)))
+			mux.Handle("POST /machines/{machine}/install-key", requireAuth(cfg.Token, MachineInstallKeyHandler(rc.machines, k, ids)))
+			mux.Handle("POST /machines/{machine}/detect-os", requireAuth(cfg.Token, MachineDetectOSHandler(rc.machines, k, ids)))
+		}
 	}
 
 	// Histórico de sessões (v2.4). Só quando o Postgres está ligado.

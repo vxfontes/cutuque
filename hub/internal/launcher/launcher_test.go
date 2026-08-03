@@ -174,9 +174,12 @@ func TestApproveWritesExactControlResponseAndResumes(t *testing.T) {
 	}
 
 	// Chega em needs_you com o texto do pedido exibível (invariante de segurança).
+	// Espera pelo PendingPrompt, não só pelo estado: o engine seta o estado
+	// ANTES do prompt de propósito (engine.go), então esperar só o needs_you
+	// deixa o teste correr contra a segunda escrita.
 	waitFor(t, func() bool {
 		got, _ := reg.Get(sid)
-		return got.State == session.StateNeedsYou
+		return got.State == session.StateNeedsYou && got.PendingPrompt != ""
 	})
 	got, _ := reg.Get(sid)
 	if got.PendingPrompt != "Bash: touch cutuque.txt — probe" {

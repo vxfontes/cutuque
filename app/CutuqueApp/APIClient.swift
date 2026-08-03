@@ -430,6 +430,392 @@ struct APIClient {
         }
     }
 
+    // MARK: - Aba Máquinas
+
+    /// GET autenticado que decodifica JSON, usado pelos endpoints da aba
+    /// Máquinas. Os métodos mais antigos montam o request na mão e ficam como
+    /// estão — não vale reescrever tudo agora.
+    private func getJSON<T: Decodable>(_ segments: [String], query: [URLQueryItem] = []) async throws -> T {
+        let url = segments.reduce(baseURL) { $0.appendingPathComponent($1) }
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        if !query.isEmpty { comps.queryItems = query }
+        var request = URLRequest(url: comps.url!)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        switch http.statusCode {
+        case 200:
+            return try JSONDecoder.cutuque.decode(T.self, from: data)
+        case 404:
+            throw CutuqueError.notFound
+        case 502, 503:
+            throw CutuqueError.server(status: http.statusCode, message: "a máquina não respondeu (tente de novo)")
+        default:
+            throw CutuqueError.unexpected(status: http.statusCode)
+        }
+    }
+
+    /// Lista as máquinas que o hub conhece, com destino e origem. `GET /machines`.
+    /// Diferente de `targets()`, que devolve só os nomes para criar sessão.
+    func listMachines() async throws -> [Machine] {
+        let envelope: MachinesEnvelope = try await getJSON(["machines"])
+        return envelope.machines
+    }
+
+    private struct MachinesEnvelope: Decodable {
+        let machines: [Machine]
+    }
+
+    // MARK: - Cadastro de máquinas (aba Máquinas)
+
+    /// Cadastra uma máquina nova associada a uma identidade JÁ existente. O hub
+    /// gera o par de chaves da identidade (se ainda não tinha) e devolve a
+    /// PÚBLICA mais a impressão digital do host para conferência. `POST /machines`.
+    ///
+    /// Nada é confiado aqui: o cadastro nasce sem impressão confirmada e a
+    /// máquina só vira utilizável depois do `trustMachine`.
+    func createMachine(name: String, host: String, port: Int, identity: String, theme: String) async throws -> MachineCreated {
+        try await machineJSON(
+            "POST", ["machines"],
+            body: ["name": name, "host": host, "port": port, "identity": identity, "theme": theme],
+            ok: 201
+        )
+    }
+
+    /// Relê a impressão digital que o host está apresentando agora, para
+    /// conferência. `GET /machines/{n}/scan`.
+    ///
+    /// É o que salva um cadastro abandonado no meio: a impressão do
+    /// `createMachine` só existe naquela resposta, e sem isto a máquina ficaria
+    /// pendente para sempre.
+    func scanMachine(name: String) async throws -> String {
+        struct Resp: Decodable { let fingerprint: String }
+        let resp: Resp = try await machineJSON("GET", ["machines", name, "scan"], body: nil)
+        return resp.fingerprint
+    }
+
+    /// Confirma a impressão digital do host. O hub escaneia DE NOVO e compara —
+    /// host trocado depois do cadastro é recusado aqui. `POST /machines/{n}/trust`.
+    @discardableResult
+    func trustMachine(name: String, fingerprint: String) async throws -> Machine {
+        let envelope: MachineEnvelope = try await machineJSON(
+            "POST", ["machines", name, "trust"],
+            body: ["fingerprint": fingerprint]
+        )
+        return envelope.machine
+    }
+
+    /// Instala a chave da identidade da máquina no destino. `password` vazio ⇒
+    /// usa a senha JÁ GUARDADA na identidade (se ela tiver uma — senão o hub
+    /// responde `no_password`). `POST /machines/{n}/install-key`.
+    ///
+    /// Quando informada, a senha é de uso único: vai no corpo desta chamada e
+    /// não é guardada nem aqui nem no hub (a menos que a chamadora peça
+    /// explicitamente via `updateIdentity`, à parte). Só funciona depois do
+    /// trust — mandar senha para um host não conferido seria entregá-la a
+    /// quem estiver no meio.
+    func installKey(name: String, password: String = "") async throws {
+        let _: OKResponse = try await machineJSON(
+            "POST", ["machines", name, "install-key"],
+            body: ["password": password]
+        )
+    }
+
+    /// Detecta o sistema operacional do host e devolve a máquina com `os`
+    /// preenchido (alimenta `machine.osIcon`). `POST /machines/{n}/detect-os`.
+    /// Falhar aqui NÃO invalida o cadastro — é só o ícone; a chamadora decide
+    /// tratar como aviso, não como erro fatal.
+    @discardableResult
+    func detectOS(name: String) async throws -> Machine {
+        let envelope: MachineEnvelope = try await machineJSON("POST", ["machines", name, "detect-os"], body: nil)
+        return envelope.machine
+    }
+
+    /// Altera host, porta, identidade ou tema de uma máquina cadastrada pelo
+    /// app. Campo vazio = mantém o atual (regra do hub). `PATCH /machines/{n}`.
+    ///
+    /// Mudar o endereço derruba a confirmação do host: a máquina volta a pedir
+    /// conferência da impressão digital antes de conectar de novo.
+    @discardableResult
+    func updateMachine(name: String, host: String, port: Int, identity: String, theme: String) async throws -> Machine {
+        let envelope: MachineEnvelope = try await machineJSON(
+            "PATCH", ["machines", name],
+            body: ["host": host, "port": port, "identity": identity, "theme": theme]
+        )
+        return envelope.machine
+    }
+
+    /// Descadastra a máquina. NÃO apaga chave nenhuma — desde o redesenho a
+    /// chave é da identidade (reutilizada por outros hosts); quem apaga é o
+    /// `DELETE /identities/{id}`. `DELETE /machines/{n}`.
+    func deleteMachine(name: String) async throws {
+        _ = try await machineRequest("DELETE", ["machines", name], body: nil, ok: 204)
+    }
+
+    // MARK: - Identidades (aba Máquinas)
+    //
+    // Desde o redesenho no modelo Termius, usuário/chave/senha vivem na
+    // identidade — reutilizável entre hosts — e não mais na máquina.
+
+    /// Lista as identidades cadastradas, mais se o hub consegue guardar senha
+    /// cifrada (`canStorePassword` — controla se o campo de senha aparece ao
+    /// criar uma identidade nova). `GET /identities`.
+    func listIdentities() async throws -> IdentityListResponse {
+        try await getJSON(["identities"])
+    }
+
+    /// Cria uma identidade nova. `password` vazia = identidade só de chave (o
+    /// hub gera o par ed25519 de qualquer forma; só a chave PÚBLICA volta).
+    /// `POST /identities`.
+    func createIdentity(name: String, username: String, password: String) async throws -> IdentityCreated {
+        try await identityJSON(
+            "POST", ["identities"],
+            body: ["name": name, "username": username, "password": password],
+            ok: 201
+        )
+    }
+
+    /// Altera usuário e/ou senha de uma identidade. `password: nil` OMITE o
+    /// campo do JSON (mantém a senha guardada); `""` APAGA; texto novo troca.
+    /// NUNCA mande `""` sem querer apagar — é a diferença entre "mantém" e
+    /// "apaga o segredo da usuária sem ela pedir". `PATCH /identities/{n}`.
+    @discardableResult
+    func updateIdentity(name: String, username: String, password: String?) async throws -> Identity {
+        let body = Self.identityUpdateBody(username: username, password: password)
+        let envelope: IdentityEnvelope = try await identityJSON("PATCH", ["identities", name], body: body)
+        return envelope.identity
+    }
+
+    /// Monta o corpo do PATCH acima — extraído (puro, sem rede) pra dar pra
+    /// testar a regra de ouro sem mock de rede: `nil` não entra no dicionário
+    /// (mantém), `""` entra como string vazia (apaga).
+    static func identityUpdateBody(username: String, password: String?) -> [String: Any] {
+        var body: [String: Any] = ["username": username]
+        if let password { body["password"] = password }
+        return body
+    }
+
+    /// Apaga uma identidade — recusado (409) se alguma máquina ainda a usa.
+    /// `DELETE /identities/{n}`.
+    func deleteIdentity(name: String) async throws {
+        _ = try await identityRequest("DELETE", ["identities", name], body: nil, ok: 204)
+    }
+
+    /// Dispara uma chamada de identidade e decodifica o corpo de sucesso.
+    /// Espelha `machineJSON`/`machineRequest`, só trocando o tradutor de erro
+    /// (`identityErrorMessage`) — rotas diferentes, códigos de erro diferentes.
+    private func identityJSON<T: Decodable>(
+        _ method: String, _ segments: [String],
+        body: [String: Any]?, ok: Int = 200
+    ) async throws -> T {
+        let data = try await identityRequest(method, segments, body: body, ok: ok)
+        return try JSONDecoder.cutuque.decode(T.self, from: data)
+    }
+
+    private func identityRequest(
+        _ method: String, _ segments: [String],
+        body: [String: Any]?, ok: Int
+    ) async throws -> Data {
+        let url = segments.reduce(baseURL) { $0.appendingPathComponent($1) }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard http.statusCode != ok else { return data }
+        throw CutuqueError.server(
+            status: http.statusCode,
+            message: Self.identityErrorMessage(from: data, status: http.statusCode)
+        )
+    }
+
+    /// Traduz o erro de identidade para uma frase acionável — mesmo molde de
+    /// `machineErrorMessage` (detalhe do hub ganha de qualquer mapa fixo).
+    static func identityErrorMessage(from data: Data, status: Int) -> String {
+        struct Body: Decodable {
+            let error: String?
+            let detail: String?
+        }
+        let body = try? JSONDecoder().decode(Body.self, from: data)
+        if let detail = body?.detail, !detail.isEmpty { return detail }
+        switch body?.error {
+        case "invalid_identity":      return "nome ou usuário inválido"
+        case "cannot_store_password": return "este hub não guarda senha — cadastre só com chave"
+        case "duplicate_identity":    return "já existe uma identidade com esse nome"
+        case "unknown_identity":      return "identidade não encontrada"
+        case "identity_in_use":       return "identidade em uso por uma ou mais máquinas — remova das máquinas primeiro"
+        case let other?:              return other
+        case nil:                     return "erro inesperado (\(status))"
+        }
+    }
+
+    private struct OKResponse: Decodable { let ok: Bool }
+
+    /// Dispara uma chamada do cadastro e decodifica o corpo de sucesso.
+    private func machineJSON<T: Decodable>(
+        _ method: String, _ segments: [String],
+        body: [String: Any]?, ok: Int = 200
+    ) async throws -> T {
+        let data = try await machineRequest(method, segments, body: body, ok: ok)
+        return try JSONDecoder.cutuque.decode(T.self, from: data)
+    }
+
+    /// Chamada crua do cadastro, com o erro do hub por extenso.
+    ///
+    /// As rotas de cadastro respondem `{"error": código, "detail": "..."}`, e o
+    /// detalhe é justamente o que a usuária precisa ler: "a máquina respondeu
+    /// com SHA256:X e você confirmou SHA256:Y" é a diferença entre desistir e
+    /// entender que o host mudou. O `send` genérico jogaria isso fora.
+    private func machineRequest(
+        _ method: String, _ segments: [String],
+        body: [String: Any]?, ok: Int
+    ) async throws -> Data {
+        let url = segments.reduce(baseURL) { $0.appendingPathComponent($1) }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard http.statusCode != ok else { return data }
+        throw CutuqueError.server(
+            status: http.statusCode,
+            message: Self.machineErrorMessage(from: data, status: http.statusCode)
+        )
+    }
+
+    /// Traduz o erro do cadastro para uma frase que dá para agir. Quando o hub
+    /// manda `detail`, ele ganha: é a única parte que fala do caso concreto.
+    static func machineErrorMessage(from data: Data, status: Int) -> String {
+        struct Body: Decodable {
+            let error: String?
+            let detail: String?
+        }
+        let body = try? JSONDecoder().decode(Body.self, from: data)
+        if let detail = body?.detail, !detail.isEmpty { return detail }
+        switch body?.error {
+        case "duplicate_name":       return "já existe uma máquina com esse nome"
+        case "invalid_machine":      return "nome ou destino inválido"
+        case "read_only":            return "essa máquina vem do hub.env — quem manda nela é o hub"
+        case "unknown_machine":      return "máquina não encontrada"
+        case "not_trusted":          return "confirme a impressão digital antes de instalar a chave"
+        case "fingerprint_mismatch": return "a chave do host não é a que você confirmou"
+        case "scan_failed":          return "não deu para falar com o host (endereço, porta ou rede)"
+        case "install_failed":       return "o host recusou — confira a senha e se o usuário existe"
+        case "keygen_failed":        return "o hub não conseguiu gerar a chave"
+        case "unknown_identity":     return "identidade não encontrada — escolha outra"
+        case "no_password":          return "sem senha guardada na identidade — digite uma para instalar a chave"
+        case let other?:             return other
+        case nil:                    return "erro inesperado (\(status))"
+        }
+    }
+
+    /// Lista pastas E arquivos de um caminho na máquina (navegador de arquivos).
+    /// path vazio = home. `GET /machines/{machine}/fs?path=`.
+    func listFiles(machine: String, path: String) async throws -> FileListing {
+        try await getJSON(
+            ["machines", machine, "fs"],
+            query: path.isEmpty ? [] : [URLQueryItem(name: "path", value: path)]
+        )
+    }
+
+    /// Lê um arquivo de texto da máquina. Binário ou grande demais volta marcado
+    /// e sem conteúdo. `GET /machines/{machine}/fs/read?path=`.
+    func readFile(machine: String, path: String) async throws -> FileContent {
+        try await getJSON(
+            ["machines", machine, "fs", "read"],
+            query: [URLQueryItem(name: "path", value: path)]
+        )
+    }
+
+    /// Salva um arquivo de texto na máquina. Só sobrescreve arquivo que já
+    /// existe: se sumiu (ou virou pasta) desde que foi aberto, o hub devolve 404
+    /// e isto vira `.notFound`. `PUT /machines/{machine}/fs/write`.
+    @discardableResult
+    func writeFile(machine: String, path: String, content: String) async throws -> FileWrite {
+        let url = baseURL
+            .appendingPathComponent("machines")
+            .appendingPathComponent(machine)
+            .appendingPathComponent("fs")
+            .appendingPathComponent("write")
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(FileWriteRequest(path: path, content: content))
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        switch http.statusCode {
+        case 200:
+            return try JSONDecoder.cutuque.decode(FileWrite.self, from: data)
+        case 404:
+            throw CutuqueError.notFound
+        case 502, 503:
+            throw CutuqueError.server(status: http.statusCode, message: "não deu para salvar (a máquina não respondeu)")
+        default:
+            throw CutuqueError.unexpected(status: http.statusCode)
+        }
+    }
+
+    /// Corpo do PUT de escrita. O conteúdo vai como string JSON (texto), não
+    /// base64: o editor só abre arquivo de texto.
+    private struct FileWriteRequest: Encodable {
+        let path: String
+        let content: String
+    }
+
+    /// URL autenticável do download de um arquivo — usada pelo `downloadFile`.
+    /// Isolada para o teste conferir a montagem sem tocar a rede.
+    func downloadURL(machine: String, path: String) -> URL {
+        let url = baseURL
+            .appendingPathComponent("machines")
+            .appendingPathComponent(machine)
+            .appendingPathComponent("fs")
+            .appendingPathComponent("download")
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "path", value: path)]
+        return comps.url!
+    }
+
+    /// Baixa os bytes crus de um arquivo (inclusive binário) para um arquivo
+    /// temporário e devolve a URL local, pronta para o ShareLink.
+    /// `GET /machines/{machine}/fs/download?path=`.
+    func downloadFile(machine: String, path: String) async throws -> URL {
+        var request = URLRequest(url: downloadURL(machine: machine, path: path))
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        switch http.statusCode {
+        case 200:
+            // Subpasta única por download: dois arquivos de mesmo nome, de
+            // máquinas diferentes, não podem se sobrescrever no tmp.
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let name = (path as NSString).lastPathComponent
+            let dest = dir.appendingPathComponent(name.isEmpty ? "arquivo" : name)
+            try data.write(to: dest)
+            return dest
+        case 404:
+            throw CutuqueError.notFound
+        case 502, 503:
+            throw CutuqueError.server(status: http.statusCode, message: "não deu para baixar (a máquina não respondeu)")
+        default:
+            throw CutuqueError.unexpected(status: http.statusCode)
+        }
+    }
+
     /// Lista as sessões do Claude RODANDO agora numa máquina (processo vivo +
     /// transcript recente) — as "ao vivo" que aparecem na home.
     /// `GET /machines/{machine}/live`. Erros são engolidos em `[]` (é um poll de
