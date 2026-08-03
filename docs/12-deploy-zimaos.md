@@ -40,9 +40,11 @@ MacBook via `ssh`) e produz uma imagem self-contained.
    container do servidor, que não é o que se quer aqui).
 
    `CUTUQUE_IDENTITY_KEY` cifra as senhas guardadas nas identidades da aba
-   Máquinas (AES-256-GCM). Gere com `openssl rand -base64 32` — precisa dar
-   exatamente 32 bytes depois do base64, e o hub recusa subir com a cifra meio
-   configurada. Deixar vazia é uma escolha válida: o hub sobe e passa a
+   Máquinas (AES-256-GCM). **No ZimaOS não existe `openssl`** — nem no host nem
+   na imagem alpine do hub, então o `openssl rand -base64 32` que se lê em todo
+   lugar falha exatamente aqui. Use `head -c 32 /dev/urandom | base64 -w0`.
+   Confira o tamanho antes de subir (`printf %s "$K" | base64 -d | wc -c` = 32):
+   o hub recusa subir com a cifra meio configurada. Deixar vazia é uma escolha válida: o hub sobe e passa a
    **recusar** guardar senha (o app deixa de oferecer o campo, e cada instalação
    de chave pede a senha na hora). Guardar em claro nunca é a alternativa.
 
