@@ -870,6 +870,103 @@ func TestDeleteMachineInexistenteE404(t *testing.T) {
 	}
 }
 
+// MARK: PUT /machines/{n}/appearance
+
+func TestPutAppearanceTrocaTemaEIcone(t *testing.T) {
+	mreg, idents := registroComVPS(t)
+	rec := doAdmin(t, mreg, newFakeKeys(), idents, http.MethodPut, "/machines/vps/appearance",
+		`{"theme":"dracula","icon":"apple"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, esperava 200: %s", rec.Code, rec.Body.String())
+	}
+	m, _ := mreg.Get("vps")
+	if m.Theme != "dracula" || m.Icon != "apple" {
+		t.Errorf("aparência não pegou: %+v", m)
+	}
+	// O app desenha o ícone a partir daqui: se não vier na resposta, a tela volta
+	// ao valor antigo assim que recarrega.
+	if !strings.Contains(rec.Body.String(), `"icon":"apple"`) {
+		t.Errorf("o ícone não voltou na resposta: %s", rec.Body.String())
+	}
+}
+
+// PUT, não PATCH: vazio é escolha ("Padrão"/"Automático"), não omissão. É este
+// caso que o PATCH não conseguia expressar.
+func TestPutAppearanceVaziosVoltamAoPadrao(t *testing.T) {
+	mreg, idents := registroComVPS(t)
+	_, _ = mreg.SetAppearance("vps", "nord", "pc")
+
+	rec := doAdmin(t, mreg, newFakeKeys(), idents, http.MethodPut, "/machines/vps/appearance",
+		`{"theme":"","icon":""}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, esperava 200: %s", rec.Code, rec.Body.String())
+	}
+	if m, _ := mreg.Get("vps"); m.Theme != "" || m.Icon != "" {
+		t.Errorf("vazio não voltou ao padrão: %+v", m)
+	}
+}
+
+// A rota existe separada do PATCH exatamente para não ter como derrubar a
+// confiança do host. Aparência não afeta conexão.
+func TestPutAppearanceNaoDerrubaFingerprintNemSO(t *testing.T) {
+	mreg, idents := registroComVPS(t)
+	_ = mreg.SetFingerprint("vps", "SHA256:confirmado")
+	_ = mreg.SetOS("vps", "Darwin 24.5.0")
+
+	rec := doAdmin(t, mreg, newFakeKeys(), idents, http.MethodPut, "/machines/vps/appearance",
+		`{"theme":"oneDark","icon":"server"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, esperava 200: %s", rec.Code, rec.Body.String())
+	}
+	m, _ := mreg.Get("vps")
+	if m.HostFingerprint != "SHA256:confirmado" || m.OS != "Darwin 24.5.0" {
+		t.Errorf("aparência mexeu em fingerprint ou SO: %+v", m)
+	}
+	if m.Dest != "vx@192.0.2.50" || m.Port != 2222 {
+		t.Errorf("aparência mexeu no destino: %+v", m)
+	}
+}
+
+func TestPutAppearanceIDMalformadoE400(t *testing.T) {
+	mreg, idents := registroComVPS(t)
+	_, _ = mreg.SetAppearance("vps", "nord", "apple")
+
+	rec := doAdmin(t, mreg, newFakeKeys(), idents, http.MethodPut, "/machines/vps/appearance",
+		`{"theme":"../../etc/passwd","icon":""}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, esperava 400: %s", rec.Code, rec.Body.String())
+	}
+	if got := erroDe(t, rec); got != "invalid_appearance" {
+		t.Errorf("erro = %q", got)
+	}
+	if m, _ := mreg.Get("vps"); m.Theme != "nord" || m.Icon != "apple" {
+		t.Errorf("a recusa mexeu na aparência guardada: %+v", m)
+	}
+}
+
+func TestPutAppearanceDoEnvE403EInexistenteE404(t *testing.T) {
+	mreg := machine.NewRegistry([]machine.Machine{
+		{Name: "macbook", Dest: "vx@host", Port: 22, Source: machine.SourceEnv},
+	})
+	idents := identidadeComChave(t, "vx", "vx")
+
+	rec := doAdmin(t, mreg, newFakeKeys(), idents, http.MethodPut, "/machines/macbook/appearance", `{"theme":"nord"}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("env: status %d, esperava 403: %s", rec.Code, rec.Body.String())
+	}
+	if got := erroDe(t, rec); got != "read_only" {
+		t.Errorf("env: erro = %q", got)
+	}
+	if m, _ := mreg.Get("macbook"); m.Theme != "" {
+		t.Errorf("a máquina do env aceitou tema: %+v", m)
+	}
+
+	rec = doAdmin(t, mreg, newFakeKeys(), idents, http.MethodPut, "/machines/fantasma/appearance", `{"theme":"nord"}`)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("inexistente: status %d, esperava 404: %s", rec.Code, rec.Body.String())
+	}
+}
+
 // MARK: token
 
 // Cadastrar máquina instala chave em host remoto: nenhuma dessas rotas pode
@@ -882,6 +979,7 @@ func TestRotasDeCadastroExigemToken(t *testing.T) {
 		{http.MethodPost, "/machines/vps/trust", `{"fingerprint":"SHA256:x"}`},
 		{http.MethodPost, "/machines/vps/install-key", `{"password":"x"}`},
 		{http.MethodPost, "/machines/vps/detect-os", ""},
+		{http.MethodPut, "/machines/vps/appearance", `{"theme":"nord"}`},
 	}
 	for _, c := range casos {
 		mreg, idents := registroComVPS(t)

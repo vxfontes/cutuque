@@ -79,6 +79,9 @@ type IdentityStore struct {
 	// box cifra as senhas. nil = hub sem CUTUQUE_IDENTITY_KEY: identidade
 	// funciona, mas guardar senha é recusado com ErrNoSecretKey.
 	box *secretBox
+	// saveMu serializa a gravação, pelo mesmo motivo do Registry — e aqui o
+	// arquivo publicado pela metade levaria o segredo cifrado com ele.
+	saveMu sync.Mutex
 }
 
 // NewIdentityStore cria o registro em memória, sem cifra. Para teste e para o
@@ -162,6 +165,9 @@ func (s *IdentityStore) persist() error {
 	if s.path == "" {
 		return nil
 	}
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+
 	s.mu.RLock()
 	dis := make([]diskIdentity, 0, len(s.order))
 	for _, n := range s.order {

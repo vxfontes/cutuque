@@ -238,6 +238,7 @@ callback: o store de identidades não conhece máquinas, e não deveria.
 | `PATCH/DELETE /machines/{n}` | só para `source: app` |
 | `POST /machines/{n}/install-key` | instala a pública no destino; senha vazia ⇒ usa a guardada na identidade |
 | `POST /machines/{n}/detect-os` | conecta com a chave, lê o SO, grava `os` (D10) |
+| `PUT /machines/{n}/appearance` | tema do terminal + ícone escolhido à mão; **PUT**, então vazio = volta ao padrão |
 | `GET /machines/{n}/scan` | relê o fingerprint do host, sem confiar em nada — retoma cadastro abandonado |
 | `POST /machines/{n}/trust` | confirma o fingerprint (TOFU) e grava no `known_hosts` próprio |
 | `GET /machines/{n}/pty` | **WebSocket**: proxy de `ssh -tt` com PTY |
@@ -251,6 +252,16 @@ callback: o store de identidades não conhece máquinas, e não deveria.
 `/machines` é o recurso rico da aba nova. Ambos leem a mesma fonte, então uma
 máquina cadastrada pelo app também passa a poder hospedar sessão de agente —
 consequência desejada, sem trabalho extra.
+
+**Aparência tem rota própria, e é PUT.** Tema e ícone não entram no `PATCH
+/machines/{n}` por dois motivos. Semântica: no PATCH, campo vazio significa
+"mantém o atual", e o id do tema Padrão é justamente a string vazia — pelo PATCH
+não haveria como *voltar* ao Padrão. O `PUT .../appearance` substitui, então vazio
+é uma escolha ("Padrão", "Automático"). Segurança: aparência não afeta conexão, e
+uma rota que por construção não alcança host, porta, identidade nem fingerprint
+não tem como derrubar uma confiança que a usuária conferiu à mão. O `os` detectado
+fica intacto — ícone manual é escolha, SO é fato, e guardar os dois é o que
+permite voltar ao automático depois.
 
 **Alcance é sob demanda, não em varredura.** A lista **não** testa conexão de
 todas as máquinas ao abrir: seriam N handshakes SSH a cada refresh. O estado
