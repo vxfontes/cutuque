@@ -85,6 +85,64 @@ final class MachineFileTests: XCTestCase {
         XCTAssertEqual(c.fingerprint, "SHA256:abc")
     }
 
+    // MARK: - Campos novos (host, identity, os, theme) — modelo Termius
+
+    /// Desde a separação host/identidade, `POST /machines` guarda esses campos
+    /// à parte de `dest` (que o hub continua derivando, só pra exibição).
+    func testMachineDecodificaCamposDoModeloTermius() throws {
+        let m: Machine = try decode(#"""
+        {"name":"vps1","dest":"vx@203.0.113.9","port":22,"source":"app",
+         "host":"203.0.113.9","identity":"pessoal","os":"Ubuntu 22.04","theme":"dracula"}
+        """#)
+        XCTAssertEqual(m.host, "203.0.113.9")
+        XCTAssertEqual(m.identity, "pessoal")
+        XCTAssertEqual(m.os, "Ubuntu 22.04")
+        XCTAssertEqual(m.theme, "dracula")
+    }
+
+    /// Máquina do `hub.env` não tem esses campos — só `dest` pronto. Ausência
+    /// não pode virar erro de decode: os quatro são opcionais de propósito.
+    func testMachineSemCamposNovosDecodificaComNilSemErro() throws {
+        let doEnv: Machine = try decode(#"{"name":"b","dest":"vx@host","port":22,"source":"env"}"#)
+        XCTAssertNil(doEnv.host)
+        XCTAssertNil(doEnv.identity)
+        XCTAssertNil(doEnv.os)
+        XCTAssertNil(doEnv.theme)
+    }
+
+    // MARK: - osIcon
+
+    /// O ícone reflete o SO CONFIRMADO pelo `/detect-os` — não mais um palpite
+    /// por nome/dest. Cobre as três famílias e o "ainda não sei" (default).
+    func testOsIconMapeiaAsFamiliasConhecidas() throws {
+        func machineComOs(_ valor: String?) throws -> Machine {
+            var json = "{\"name\":\"a\",\"dest\":\"vx@h\",\"port\":22,\"source\":\"app\""
+            if let valor { json += ",\"os\":\"\(valor)\"" }
+            json += "}"
+            return try decode(json)
+        }
+        XCTAssertEqual(try machineComOs("Darwin").osIcon, "apple.logo")
+        XCTAssertEqual(try machineComOs("macOS 14.5").osIcon, "apple.logo")
+        XCTAssertEqual(try machineComOs("Ubuntu 22.04").osIcon, "terminal")
+        XCTAssertEqual(try machineComOs("Debian GNU/Linux 12").osIcon, "terminal")
+        XCTAssertEqual(try machineComOs("Alpine Linux").osIcon, "terminal")
+        XCTAssertEqual(try machineComOs("Arch Linux").osIcon, "terminal")
+        XCTAssertEqual(try machineComOs("Fedora Linux 40").osIcon, "terminal")
+        XCTAssertEqual(try machineComOs("Windows 11").osIcon, "pc")
+        // WSL ganha o ícone da DISTRO, não o do Windows, e é o certo: o que o
+        // hub recebe de um host WSL2 é o `PRETTY_NAME` do `/etc/os-release`
+        // ("Ubuntu 22.04.3 LTS") — a palavra "WSL" não aparece, porque quem
+        // responde o ssh é o userland Ubuntu. Casa com a decisão #11 ("Windows
+        // via WSL2 — alvo idêntico ao Mac"): do ponto de vista da aba, é unix.
+        // O ramo do "pc" existe pro OpenSSH nativo do Windows, que responde
+        // string com "Windows" e aí não tem distro nenhuma no meio.
+        XCTAssertEqual(try machineComOs("WSL2 Ubuntu").osIcon, "terminal")
+        XCTAssertEqual(try machineComOs("Linux 5.15.0-microsoft-standard-WSL2").osIcon, "terminal")
+        XCTAssertEqual(try machineComOs(nil).osIcon, "desktopcomputer")
+        XCTAssertEqual(try machineComOs("").osIcon, "desktopcomputer")
+        XCTAssertEqual(try machineComOs("SunOS 5.11").osIcon, "desktopcomputer", "família desconhecida cai no default")
+    }
+
     // MARK: - Erros do cadastro
 
     /// Quando o hub explica o caso concreto, é o detalhe que a usuária precisa

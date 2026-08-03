@@ -190,9 +190,15 @@ final class NavigationStateTests: XCTestCase {
     // ver. Um terminal na terceira coluna de um iPad em pé quebra a linha do
     // prompt de verdade.
 
+    /// Máquina cadastrada pelo app no modelo novo: `host` e `identity` separados,
+    /// `dest` só como o que o hub derivou (`vx@192.0.2.50`). Estes testes são de
+    /// navegação — não olham identidade nem tema —, mas os campos vão preenchidos
+    /// de propósito: fixture com `nil` em tudo passaria mesmo se a tela de
+    /// máquinas parasse de receber identidade do hub.
     private func makeMachine(_ name: String = "vps") -> Machine {
         Machine(name: name, dest: "vx@192.0.2.50", port: 22, source: "app",
-                hostFingerprint: "SHA256:abc")
+                hostFingerprint: "SHA256:abc",
+                host: "192.0.2.50", identity: "vx", os: "Darwin 24.5.0", theme: "dracula")
     }
 
     func testMaquinasComHostAbertoEmRetratoColapsaDetailOnly() {

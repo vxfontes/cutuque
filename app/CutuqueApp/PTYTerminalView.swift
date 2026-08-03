@@ -19,9 +19,16 @@ struct PTYTerminalView: UIViewRepresentable {
     /// Falso quando o terminal está montado mas escondido atrás do painel de
     /// arquivos. Não desmonta nem fecha: para de consumir o socket.
     var isActive: Bool
-    /// Tema, compartilhado com o espelho do tmux — as duas telas de terminal do
-    /// app não deveriam ter aparências divergentes.
-    var theme: TerminalTheme
+    /// Id da paleta (vem de `machine.theme`; `""` = Padrão). STRING, não o
+    /// objeto: é o mesmo formato que o hub guarda e que o
+    /// `TerminalThemePicker` faz binding, então quem cadastra a máquina e
+    /// quem desenha o terminal não trocam tipo nenhum entre si — só essa
+    /// string. Resolvida pra `TerminalPalette` aqui dentro, via `byID`.
+    ///
+    /// Diverge de propósito do espelho do tmux (`TerminalMirrorView`), que
+    /// segue com o `TerminalTheme` (enum) como preferência GLOBAL do app: a
+    /// usuária pediu tema por MÁQUINA aqui, não migração do espelho antigo.
+    var themeID: String
     var fontSize: CGFloat
 
     func makeUIView(context: Context) -> TerminalView {
@@ -29,7 +36,8 @@ struct PTYTerminalView: UIViewRepresentable {
         view.terminalDelegate = context.coordinator
         // O terminal aceita foco por toque; o teclado do sistema sobe sozinho.
         view.isOpaque = false
-        aplica(tema: theme, em: view)
+        aplica(tema: themeID, em: view)
+        context.coordinator.temaAplicado = themeID
 
         // O emulador é o dono do fluxo de saída: os bytes vão direto para ele,
         // sem passar por estado do SwiftUI. Uma tela cheia de `htop` a cada
@@ -48,7 +56,21 @@ struct PTYTerminalView: UIViewRepresentable {
         if view.font.pointSize != fontSize {
             view.font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
         }
-        aplica(tema: theme, em: view)
+        // Troca de tema passa por aqui como qualquer outra atualização de
+        // estado do SwiftUI — não mexe na `PTYSession`, então reflete na tela
+        // sem reconectar (reconectar perderia o que já está desenhado e
+        // mataria o comando em execução).
+        //
+        // SÓ quando mudou de verdade, pelo mesmo motivo do `pointSize` acima:
+        // `installColors` joga fora o cache de atributos, chama
+        // `updateFullScreen()` (marca toda linha como suja) e enfileira
+        // redesenho. Aplicar a cada `updateUIView` faria subir o teclado,
+        // esconder o painel ou qualquer re-render do pai repintar a tela
+        // inteira — no meio de um `htop` isso aparece como engasgo.
+        if context.coordinator.temaAplicado != themeID {
+            aplica(tema: themeID, em: view)
+            context.coordinator.temaAplicado = themeID
+        }
 
         // Painel escondido não fica com o teclado: sem isto, tocar em
         // "Arquivos" deixaria o teclado do terminal em pé sobre a outra tela.
@@ -65,10 +87,16 @@ struct PTYTerminalView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    private func aplica(tema: TerminalTheme, em view: TerminalView) {
-        view.nativeBackgroundColor = UIColor(tema.bg)
-        view.nativeForegroundColor = UIColor(tema.fg)
-        view.caretColor = UIColor(tema.fg)
+    private func aplica(tema id: String, em view: TerminalView) {
+        let paleta = TerminalPalette.byID(id)
+        view.nativeBackgroundColor = paleta.nativeBackground
+        view.nativeForegroundColor = paleta.nativeForeground
+        view.caretColor = paleta.nativeCursor
+        // `installColors` exige EXATAMENTE 16 cores — com qualquer outra
+        // contagem ela não faz nada, em silêncio, sem erro nem log. O
+        // catálogo garante 16 (testado), mas a armadilha é da lib, não do
+        // catálogo: vale o comentário pra quem mexer aqui depois.
+        view.installColors(paleta.ansiSwiftTermColors)
     }
 
     /// Ponte com o SwiftTerm. Os métodos sem default no protocolo precisam
@@ -83,6 +111,11 @@ struct PTYTerminalView: UIViewRepresentable {
     final class Coordinator: NSObject, TerminalViewDelegate {
         @MainActor var session: PTYSession?
         @MainActor var isActive = true
+        /// Último tema instalado nesta view. Fica no coordinator porque a
+        /// struct da `UIViewRepresentable` é recriada a cada atualização —
+        /// guardar aqui é a única forma de saber se o tema mudou. `nil` = nada
+        /// instalado ainda (não `""`, que é um tema de verdade, o Padrão).
+        @MainActor var temaAplicado: String?
 
         /// O emulador mediu quantas células cabem. É a ÚNICA fonte do tamanho:
         /// quem desenha é quem sabe.

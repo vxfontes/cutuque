@@ -282,13 +282,25 @@ struct DirListing: Decodable {
 /// é a própria máquina do hub (source "local"). `GET /machines`.
 struct Machine: Decodable, Identifiable, Hashable {
     let name: String
-    /// Destino ssh: alias do `~/.ssh/config` ou `user@host`.
+    /// Destino ssh: alias do `~/.ssh/config` ou `user@host`. Vem SEMPRE do hub
+    /// (derivado de `username@host` pela identidade) — é só exibição.
     let dest: String
     let port: Int
     let source: String
     /// Impressão digital da chave do host, confirmada no cadastro (TOFU).
     /// Ausente = ainda não confiada: o hub se recusa a conectar.
     let hostFingerprint: String?
+    /// Hostname/IP puro (sem usuário) — desde o redesenho no modelo Termius,
+    /// host e identidade são objetos separados. Ausente em máquinas do
+    /// `hub.env` (só têm `dest` pronto).
+    let host: String?
+    /// Nome da identidade usada pra conectar — reutilizável entre hosts.
+    let identity: String?
+    /// SO detectado no cadastro ("Darwin", "Ubuntu 22.04"...). Vazio até o
+    /// `/detect-os` rodar, ou pra sempre se ele falhar (não é fatal: só o ícone).
+    let os: String?
+    /// Id do tema de terminal escolhido pra este host; "" ou nil = padrão.
+    let theme: String?
     var id: String { name }
 
     /// A máquina onde o próprio hub roda — não tem ssh no meio.
@@ -308,6 +320,24 @@ struct Machine: Decodable, Identifiable, Hashable {
         if isLocal { return "aqui mesmo" }
         return port == 22 || port == 0 ? dest : "\(dest):\(port)"
     }
+
+    /// Ícone pelo SO detectado (`/detect-os`) — substitui qualquer palpite por
+    /// nome/dest por um fato que o hub confirmou de verdade.
+    ///
+    /// A ORDEM é de propósito: distro ganha do Windows. Um host WSL2 responde o
+    /// `PRETTY_NAME` do `/etc/os-release` ("Ubuntu 22.04.3 LTS") — sem a palavra
+    /// "WSL", porque quem atende o ssh é o userland Ubuntu —, e mesmo pelo
+    /// fallback do `uname -sr` vem "Linux ...-microsoft-standard-WSL2", que
+    /// também casa em "linux" primeiro. O ramo do "pc" é pro OpenSSH nativo do
+    /// Windows. Reordenar isso trocaria o ícone de todo WSL por um PC.
+    var osIcon: String {
+        let s = (os ?? "").lowercased()
+        if s.contains("darwin") || s.contains("macos") { return "apple.logo" }
+        if s.contains("ubuntu") || s.contains("debian") || s.contains("linux")
+            || s.contains("alpine") || s.contains("arch") || s.contains("fedora") { return "terminal" }
+        if s.contains("windows") || s.contains("wsl") { return "pc" }
+        return "desktopcomputer" // vazio/desconhecido
+    }
 }
 
 /// Resposta do cadastro de uma máquina nova (`POST /machines`).
@@ -326,6 +356,40 @@ struct MachineCreated: Decodable {
 /// Envelope de `{"machine": {...}}` — resposta do trust e do patch.
 struct MachineEnvelope: Decodable {
     let machine: Machine
+}
+
+// MARK: - Identidades (aba Máquinas)
+
+/// Uma identidade de acesso (usuário + chave + senha opcional) reutilizável
+/// entre hosts — separada da máquina desde o redesenho no modelo Termius: a
+/// mesma conta de uma VPS não precisa ser recriada a cada host novo dela.
+struct Identity: Decodable, Identifiable, Hashable {
+    let name: String
+    let username: String
+    /// Se o hub guarda senha cifrada para ela — decide se `install-key` pode
+    /// usar `password: ""` (senha guardada) ou se precisa pedir na hora.
+    let hasPassword: Bool
+    var id: String { name }
+}
+
+/// Resposta de `GET /identities`. `canStorePassword` reflete a config do hub
+/// (nem todo hub cifra senha) — controla se o campo de senha aparece ao criar
+/// uma identidade nova.
+struct IdentityListResponse: Decodable {
+    let identities: [Identity]
+    let canStorePassword: Bool
+}
+
+/// Resposta de `POST /identities`: a identidade criada e a chave PÚBLICA
+/// gerada para ela — a privada nasce e fica no hub, nunca sai de lá.
+struct IdentityCreated: Decodable {
+    let identity: Identity
+    let publicKey: String
+}
+
+/// Envelope de `{"identity": {...}}` — resposta do PATCH.
+struct IdentityEnvelope: Decodable {
+    let identity: Identity
 }
 
 /// Uma entrada (pasta ou arquivo) no navegador de arquivos da aba Máquinas.

@@ -21,11 +21,12 @@ struct MachineDetailView: View {
     /// que há o que refazer.
     @State private var reconectando = false
 
-    @AppStorage("cutuque.terminalTheme") private var themeRaw = TerminalTheme.dark.rawValue
     @AppStorage("cutuque.terminalFont") private var fontPhone: Double = 10
     @AppStorage("cutuque.terminalFont.pad") private var fontPad: Double = 13
 
-    private var theme: TerminalTheme { TerminalTheme(rawValue: themeRaw) ?? .dark }
+    /// Tema É por máquina agora (pedido da usuária) — não mais preferência
+    /// global. `""`/ausente cai no Padrão dentro do próprio `TerminalPalette`.
+    private var paleta: TerminalPalette { TerminalPalette.byID(machine.theme ?? "") }
     private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
     private var fontPt: CGFloat { CGFloat(isPad ? fontPad : fontPhone) }
 
@@ -58,6 +59,7 @@ struct MachineDetailView: View {
         .navigationTitle(machine.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) { identidadeENavigationBarLeading }
             ToolbarItem(placement: .principal) { seletor }
         }
         // Empilhar uma subpasta chama o `onDisappear` desta view: o terminal
@@ -78,6 +80,22 @@ struct MachineDetailView: View {
         }
     }
 
+    /// Ícone pelo SO detectado + usuário da identidade, quando há — pista de
+    /// "em quem" e "onde" sem abrir outra tela. Ao lado do botão de voltar
+    /// automático: fica compacto de propósito (não é lugar pra texto longo).
+    @ViewBuilder
+    private var identidadeENavigationBarLeading: some View {
+        if let identidade = machine.identity, !identidade.isEmpty {
+            Label(identidade, systemImage: machine.osIcon)
+                .labelStyle(.titleAndIcon)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            Image(systemName: machine.osIcon)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private var seletor: some View {
         Picker("Painel", selection: Binding(get: { pane }, set: { paneRaw = $0.rawValue })) {
             ForEach(MachinePane.allCases, id: \.self) { p in
@@ -92,10 +110,10 @@ struct MachineDetailView: View {
     @ViewBuilder
     private var terminalPane: some View {
         ZStack {
-            theme.bg.ignoresSafeArea(edges: .bottom)
+            paleta.backgroundColor.ignoresSafeArea(edges: .bottom)
 
             PTYTerminalView(session: session, isActive: terminalAtivo,
-                            theme: theme, fontSize: fontPt)
+                            themeID: machine.theme ?? "", fontSize: fontPt)
                 // O teclado do sistema sobe por cima; sem isto ele cobriria as
                 // últimas linhas em vez de empurrá-las.
                 .ignoresSafeArea(.keyboard, edges: .bottom)

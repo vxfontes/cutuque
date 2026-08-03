@@ -102,7 +102,12 @@ struct MachineListView: View {
         ) { m in
             Button("Remover", role: .destructive) { Task { await apagar(m) } }
         } message: { _ in
-            Text("O cadastro e a chave privada saem do hub. A máquina em si não é tocada.")
+            // A chave NÃO sai mais: desde o redesenho ela pertence à identidade,
+            // que é compartilhada com os outros hosts. Prometer que ela sai era
+            // mentira em duas direções — sugeria uma limpeza que não acontece, e
+            // assustava sobre perder acesso aos outros hosts da mesma identidade.
+            // Quem apaga chave é o DELETE da identidade.
+            Text("Só o cadastro sai do hub. A identidade e a chave dela ficam (outros hosts usam), e a máquina em si não é tocada.")
         }
     }
 
@@ -133,13 +138,18 @@ struct MachineListView: View {
     }
 
     private func linha(_ machine: Machine) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: machine.isLocal ? "desktopcomputer" : "server.rack")
+        // Ícone pelo SO confirmado no `/detect-os`, não mais o palpite
+        // `isLocal ? desktopcomputer : server.rack` — máquina local também cai
+        // no "desconhecido" do `osIcon` (desktopcomputer), então o caso comum
+        // não muda de cara; o que muda é a remota sem SO detectado ainda.
+        let identidade = (machine.identity?.isEmpty == false) ? machine.identity : nil
+        return HStack(spacing: 10) {
+            Image(systemName: machine.osIcon)
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
                 Text(machine.name)
                     .foregroundStyle(.primary)
-                Text(machine.displayDest)
+                Text(identidade.map { "\(machine.displayDest) · \($0)" } ?? machine.displayDest)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

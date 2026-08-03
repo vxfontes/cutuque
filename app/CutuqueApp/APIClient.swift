@@ -469,16 +469,16 @@ struct APIClient {
 
     // MARK: - Cadastro de máquinas (aba Máquinas)
 
-    /// Cadastra uma máquina nova. O hub gera o par de chaves e devolve a
-    /// PÚBLICA mais a impressão digital do host para conferência.
-    /// `POST /machines`.
+    /// Cadastra uma máquina nova associada a uma identidade JÁ existente. O hub
+    /// gera o par de chaves da identidade (se ainda não tinha) e devolve a
+    /// PÚBLICA mais a impressão digital do host para conferência. `POST /machines`.
     ///
     /// Nada é confiado aqui: o cadastro nasce sem impressão confirmada e a
     /// máquina só vira utilizável depois do `trustMachine`.
-    func createMachine(name: String, dest: String, port: Int) async throws -> MachineCreated {
+    func createMachine(name: String, host: String, port: Int, identity: String, theme: String) async throws -> MachineCreated {
         try await machineJSON(
             "POST", ["machines"],
-            body: ["name": name, "dest": dest, "port": port],
+            body: ["name": name, "host": host, "port": port, "identity": identity, "theme": theme],
             ok: 201
         )
     }
@@ -506,37 +506,153 @@ struct APIClient {
         return envelope.machine
     }
 
-    /// Instala a chave pública do Cutuque no destino, autenticando uma vez com a
-    /// senha da máquina. `POST /machines/{n}/install-key`.
+    /// Instala a chave da identidade da máquina no destino. `password` vazio ⇒
+    /// usa a senha JÁ GUARDADA na identidade (se ela tiver uma — senão o hub
+    /// responde `no_password`). `POST /machines/{n}/install-key`.
     ///
-    /// A senha é de uso único: vai no corpo desta chamada e não é guardada nem
-    /// aqui nem no hub. Só funciona depois do trust — mandar senha para um host
-    /// não conferido seria entregá-la a quem estiver no meio.
-    func installKey(name: String, password: String) async throws {
+    /// Quando informada, a senha é de uso único: vai no corpo desta chamada e
+    /// não é guardada nem aqui nem no hub (a menos que a chamadora peça
+    /// explicitamente via `updateIdentity`, à parte). Só funciona depois do
+    /// trust — mandar senha para um host não conferido seria entregá-la a
+    /// quem estiver no meio.
+    func installKey(name: String, password: String = "") async throws {
         let _: OKResponse = try await machineJSON(
             "POST", ["machines", name, "install-key"],
             body: ["password": password]
         )
     }
 
-    /// Altera destino e porta de uma máquina cadastrada pelo app.
-    /// `PATCH /machines/{n}`.
+    /// Detecta o sistema operacional do host e devolve a máquina com `os`
+    /// preenchido (alimenta `machine.osIcon`). `POST /machines/{n}/detect-os`.
+    /// Falhar aqui NÃO invalida o cadastro — é só o ícone; a chamadora decide
+    /// tratar como aviso, não como erro fatal.
+    @discardableResult
+    func detectOS(name: String) async throws -> Machine {
+        let envelope: MachineEnvelope = try await machineJSON("POST", ["machines", name, "detect-os"], body: nil)
+        return envelope.machine
+    }
+
+    /// Altera host, porta, identidade ou tema de uma máquina cadastrada pelo
+    /// app. Campo vazio = mantém o atual (regra do hub). `PATCH /machines/{n}`.
     ///
     /// Mudar o endereço derruba a confirmação do host: a máquina volta a pedir
     /// conferência da impressão digital antes de conectar de novo.
     @discardableResult
-    func updateMachine(name: String, dest: String, port: Int) async throws -> Machine {
+    func updateMachine(name: String, host: String, port: Int, identity: String, theme: String) async throws -> Machine {
         let envelope: MachineEnvelope = try await machineJSON(
             "PATCH", ["machines", name],
-            body: ["dest": dest, "port": port]
+            body: ["host": host, "port": port, "identity": identity, "theme": theme]
         )
         return envelope.machine
     }
 
-    /// Descadastra a máquina e apaga a chave privada dela no hub.
-    /// `DELETE /machines/{n}`.
+    /// Descadastra a máquina. NÃO apaga chave nenhuma — desde o redesenho a
+    /// chave é da identidade (reutilizada por outros hosts); quem apaga é o
+    /// `DELETE /identities/{id}`. `DELETE /machines/{n}`.
     func deleteMachine(name: String) async throws {
         _ = try await machineRequest("DELETE", ["machines", name], body: nil, ok: 204)
+    }
+
+    // MARK: - Identidades (aba Máquinas)
+    //
+    // Desde o redesenho no modelo Termius, usuário/chave/senha vivem na
+    // identidade — reutilizável entre hosts — e não mais na máquina.
+
+    /// Lista as identidades cadastradas, mais se o hub consegue guardar senha
+    /// cifrada (`canStorePassword` — controla se o campo de senha aparece ao
+    /// criar uma identidade nova). `GET /identities`.
+    func listIdentities() async throws -> IdentityListResponse {
+        try await getJSON(["identities"])
+    }
+
+    /// Cria uma identidade nova. `password` vazia = identidade só de chave (o
+    /// hub gera o par ed25519 de qualquer forma; só a chave PÚBLICA volta).
+    /// `POST /identities`.
+    func createIdentity(name: String, username: String, password: String) async throws -> IdentityCreated {
+        try await identityJSON(
+            "POST", ["identities"],
+            body: ["name": name, "username": username, "password": password],
+            ok: 201
+        )
+    }
+
+    /// Altera usuário e/ou senha de uma identidade. `password: nil` OMITE o
+    /// campo do JSON (mantém a senha guardada); `""` APAGA; texto novo troca.
+    /// NUNCA mande `""` sem querer apagar — é a diferença entre "mantém" e
+    /// "apaga o segredo da usuária sem ela pedir". `PATCH /identities/{n}`.
+    @discardableResult
+    func updateIdentity(name: String, username: String, password: String?) async throws -> Identity {
+        let body = Self.identityUpdateBody(username: username, password: password)
+        let envelope: IdentityEnvelope = try await identityJSON("PATCH", ["identities", name], body: body)
+        return envelope.identity
+    }
+
+    /// Monta o corpo do PATCH acima — extraído (puro, sem rede) pra dar pra
+    /// testar a regra de ouro sem mock de rede: `nil` não entra no dicionário
+    /// (mantém), `""` entra como string vazia (apaga).
+    static func identityUpdateBody(username: String, password: String?) -> [String: Any] {
+        var body: [String: Any] = ["username": username]
+        if let password { body["password"] = password }
+        return body
+    }
+
+    /// Apaga uma identidade — recusado (409) se alguma máquina ainda a usa.
+    /// `DELETE /identities/{n}`.
+    func deleteIdentity(name: String) async throws {
+        _ = try await identityRequest("DELETE", ["identities", name], body: nil, ok: 204)
+    }
+
+    /// Dispara uma chamada de identidade e decodifica o corpo de sucesso.
+    /// Espelha `machineJSON`/`machineRequest`, só trocando o tradutor de erro
+    /// (`identityErrorMessage`) — rotas diferentes, códigos de erro diferentes.
+    private func identityJSON<T: Decodable>(
+        _ method: String, _ segments: [String],
+        body: [String: Any]?, ok: Int = 200
+    ) async throws -> T {
+        let data = try await identityRequest(method, segments, body: body, ok: ok)
+        return try JSONDecoder.cutuque.decode(T.self, from: data)
+    }
+
+    private func identityRequest(
+        _ method: String, _ segments: [String],
+        body: [String: Any]?, ok: Int
+    ) async throws -> Data {
+        let url = segments.reduce(baseURL) { $0.appendingPathComponent($1) }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard http.statusCode != ok else { return data }
+        throw CutuqueError.server(
+            status: http.statusCode,
+            message: Self.identityErrorMessage(from: data, status: http.statusCode)
+        )
+    }
+
+    /// Traduz o erro de identidade para uma frase acionável — mesmo molde de
+    /// `machineErrorMessage` (detalhe do hub ganha de qualquer mapa fixo).
+    static func identityErrorMessage(from data: Data, status: Int) -> String {
+        struct Body: Decodable {
+            let error: String?
+            let detail: String?
+        }
+        let body = try? JSONDecoder().decode(Body.self, from: data)
+        if let detail = body?.detail, !detail.isEmpty { return detail }
+        switch body?.error {
+        case "invalid_identity":      return "nome ou usuário inválido"
+        case "cannot_store_password": return "este hub não guarda senha — cadastre só com chave"
+        case "duplicate_identity":    return "já existe uma identidade com esse nome"
+        case "unknown_identity":      return "identidade não encontrada"
+        case "identity_in_use":       return "identidade em uso por uma ou mais máquinas — remova das máquinas primeiro"
+        case let other?:              return other
+        case nil:                     return "erro inesperado (\(status))"
+        }
     }
 
     private struct OKResponse: Decodable { let ok: Bool }
@@ -597,6 +713,8 @@ struct APIClient {
         case "scan_failed":          return "não deu para falar com o host (endereço, porta ou rede)"
         case "install_failed":       return "o host recusou — confira a senha e se o usuário existe"
         case "keygen_failed":        return "o hub não conseguiu gerar a chave"
+        case "unknown_identity":     return "identidade não encontrada — escolha outra"
+        case "no_password":          return "sem senha guardada na identidade — digite uma para instalar a chave"
         case let other?:             return other
         case nil:                    return "erro inesperado (\(status))"
         }
