@@ -301,6 +301,10 @@ struct Machine: Decodable, Identifiable, Hashable {
     let os: String?
     /// Id do tema de terminal escolhido pra este host; "" ou nil = padrão.
     let theme: String?
+    /// Id do ícone escolhido À MÃO; "" ou nil = automático (pelo `os`). Existe
+    /// porque a detecção pode falhar pra sempre num host, e sem isso ele ficaria
+    /// no ícone genérico sem recurso.
+    let icon: String?
     var id: String { name }
 
     /// A máquina onde o próprio hub roda — não tem ssh no meio.
@@ -330,13 +334,85 @@ struct Machine: Decodable, Identifiable, Hashable {
     /// fallback do `uname -sr` vem "Linux ...-microsoft-standard-WSL2", que
     /// também casa em "linux" primeiro. O ramo do "pc" é pro OpenSSH nativo do
     /// Windows. Reordenar isso trocaria o ícone de todo WSL por um PC.
-    var osIcon: String {
+    var osIcon: String { Machine.osIcon(para: os) }
+
+    static func osIcon(para os: String?) -> String {
         let s = (os ?? "").lowercased()
         if s.contains("darwin") || s.contains("macos") { return "apple.logo" }
         if s.contains("ubuntu") || s.contains("debian") || s.contains("linux")
             || s.contains("alpine") || s.contains("arch") || s.contains("fedora") { return "terminal" }
         if s.contains("windows") || s.contains("wsl") { return "pc" }
         return "desktopcomputer" // vazio/desconhecido
+    }
+
+    /// Ícone que a lista e a barra realmente mostram: a escolha à mão vence o SO
+    /// detectado, que vence o genérico.
+    var displayIcon: String { MachineIcon.symbol(escolhido: icon, os: os) }
+}
+
+extension Notification.Name {
+    /// Alguma máquina mudou no hub por uma tela que não é a lista (hoje: a
+    /// aparência, trocada no painel de detalhe). Existe porque no iPad a lista
+    /// fica visível ao lado do painel — ela não "reaparece" para recarregar
+    /// sozinha, e o caminho direto (reescrever a máquina selecionada) destruiria
+    /// o painel e mataria o `ssh` vivo.
+    static let maquinasMudaram = Notification.Name("cutuque.maquinasMudaram")
+}
+
+/// Ícones que a usuária pode escolher à mão para uma máquina.
+///
+/// O hub guarda só o `rawValue` e valida a FORMA, não a lista — quem conhece os
+/// ícones é o app. Por isso a leitura passa por aqui (`MachineIcon(rawValue:)`) e
+/// nunca joga a string do hub direto num `Image(systemName:)`: id desconhecido
+/// renderizaria vazio, e cair no automático é melhor que um buraco na tela.
+///
+/// Ausência de caso é de propósito: "automático" não é um ícone, é a falta de
+/// escolha, e mora no `nil`/`""` do `machine.icon`.
+enum MachineIcon: String, CaseIterable, Identifiable {
+    case apple, linux, windows, server, laptop, desktop, cloud, board, disk
+
+    var id: String { rawValue }
+
+    /// A precedência do ícone num lugar só: escolha à mão vence SO detectado, que
+    /// vence o genérico. Id desconhecido (escolha feita por um app mais novo) cai
+    /// no automático em vez de virar quadrado vazio na tela.
+    ///
+    /// Existe como `static` porque a tela de aparência tem a escolha em `@State` —
+    /// a `Machine` que ela recebeu já está desatualizada no momento em que a
+    /// usuária toca num ícone, e duplicar a regra lá era como as duas divergiriam.
+    static func symbol(escolhido: String?, os: String?) -> String {
+        if let escolhido, let manual = MachineIcon(rawValue: escolhido) {
+            return manual.symbol
+        }
+        return Machine.osIcon(para: os)
+    }
+
+    var symbol: String {
+        switch self {
+        case .apple:   return "apple.logo"
+        case .linux:   return "terminal"
+        case .windows: return "pc"
+        case .server:  return "server.rack"
+        case .laptop:  return "laptopcomputer"
+        case .desktop: return "desktopcomputer"
+        case .cloud:   return "cloud"
+        case .board:   return "cpu"
+        case .disk:    return "externaldrive"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .apple:   return "Maçã"
+        case .linux:   return "Linux"
+        case .windows: return "Windows"
+        case .server:  return "Servidor"
+        case .laptop:  return "Notebook"
+        case .desktop: return "Desktop"
+        case .cloud:   return "Nuvem"
+        case .board:   return "Plaquinha"
+        case .disk:    return "Disco"
+        }
     }
 }
 

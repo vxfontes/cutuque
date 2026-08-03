@@ -7,26 +7,67 @@ import SwiftUI
 /// a impressão digital, digitar senha) viram seções/sheets condicionais na
 /// MESMA tela, guiados por `Fase`.
 struct NewMachineView: View {
-    /// Cadastro já criado que ficou faltando confirmar. Vazio = máquina nova.
-    let retomando: Machine?
+    /// O que esta tela está fazendo com a máquina.
+    ///
+    /// `retomar` e `editar` partem da MESMA máquina já cadastrada, e a diferença
+    /// entre elas é de premissa: retomando, o cadastro está certo e só faltou
+    /// terminar (campos travados); editando, o cadastro é justamente o que está
+    /// errado (campos abertos até o PATCH ir).
+    enum Modo: Equatable, Identifiable {
+        case nova
+        case retomar(Machine)
+        case editar(Machine)
+
+        /// Serve de identidade da sheet: `retomar` e `editar` da mesma máquina
+        /// são telas diferentes e não podem colidir no `id`.
+        var id: String {
+            switch self {
+            case .nova:            return "nova"
+            case .retomar(let m):  return "retomar:\(m.name)"
+            case .editar(let m):   return "editar:\(m.name)"
+            }
+        }
+
+        /// A máquina que já existe no hub, quando existe.
+        var machine: Machine? {
+            switch self {
+            case .nova:                             return nil
+            case .retomar(let m), .editar(let m):   return m
+            }
+        }
+
+        var editando: Bool {
+            if case .editar = self { return true }
+            return false
+        }
+    }
+
+    let modo: Modo
     /// Avisa a lista para recarregar quando algo mudou de verdade.
     let onChanged: () -> Void
 
-    init(retomando: Machine? = nil, onChanged: @escaping () -> Void) {
-        self.retomando = retomando
+    init(modo: Modo = .nova, onChanged: @escaping () -> Void) {
+        self.modo = modo
         self.onChanged = onChanged
-        if let retomando {
-            _nome = State(initialValue: retomando.name)
-            _host = State(initialValue: retomando.host ?? "")
-            _porta = State(initialValue: String(retomando.port == 0 ? 22 : retomando.port))
-            _tema = State(initialValue: retomando.theme ?? "")
+        guard let existente = modo.machine else { return }
+        _nome = State(initialValue: existente.name)
+        _host = State(initialValue: existente.host ?? "")
+        _porta = State(initialValue: String(existente.port == 0 ? 22 : existente.port))
+        _tema = State(initialValue: existente.theme ?? "")
+        if modo.editando {
+            // Editando, os campos nascem ABERTOS — travar aqui seria travar
+            // exatamente o que a usuária veio mudar. E `mexeuNoHub` fica falso:
+            // até o PATCH ir, esta tela não mudou nada lá.
+            _fase = State(initialValue: .formulario)
+        } else {
             // Já existe no hub — os campos de host/identidade/tema ficam
             // travados; só falta terminar o que ficou pendente.
+            _camposTravados = State(initialValue: true)
             _mexeuNoHub = State(initialValue: true)
             // Máquina com fingerprint já confirmado não deve pedir confirmação
             // de novo: reconfirmar sem motivo ensinaria a usuária a clicar
             // "confiar" no automático — o hábito que o TOFU existe pra evitar.
-            let jaConfiada = !(retomando.hostFingerprint ?? "").isEmpty
+            let jaConfiada = !(existente.hostFingerprint ?? "").isEmpty
             _fase = State(initialValue: jaConfiada ? .confiada : .formulario)
         }
     }
@@ -69,16 +110,37 @@ struct NewMachineView: View {
     /// instalar, apagar) — a lista só precisa recarregar se algo mudou de
     /// verdade.
     @State private var mexeuNoHub = false
+    /// Host, identidade e tema abertos ou travados. Cadastro novo: abertos até o
+    /// POST. Retomando: travados desde o começo. Editando: abertos até o PATCH.
+    ///
+    /// Era o próprio `mexeuNoHub` que travava os campos, e as duas coisas
+    /// coincidiam enquanto só havia cadastrar e retomar. Editar separou: ali os
+    /// campos precisam abrir com a máquina JÁ existindo no hub.
+    @State private var camposTravados = false
+    /// Recusei a impressão digital editando: o endereço novo ficou salvo sem
+    /// confiança. Aviso, não erro — o estado é recuperável e a lista o mostra.
+    @State private var avisoEdicao: String?
 
     var body: some View {
         NavigationStack {
             Form {
                 secaoHost
                 secaoIdentidade
-                secaoTema
+                // Editando, aparência não vem: tema e ícone são do
+                // `PUT /appearance` (onde vazio é escolha, não "mantém"), e o
+                // PATCH desta tela não tem como expressar "volta ao padrão".
+                // Quem cuida disso é a sheet Informações, dentro da máquina.
+                if !modo.editando { secaoTema }
 
                 if fase == .pedindoSenha { secaoSenha }
 
+                if let avisoEdicao {
+                    Section {
+                        Label(avisoEdicao, systemImage: "exclamationmark.shield")
+                            .foregroundStyle(.orange)
+                            .font(.callout)
+                    }
+                }
                 if let avisoSO {
                     Section {
                         Label(avisoSO, systemImage: "exclamationmark.triangle")
@@ -100,7 +162,10 @@ struct NewMachineView: View {
                             .font(.callout)
                     }
                 }
-                if mexeuNoHub && fase != .concluido {
+                // Editando NÃO oferece apagar: quem entrou aqui veio corrigir um
+                // endereço, não descadastrar a máquina — e apagar é o único
+                // botão desta tela que não tem volta.
+                if mexeuNoHub && fase != .concluido && !modo.editando {
                     Section {
                         Button("Apagar cadastro pendente", role: .destructive) {
                             Task { await apagar() }
@@ -111,13 +176,14 @@ struct NewMachineView: View {
                 }
                 if fase == .concluido {
                     Section {
-                        Label("Máquina cadastrada e pronta.", systemImage: "checkmark.circle.fill")
+                        Label(modo.editando ? "Máquina atualizada." : "Máquina cadastrada e pronta.",
+                              systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.green)
                         Button("Concluir") { fechar() }
                     }
                 }
             }
-            .navigationTitle(retomando == nil ? "Nova máquina" : "Confirmar máquina")
+            .navigationTitle(titulo)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -140,13 +206,20 @@ struct NewMachineView: View {
                     fingerprint: pendente.fingerprint,
                     host: host.trimmingCharacters(in: .whitespaces),
                     porta: porta,
+                    // Editando, recusar NÃO apaga: a máquina já existia antes
+                    // desta tela e continua existindo depois dela.
+                    rotuloRecusa: modo.editando ? "Não é essa — parar aqui" : "Não é essa — apagar cadastro",
                     onConfiar: {
                         fingerprintPendente = nil
                         Task { await confiarEContinuar(pendente.fingerprint) }
                     },
-                    onApagar: {
+                    onRecusar: {
                         fingerprintPendente = nil
-                        Task { await apagar() }
+                        if modo.editando {
+                            avisoEdicao = "O endereço novo ficou salvo, mas sem confirmação: a máquina aparece na lista pedindo conferência e não conecta até isso. Edite de novo se o endereço estiver errado."
+                        } else {
+                            Task { await apagar() }
+                        }
                     }
                 )
             }
@@ -160,10 +233,22 @@ struct NewMachineView: View {
 
     // MARK: - Seções
 
+    private var titulo: String {
+        switch modo {
+        case .nova:     return "Nova máquina"
+        case .retomar:  return "Confirmar máquina"
+        case .editar:   return "Editar máquina"
+        }
+    }
+
     @ViewBuilder private var secaoHost: some View {
         Section {
             TextField("Nome", text: $nome)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
+                // O nome não se edita nunca: é a chave do cadastro no hub, do
+                // painel lembrado por host e da sessão de terminal aberta —
+                // trocá-lo seria criar outra máquina com cara da mesma.
+                .disabled(modo.editando)
             TextField("Hostname ou IP", text: $host)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .keyboardType(.URL)
@@ -172,9 +257,11 @@ struct NewMachineView: View {
         } header: {
             Text("Host")
         } footer: {
-            Text("O nome identifica a máquina no Cutuque — letras, números, `-` e `_`.")
+            Text(modo.editando
+                ? "O nome não muda: é por ele que o hub, as sessões abertas e as preferências deste host se encontram. Trocar endereço ou porta pede a impressão digital de novo."
+                : "O nome identifica a máquina no Cutuque — letras, números, `-` e `_`.")
         }
-        .disabled(mexeuNoHub)
+        .disabled(camposTravados)
     }
 
     @ViewBuilder private var secaoIdentidade: some View {
@@ -188,6 +275,17 @@ struct NewMachineView: View {
                             Text(identidade.name).foregroundStyle(.primary)
                             Text(identidade.username).font(.caption).foregroundStyle(.secondary)
                         }
+                    } else if let nomeAtual = modo.machine?.identity, !nomeAtual.isEmpty {
+                        // A máquina TEM identidade, só não deu para carregar o
+                        // objeto dela (rede fora no `preparar`). "Escolher
+                        // identidade" aqui diria que ela está sem — e o ✓ manda
+                        // `""`, que o hub lê como "mantém": nada se perde, mas a
+                        // tela não pode mentir sobre isso.
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(nomeAtual).foregroundStyle(.primary)
+                            Text("não deu para carregar os dados desta identidade")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
                     } else {
                         Text("Escolher identidade").foregroundStyle(.secondary)
                     }
@@ -198,8 +296,12 @@ struct NewMachineView: View {
             .buttonStyle(.plain)
         } header: {
             Text("Credenciais")
+        } footer: {
+            if modo.editando {
+                Text("Trocar de identidade instala a chave da nova no destino. Tema e ícone ficam em Informações, dentro da máquina.")
+            }
         }
-        .disabled(mexeuNoHub)
+        .disabled(camposTravados)
     }
 
     @ViewBuilder private var secaoTema: some View {
@@ -209,7 +311,7 @@ struct NewMachineView: View {
         } header: {
             Text("Tema do terminal")
         }
-        .disabled(mexeuNoHub)
+        .disabled(camposTravados)
     }
 
     @ViewBuilder private var secaoSenha: some View {
@@ -232,11 +334,33 @@ struct NewMachineView: View {
 
     // MARK: - Validação
 
+    /// A porta digitada, ou `nil` se não serve para conectar.
+    ///
+    /// O teto é o do TCP. O hub recusa acima dele — e faz certo —, mas recusa
+    /// depois do toque; validar aqui é o que transforma "70000" num ✓ apagado em
+    /// vez de num erro vindo da rede. `0` também não passa: o hub trata porta
+    /// zero como "não informada" e a rebaixaria para 22 calado, o que não é o que
+    /// quem digitou zero pediu. Apara espaço porque valor colado costuma vir com
+    /// um na frente.
+    static func portaValida(_ texto: String) -> Int? {
+        guard let n = Int(texto.trimmingCharacters(in: .whitespaces)),
+              (1...65535).contains(n) else { return nil }
+        return n
+    }
+
     private var camposValidos: Bool {
         !nome.trimmingCharacters(in: .whitespaces).isEmpty
             && !host.trimmingCharacters(in: .whitespaces).isEmpty
-            && Int(porta) != nil
+            && Self.portaValida(porta) != nil
             && identidade != nil
+    }
+
+    /// Editando, a identidade pode ficar como está: `""` no PATCH significa
+    /// "mantém", e exigi-la aqui travaria o ✓ justamente quando a resolução do
+    /// objeto `Identity` falhou por rede — com o endereço, que é o que a usuária
+    /// veio corrigir, já digitado.
+    private var conexaoValida: Bool {
+        !host.trimmingCharacters(in: .whitespaces).isEmpty && Self.portaValida(porta) != nil
     }
 
     /// Fora do `.formulario` os campos já estão travados (cadastro existente),
@@ -244,16 +368,22 @@ struct NewMachineView: View {
     private var checkDesabilitado: Bool {
         if trabalhando { return true }
         switch fase {
-        case .pedindoSenha, .concluido:       return true
-        case .formulario:                     return retomando == nil && !camposValidos
-        case .pendenteDeConfirmar, .confiada: return false
+        case .pedindoSenha, .concluido:
+            return true
+        case .formulario:
+            // Editando: enquanto os campos estão abertos o ✓ salva (precisa de
+            // endereço válido); travados, ele repete o scan que falhou.
+            if modo.editando { return camposTravados ? false : !conexaoValida }
+            return modo.machine == nil && !camposValidos
+        case .pendenteDeConfirmar, .confiada:
+            return false
         }
     }
 
     // MARK: - Sequência (check → TOFU → trust → install-key → detect-os)
 
     private func preparar() async {
-        guard let retomando else { return }
+        guard let existente = modo.machine else { return }
         // Trava o ✓ ANTES do primeiro await. `listIdentities()` é um round-trip
         // de rede, e nesta janela `checkDesabilitado` devolvia `false` — o botão
         // ficava tocável. Um toque ali disparava scan/install-key EM PARALELO com
@@ -268,9 +398,15 @@ struct NewMachineView: View {
         // Resolve o objeto Identity cheio a partir do nome — o cadastro
         // pendente só guarda o nome; sem isso não saberíamos `hasPassword` na
         // hora de decidir se o install-key pede senha.
-        if let nomeIdentidade = retomando.identity, !nomeIdentidade.isEmpty,
+        if let nomeIdentidade = existente.identity, !nomeIdentidade.isEmpty,
            let resp = try? await api.listIdentities() {
             identidade = resp.identities.first { $0.name == nomeIdentidade }
+        }
+        if modo.editando {
+            // Editando não dispara nada sozinho: a usuária ainda vai mexer nos
+            // campos, e um scan aqui pediria confirmação do endereço ANTIGO.
+            trabalhando = false
+            return
         }
         switch fase {
         case .confiada:
@@ -281,7 +417,7 @@ struct NewMachineView: View {
             // Retomando sem fingerprint ainda: relê e já mostra a confirmação,
             // sem exigir mais um toque (paridade com o assistente antigo).
             await executando {
-                let fp = try await api.scanMachine(name: retomando.name)
+                let fp = try await api.scanMachine(name: existente.name)
                 fingerprintConhecido = fp
                 fase = .pendenteDeConfirmar
                 fingerprintPendente = FingerprintPendente(fingerprint: fp)
@@ -296,11 +432,14 @@ struct NewMachineView: View {
     private func onCheckTapped() async {
         switch fase {
         case .formulario:
-            if let retomando {
+            if modo.editando && !camposTravados {
+                await executando { try await salvarEdicao() }
+            } else if let existente = modo.machine {
                 // Releitura automática falhou (host fora do ar etc.) — tenta de
-                // novo; NÃO recadastra (a máquina já existe).
+                // novo; NÃO recadastra (a máquina já existe). Serve às duas: a
+                // retomada e a edição cujo scan pós-PATCH não passou.
                 await executando {
-                    let fp = try await api.scanMachine(name: retomando.name)
+                    let fp = try await api.scanMachine(name: existente.name)
                     fingerprintConhecido = fp
                     fase = .pendenteDeConfirmar
                     fingerprintPendente = FingerprintPendente(fingerprint: fp)
@@ -310,7 +449,7 @@ struct NewMachineView: View {
                     let criada = try await api.createMachine(
                         name: nome.trimmingCharacters(in: .whitespaces),
                         host: host.trimmingCharacters(in: .whitespaces),
-                        port: Int(porta) ?? 22,
+                        port: Self.portaValida(porta) ?? 22,
                         identity: identidade?.name ?? "",
                         theme: tema
                     )
@@ -330,6 +469,44 @@ struct NewMachineView: View {
             await executando { try await avancarParaInstalacao() }
         case .pedindoSenha, .concluido:
             break // botão fica desabilitado nesses casos
+        }
+    }
+
+    /// Salva a edição do host e retoma a sequência de onde a mudança exige.
+    ///
+    /// O que decide o próximo passo é a RESPOSTA do hub, não o que foi digitado:
+    /// mudar endereço ou porta faz o hub jogar fora a impressão digital (e o SO
+    /// detectado), e a máquina volta como `needsTrust` — daí o TOFU inteiro de
+    /// novo, que é o ponto: endereço novo é host novo até alguém conferir.
+    /// Endereço igual e identidade outra mantém a confiança no host, mas a chave
+    /// da identidade nova pode não estar no destino — instala.
+    private func salvarEdicao() async throws {
+        guard let atual = modo.machine else { return }
+        let novaIdentidade = identidade?.name ?? ""
+        let atualizada = try await api.updateMachine(
+            name: atual.name,
+            host: host.trimmingCharacters(in: .whitespaces),
+            // Cai no valor atual e não em 22: campo ilegível não é motivo pra
+            // rebaixar a porta de ninguém (o ✓ já exige uma válida).
+            port: Self.portaValida(porta) ?? atual.port,
+            identity: novaIdentidade,
+            // Vazio = mantém. Tema aqui seria o único jeito de esta tela mexer
+            // em aparência, e ela não deve: quem faz isso é o PUT /appearance.
+            theme: ""
+        )
+        mexeuNoHub = true
+        camposTravados = true
+        if atualizada.needsTrust {
+            let fp = try await api.scanMachine(name: atual.name)
+            fingerprintConhecido = fp
+            fase = .pendenteDeConfirmar
+            fingerprintPendente = FingerprintPendente(fingerprint: fp)
+        } else if !novaIdentidade.isEmpty && novaIdentidade != (atual.identity ?? "") {
+            fase = .confiada
+            try await avancarParaInstalacao()
+        } else {
+            // Nada que mexa em conexão — ou nada mesmo (✓ sem ter editado).
+            fase = .concluido
         }
     }
 
@@ -444,8 +621,12 @@ private struct ConfirmarImpressaoView: View {
     let fingerprint: String
     let host: String
     let porta: String
+    /// O que a recusa faz depende de quem chamou: apagar o cadastro pendente
+    /// (máquina nova, que só existe por causa desta tela) ou apenas parar
+    /// (editando uma máquina que já existia antes e continua existindo).
+    let rotuloRecusa: String
     let onConfiar: () -> Void
-    let onApagar: () -> Void
+    let onRecusar: () -> Void
 
     var body: some View {
         NavigationStack {
@@ -461,7 +642,7 @@ private struct ConfirmarImpressaoView: View {
                 }
                 Section {
                     Button("Confere, pode confiar") { onConfiar() }
-                    Button("Não é essa — apagar cadastro", role: .destructive) { onApagar() }
+                    Button(rotuloRecusa, role: .destructive) { onRecusar() }
                 }
             }
             .navigationTitle("Confirmar host")

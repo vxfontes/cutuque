@@ -24,9 +24,19 @@ struct MachineDetailView: View {
     @AppStorage("cutuque.terminalFont") private var fontPhone: Double = 10
     @AppStorage("cutuque.terminalFont.pad") private var fontPad: Double = 13
 
+    /// Tema e ícone vivem em `@State`, não na `machine` recebida, e isso é o que
+    /// mantém a sessão viva ao trocar de cor: no iPad o painel é identificado pela
+    /// máquina selecionada, então reescrever a seleção com uma `Machine` de tema
+    /// novo destruiria esta view — fechando o WebSocket e matando o `ssh` do outro
+    /// lado. O hub já foi atualizado pela sheet; a lista relê quando reabre.
+    @State private var tema: String
+    @State private var icone: String
+    private struct SheetInfo: Identifiable { let id = "info" }
+    @State private var sheetInfo: SheetInfo?
+
     /// Tema É por máquina agora (pedido da usuária) — não mais preferência
     /// global. `""`/ausente cai no Padrão dentro do próprio `TerminalPalette`.
-    private var paleta: TerminalPalette { TerminalPalette.byID(machine.theme ?? "") }
+    private var paleta: TerminalPalette { TerminalPalette.byID(tema) }
     private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
     private var fontPt: CGFloat { CGFloat(isPad ? fontPad : fontPhone) }
 
@@ -41,6 +51,8 @@ struct MachineDetailView: View {
         _session = StateObject(wrappedValue: PTYSession(machine: machine.name))
         _paneRaw = AppStorage(wrappedValue: MachinePane.terminal.rawValue,
                               MachinePane.storageKey(machine: machine.name))
+        _tema = State(initialValue: machine.theme ?? "")
+        _icone = State(initialValue: machine.icon ?? "")
     }
 
     var body: some View {
@@ -61,6 +73,20 @@ struct MachineDetailView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) { identidadeENavigationBarLeading }
             ToolbarItem(placement: .principal) { seletor }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button { sheetInfo = SheetInfo() } label: {
+                    Image(systemName: "paintpalette")
+                }
+                .accessibilityLabel("Informações e aparência")
+            }
+        }
+        .sheet(item: $sheetInfo) { _ in
+            MachineInfoSheet(machine: machine, tema: $tema, icone: $icone) {
+                // A lista relê do hub; a `machine` desta view segue a mesma de
+                // propósito (trocá-la destruiria o painel — ver o comentário do
+                // `@State tema`).
+                NotificationCenter.default.post(name: .maquinasMudaram, object: nil)
+            }
         }
         // Empilhar uma subpasta chama o `onDisappear` desta view: o terminal
         // para de ler, mas o socket segue aberto e o shell do outro lado vivo —
@@ -85,13 +111,16 @@ struct MachineDetailView: View {
     /// automático: fica compacto de propósito (não é lugar pra texto longo).
     @ViewBuilder
     private var identidadeENavigationBarLeading: some View {
+        // `icone` (o @State) e não `machine.icon`: a escolha feita na sheet aparece
+        // aqui na hora, e a `machine` recebida segue intocada de propósito.
+        let simbolo = MachineIcon.symbol(escolhido: icone, os: machine.os)
         if let identidade = machine.identity, !identidade.isEmpty {
-            Label(identidade, systemImage: machine.osIcon)
+            Label(identidade, systemImage: simbolo)
                 .labelStyle(.titleAndIcon)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else {
-            Image(systemName: machine.osIcon)
+            Image(systemName: simbolo)
                 .foregroundStyle(.secondary)
         }
     }
@@ -113,7 +142,7 @@ struct MachineDetailView: View {
             paleta.backgroundColor.ignoresSafeArea(edges: .bottom)
 
             PTYTerminalView(session: session, isActive: terminalAtivo,
-                            themeID: machine.theme ?? "", fontSize: fontPt)
+                            themeID: tema, fontSize: fontPt)
                 // O teclado do sistema sobe por cima; sem isto ele cobriria as
                 // últimas linhas em vez de empurrá-las.
                 .ignoresSafeArea(.keyboard, edges: .bottom)

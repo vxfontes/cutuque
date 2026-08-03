@@ -198,7 +198,8 @@ final class NavigationStateTests: XCTestCase {
     private func makeMachine(_ name: String = "vps") -> Machine {
         Machine(name: name, dest: "vx@192.0.2.50", port: 22, source: "app",
                 hostFingerprint: "SHA256:abc",
-                host: "192.0.2.50", identity: "vx", os: "Darwin 24.5.0", theme: "dracula")
+                host: "192.0.2.50", identity: "vx", os: "Darwin 24.5.0", theme: "dracula",
+                icon: nil)
     }
 
     func testMaquinasComHostAbertoEmRetratoColapsaDetailOnly() {
