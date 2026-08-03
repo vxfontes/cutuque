@@ -43,6 +43,41 @@ final class QuestionSheetCrashTests: XCTestCase {
 
     // MARK: - Infraestrutura
 
+    /// Liga — e depois desliga — o cliente de automação de acessibilidade.
+    ///
+    /// Desde o iOS 26.3 o SwiftUI só monta a árvore de acessibilidade quando há
+    /// um cliente AX conectado. Sem ele, `accessibilityElements` da `HostingView`
+    /// vem VAZIO com a tela inteira renderizada, e só aparece o texto de views
+    /// UIKit de verdade (o placeholder de um `TextField`, o título da barra) —
+    /// foi assim que as 6 primeiras execuções desta suíte falharam em 2026-08-03,
+    /// por cegueira do observador e não por defeito do app: a mesma falha
+    /// aparece no `HEAD` intocado, em worktree limpa.
+    ///
+    /// `_AXSSetAutomationEnabled` é o interruptor que o XCUITest liga para poder
+    /// enxergar a tela. Mora só no alvo de teste; nada disso vai para o app.
+    @discardableResult
+    private static func automacaoDeAcessibilidade(_ ligada: Bool) -> Bool {
+        guard let lib = dlopen("/usr/lib/libAccessibility.dylib", RTLD_NOW),
+              let sym = dlsym(lib, "_AXSSetAutomationEnabled") else { return false }
+        typealias Interruptor = @convention(c) (Bool) -> Void
+        unsafeBitCast(sym, to: Interruptor.self)(ligada)
+        return true
+    }
+
+    override class func setUp() {
+        super.setUp()
+        if !automacaoDeAcessibilidade(true) {
+            XCTFail("sem _AXSSetAutomationEnabled: o SwiftUI não monta a árvore de acessibilidade e toda asserção daqui vira falso negativo")
+        }
+    }
+
+    /// O interruptor é do PROCESSO, e as outras suítes rodam no mesmo — devolve
+    /// como estava.
+    override class func tearDown() {
+        automacaoDeAcessibilidade(false)
+        super.tearDown()
+    }
+
     /// Renderiza numa janela de verdade e devolve todo o texto que chegou à
     /// hierarquia de views.
     ///
