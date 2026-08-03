@@ -10,13 +10,18 @@ import (
 	"time"
 )
 
-// KeyStore cuida das chaves e do known_hosts das máquinas cadastradas pelo app.
-// Tudo mora em /data (o ./config/ssh do container é read-only de propósito, e o
-// ~/.ssh de lá pertence às máquinas do hub.env):
+// KeyStore cuida das chaves e do known_hosts do cadastro feito pelo app. Tudo
+// mora em /data (o ./config/ssh do container é read-only de propósito, e o ~/.ssh
+// de lá pertence às máquinas do hub.env):
 //
 //	<dir>/keys/<nome>      chave privada, 0600 — NUNCA sai do macmini
 //	<dir>/keys/<nome>.pub  pública, é o que a usuária instala no destino
 //	<dir>/known_hosts      TOFU próprio do Cutuque
+//
+// <nome> é o nome da IDENTIDADE, não da máquina. Foi a mudança de fundo do
+// redesenho: a chave pertence à conta remota, então cadastrar cinco hosts com a
+// mesma identidade instala a MESMA pública nos cinco. Antes era uma chave por
+// máquina, e trocar de máquina significava recomeçar do zero.
 type KeyStore struct{ dir string }
 
 func NewKeyStore(dir string) *KeyStore { return &KeyStore{dir: dir} }
@@ -25,9 +30,9 @@ func NewKeyStore(dir string) *KeyStore { return &KeyStore{dir: dir} }
 // com máquina cadastrada (junto de StrictHostKeyChecking=yes).
 func (k *KeyStore) KnownHostsPath() string { return filepath.Join(k.dir, "known_hosts") }
 
-// privatePath monta o caminho da chave e recusa nome que escape da pasta. O Add
-// já valida o nome; isto é defesa em profundidade, porque aqui o nome vira
-// caminho de arquivo de verdade.
+// privatePath monta o caminho da chave e recusa nome que escape da pasta. O
+// cadastro da identidade já valida o nome; isto é defesa em profundidade, porque
+// aqui o nome vira caminho de arquivo de verdade.
 func (k *KeyStore) privatePath(name string) (string, error) {
 	if !validName.MatchString(name) || name == "." || name == ".." {
 		return "", fmt.Errorf("%w: %q", ErrInvalidName, name)
@@ -35,8 +40,8 @@ func (k *KeyStore) privatePath(name string) (string, error) {
 	return filepath.Join(k.dir, "keys", name), nil
 }
 
-// KeyPath é o caminho da chave privada da máquina — o que vai no `ssh -i` e o
-// que o registro guarda depois do Generate.
+// KeyPath é o caminho da chave privada da identidade — o que vai no `ssh -i` e o
+// que a identidade guarda depois do Generate.
 func (k *KeyStore) KeyPath(name string) (string, error) { return k.privatePath(name) }
 
 // PublicKey lê a pública já gerada. É o que a usuária instala no destino (na
@@ -48,7 +53,7 @@ func (k *KeyStore) PublicKey(name string) (string, error) {
 	}
 	b, err := os.ReadFile(priv + ".pub")
 	if err != nil {
-		return "", fmt.Errorf("a máquina %s não tem chave gerada: %w", name, err)
+		return "", fmt.Errorf("a identidade %s não tem chave gerada: %w", name, err)
 	}
 	return strings.TrimSpace(string(b)), nil
 }
@@ -60,8 +65,13 @@ const (
 	scanTimeout   = 20 * time.Second
 )
 
-// Generate cria (ou recria) o par ed25519 da máquina e devolve a chave PÚBLICA
-// — a privada não sai daqui. Sem passphrase: o hub precisa conectar sozinho.
+// Generate cria (ou recria) o par ed25519 da identidade e devolve a chave
+// PÚBLICA — a privada não sai daqui. Sem passphrase: o hub precisa conectar
+// sozinho, e não há ninguém para digitar nada.
+//
+// Recriar é destrutivo do ponto de vista dos hosts: a pública antiga continua nas
+// authorized_keys deles e a nova não está em nenhuma. Por isso o cadastro só
+// chama Generate quando a identidade AINDA NÃO tem chave.
 func (k *KeyStore) Generate(name string) (string, error) {
 	priv, err := k.privatePath(name)
 	if err != nil {
@@ -97,8 +107,8 @@ func (k *KeyStore) Generate(name string) (string, error) {
 	return strings.TrimSpace(string(pub)), nil
 }
 
-// RemoveKey apaga o par da máquina. Ausente não é erro: remover uma máquina que
-// nunca teve chave instalada é legítimo.
+// RemoveKey apaga o par da identidade. Ausente não é erro: remover uma
+// identidade que nunca teve chave instalada é legítimo.
 func (k *KeyStore) RemoveKey(name string) error {
 	priv, err := k.privatePath(name)
 	if err != nil {

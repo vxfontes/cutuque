@@ -33,16 +33,37 @@ const (
 const defaultSSHPort = 22
 
 // Machine é uma máquina alcançável por ssh.
+//
+// Duas naturezas convivem aqui, e a diferença está em quem define o usuário:
+//
+//   - máquina de env/local: o `Dest` é a verdade (alias do ~/.ssh/config ou
+//     user@host, escrito à mão no hub.env). Host e Identity ficam vazios.
+//   - máquina do app: a verdade é `Host` + `Identity`, e o `Dest` é DERIVADO
+//     (usuário da identidade + "@" + host). Ele continua existindo porque todo o
+//     resto do hub — launcher, dirs, PTY — já fala em dest; o Registry preenche
+//     na leitura para que não exista um só ponto onde alguém esqueça de resolver.
 type Machine struct {
 	Name string `json:"name"`
 	Dest string `json:"dest"` // alias do ~/.ssh/config ou user@host
 	Port int    `json:"port"`
+	// Host é o hostname ou IP puro, sem usuário. Só para máquina do app.
+	Host string `json:"host,omitempty"`
+	// Identity é o nome da identidade que autentica nesta máquina. Só para app.
+	Identity string `json:"identity,omitempty"`
+	// OS é o sistema detectado no cadastro ("Darwin 24.5.0", "Ubuntu 24.04"),
+	// para o app escolher o ícone. Vazio = ainda não detectado.
+	OS string `json:"os,omitempty"`
+	// Theme é o nome do tema do terminal escolhido para esta máquina. Vazio =
+	// o padrão do app. O hub só guarda: quem sabe desenhar cor é o app.
+	Theme string `json:"theme,omitempty"`
 	// RemoteCmd é o caminho do agente remoto (3º campo do CUTUQUE_SSH_TARGETS).
 	// Vazio = default. Não é exposto ao app: é detalhe interno do hub.
 	RemoteCmd string `json:"-"`
 	Source    Source `json:"source"`
-	// KeyPath é o caminho da chave privada em /data/machines/keys/<nome>, para
-	// máquinas cadastradas pelo app. NUNCA vai para o app: o conteúdo da chave
+	// KeyPath é o caminho da chave privada em /data/machines/keys/<nome>. Depois
+	// do redesenho a chave é DA IDENTIDADE: para máquina do app este campo é
+	// preenchido na leitura, a partir dela. Só sobrevive gravado como resíduo dos
+	// cadastros anteriores à migração. NUNCA vai para o app: o conteúdo da chave
 	// não sai do macmini, e o caminho é detalhe interno.
 	KeyPath string `json:"-"`
 	// HostFingerprint é a impressão digital da chave do host, capturada no
@@ -70,25 +91,39 @@ var (
 // Sem isso, "../.." escaparia da pasta de chaves.
 var validName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
-// validate confere nome e destino de uma máquina vinda do app, e normaliza a
-// porta. Devolve a máquina saneada.
+// validate confere nome, host e identidade de uma máquina vinda do app, e
+// normaliza a porta. Devolve a máquina saneada.
+//
+// Depois do redesenho o app manda `host` + `identity`, nunca `dest`: o usuário
+// mora na identidade. Um dest que chegasse aqui é ignorado — aceitá-lo deixaria
+// o app contornar a identidade e escolher a conta remota por outro caminho.
 func validate(m Machine) (Machine, error) {
 	m.Name = strings.TrimSpace(m.Name)
-	m.Dest = strings.TrimSpace(m.Dest)
+	m.Host = strings.TrimSpace(m.Host)
+	m.Identity = strings.TrimSpace(m.Identity)
 	if !validName.MatchString(m.Name) || m.Name == "." || m.Name == ".." {
 		return Machine{}, fmt.Errorf("%w: %q", ErrInvalidName, m.Name)
 	}
-	if m.Dest == "" {
-		return Machine{}, fmt.Errorf("%w: vazio", ErrInvalidDest)
+	if m.Host == "" {
+		return Machine{}, fmt.Errorf("%w: host vazio", ErrInvalidDest)
 	}
-	// Mesma defesa do ParseSSHTargets: um dest começando com "-" seria
+	// Mesma defesa do ParseSSHTargets: um host começando com "-" seria
 	// reinterpretado pelo ssh como opção (ex.: -oProxyCommand=...).
-	if strings.HasPrefix(m.Dest, "-") {
-		return Machine{}, fmt.Errorf("%w: começa com '-'", ErrInvalidDest)
+	if strings.HasPrefix(m.Host, "-") {
+		return Machine{}, fmt.Errorf("%w: host começa com '-'", ErrInvalidDest)
+	}
+	// "@" no host significa que o usuário veio grudado — é o formato antigo. O
+	// usuário agora é da identidade, e deixar passar daria um dest com dois "@".
+	if strings.Contains(m.Host, "@") {
+		return Machine{}, fmt.Errorf("%w: o host não leva usuário (isso é da identidade)", ErrInvalidDest)
+	}
+	if !validName.MatchString(m.Identity) {
+		return Machine{}, fmt.Errorf("%w: identidade %q", ErrInvalidDest, m.Identity)
 	}
 	if m.Port <= 0 {
 		m.Port = defaultSSHPort
 	}
+	m.Dest = "" // derivado na leitura, nunca guardado
 	return m, nil
 }
 
@@ -150,6 +185,9 @@ type Registry struct {
 	by    map[string]Machine
 	// path é o arquivo de fallback em /data. Vazio = só memória (dev/teste).
 	path string
+	// idents resolve o usuário das máquinas do app. nil = sem cadastro (o hub
+	// roda só com as máquinas do hub.env, que já trazem o dest pronto).
+	idents *IdentityStore
 }
 
 // NewRegistry cria o registro a partir da lista dada, preservando a ordem.
@@ -167,17 +205,91 @@ func NewRegistry(ms []Machine) *Registry {
 // máquinas dele, e uma entrada antiga em disco não pode sequestrar um nome que
 // hoje pertence ao hub.env. Disco ilegível ou corrompido é ignorado: o hub sobe
 // com o que o env deu, em vez de não subir.
-func NewRegistryAt(path string, ms []Machine) *Registry {
+//
+// idents pode ser nil (hub sem cadastro pelo app). Quando presente, é também
+// quem recebe as identidades criadas pela migração do formato antigo.
+func NewRegistryAt(path string, ms []Machine, idents *IdentityStore) *Registry {
 	r := NewRegistry(ms)
 	r.path = path
+	r.idents = idents
+	migrou := false
 	for _, m := range loadDisk(path) {
 		if _, taken := r.by[m.Name]; taken {
 			continue
 		}
 		m.Source = SourceApp // o que veio do disco é sempre cadastro do app
+		if migrado, ok := migraLegado(m, idents); ok {
+			m = migrado
+			migrou = true
+		}
 		r.put(m)
 	}
+	// Regrava só se algo mudou de forma: um boot normal não deve reescrever
+	// /data à toa.
+	if migrou {
+		_ = r.persist()
+	}
 	return r
+}
+
+// migraLegado converte uma máquina do formato anterior ao redesenho — que
+// guardava `dest` ("user@host") e tinha a chave no nome DA MÁQUINA — para o
+// formato novo, criando uma identidade para ela.
+//
+// A identidade nasce uma POR MÁQUINA, com o nome da máquina, e herda a chave que
+// já está instalada no destino. Não se tenta agrupar máquinas pelo mesmo usuário:
+// duas máquinas com o usuário `vx` têm chaves diferentes já gravadas nos dois
+// authorized_keys, e uni-las numa identidade só deixaria uma das duas sem poder
+// entrar. Consolidar é escolha da usuária, depois, criando uma identidade nova.
+func migraLegado(m Machine, idents *IdentityStore) (Machine, bool) {
+	if m.Identity != "" || m.Dest == "" || idents == nil {
+		return m, false
+	}
+	user := userOf(m.Dest)
+	host := hostOf(m.Dest)
+	if user == "" || host == "" {
+		// Sem usuário no dest não há identidade a montar (era alias do ssh
+		// config). Fica como está: o dest continua servindo.
+		return m, false
+	}
+	id, err := idents.Add(Identity{Name: m.Name, Username: user}, "")
+	if err != nil {
+		if existente, ok := idents.Get(m.Name); ok {
+			id = existente // já migrada num boot anterior
+		} else {
+			return m, false
+		}
+	}
+	if m.KeyPath != "" && id.KeyPath == "" {
+		_ = idents.SetKeyPath(id.Name, m.KeyPath)
+	}
+	m.Host = host
+	m.Identity = id.Name
+	m.Dest = ""
+	return m, true
+}
+
+// resolve preenche o Dest derivado das máquinas do app. Fica no Get/List de
+// propósito: se cada chamador tivesse de resolver, bastaria um esquecer para o
+// ssh sair sem usuário e falhar num ponto distante da causa.
+//
+// O store vem por parâmetro, lido sob o lock do registro pelo chamador: assim a
+// consulta ao IdentityStore (que tem lock próprio) acontece com o lock do
+// Registry já liberado — aninhar os dois é como se inventa um deadlock.
+func resolve(m Machine, idents *IdentityStore) Machine {
+	if m.Identity == "" || idents == nil {
+		return m
+	}
+	if id, ok := idents.Get(m.Identity); ok {
+		m.Dest = id.Username + "@" + m.Host
+		// A chave também é da identidade. Resolver aqui é o que faz o
+		// launcher.RegisterMachine continuar funcionando sem mudança: ele lê
+		// m.KeyPath para montar o `ssh -i`, e agora recebe o da identidade.
+		if id.KeyPath != "" {
+			m.KeyPath = id.KeyPath
+		}
+	}
+	return m
 }
 
 // put insere sem lock e sem persistir (uso interno na construção e nas
@@ -190,12 +302,36 @@ func (r *Registry) put(m Machine) {
 	r.order = append(r.order, m.Name)
 }
 
+// UseIdentities liga o registro a um store de identidades depois da construção.
+// Existe para o modo em memória (dev e teste), onde o NewRegistry não recebe o
+// store; em produção quem liga é o NewRegistryAt.
+func (r *Registry) UseIdentities(s *IdentityStore) {
+	r.mu.Lock()
+	r.idents = s
+	r.mu.Unlock()
+}
+
+// identityStore devolve o store sob o lock, para o resolve rodar com ele livre.
+func (r *Registry) identityStore() *IdentityStore {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.idents
+}
+
 // diskMachine é o formato em disco. Espelha a Machine, mas com o KeyPath
 // incluído — em /data ele PRECISA ser gravado; o que ele não pode é ir ao app.
+//
+// `dest` continua lido para as máquinas gravadas antes do redesenho (a migração
+// as converte no boot), mas não é mais escrito: para máquina do app ele é
+// derivado, e gravar valor derivado é convidar as duas versões a divergirem.
 type diskMachine struct {
 	Name            string `json:"name"`
-	Dest            string `json:"dest"`
+	Dest            string `json:"dest,omitempty"`
 	Port            int    `json:"port"`
+	Host            string `json:"host,omitempty"`
+	Identity        string `json:"identity,omitempty"`
+	OS              string `json:"os,omitempty"`
+	Theme           string `json:"theme,omitempty"`
 	KeyPath         string `json:"key_path,omitempty"`
 	HostFingerprint string `json:"host_fingerprint,omitempty"`
 }
@@ -216,6 +352,7 @@ func loadDisk(path string) []Machine {
 	for _, d := range dms {
 		out = append(out, Machine{
 			Name: d.Name, Dest: d.Dest, Port: d.Port,
+			Host: d.Host, Identity: d.Identity, OS: d.OS, Theme: d.Theme,
 			KeyPath: d.KeyPath, HostFingerprint: d.HostFingerprint,
 			Source: SourceApp,
 		})
@@ -241,7 +378,8 @@ func (r *Registry) persist() error {
 			continue
 		}
 		dms = append(dms, diskMachine{
-			Name: m.Name, Dest: m.Dest, Port: m.Port,
+			Name: m.Name, Port: m.Port,
+			Host: m.Host, Identity: m.Identity, OS: m.OS, Theme: m.Theme,
 			KeyPath: m.KeyPath, HostFingerprint: m.HostFingerprint,
 		})
 	}
@@ -285,7 +423,7 @@ func (r *Registry) Add(m Machine) (Machine, error) {
 	if err := r.persist(); err != nil {
 		return Machine{}, err
 	}
-	return m, nil
+	return resolve(m, r.identityStore()), nil
 }
 
 // Update altera destino e porta de uma máquina do app. Chave e fingerprint são
@@ -304,19 +442,40 @@ func (r *Registry) Update(name string, patch Machine) (Machine, error) {
 	}
 	// Valida sobre o nome atual: o nome não muda por PATCH (é a chave da URL e
 	// o nome do arquivo da chave privada).
-	next, err := validate(Machine{Name: name, Dest: patch.Dest, Port: patch.Port})
+	//
+	// Campo vazio no patch mantém o atual — é PATCH, não PUT: a página de edição
+	// do app manda o que mexeu.
+	alvo := Machine{Name: name, Host: patch.Host, Identity: patch.Identity, Port: patch.Port}
+	if alvo.Host == "" {
+		alvo.Host = cur.Host
+	}
+	if alvo.Identity == "" {
+		alvo.Identity = cur.Identity
+	}
+	if alvo.Port <= 0 {
+		alvo.Port = cur.Port
+	}
+	next, err := validate(alvo)
 	if err != nil {
 		r.mu.Unlock()
 		return Machine{}, err
 	}
 	next.Source = SourceApp
 	next.KeyPath = cur.KeyPath
-	// O fingerprint pertence a um (dest, porta). Apontar a máquina para outro
+	next.OS = cur.OS
+	next.Theme = cur.Theme
+	if patch.Theme != "" {
+		next.Theme = patch.Theme
+	}
+	// O fingerprint pertence a um (host, porta). Apontar a máquina para outro
 	// lugar derruba a confirmação: senão o hub acharia que já confiou num host
-	// que a usuária nunca conferiu. A chave privada fica — ela continua sendo
-	// desta máquina, e regerá-la obrigaria a reinstalar no destino à toa.
-	if next.Dest == cur.Dest && next.Port == cur.Port {
+	// que a usuária nunca conferiu. Trocar de IDENTIDADE não derruba — o
+	// fingerprint é do host, e quem entra nele é assunto separado. Mas derruba o
+	// SO detectado, que é do par (host, conta).
+	if next.Host == cur.Host && next.Port == cur.Port {
 		next.HostFingerprint = cur.HostFingerprint
+	} else {
+		next.OS = ""
 	}
 	r.by[name] = next
 	r.mu.Unlock()
@@ -324,7 +483,7 @@ func (r *Registry) Update(name string, patch Machine) (Machine, error) {
 	if err := r.persist(); err != nil {
 		return Machine{}, err
 	}
-	return next, nil
+	return resolve(next, r.identityStore()), nil
 }
 
 // Remove tira uma máquina do app do registro. Não apaga a chave privada: isso é
@@ -359,6 +518,31 @@ func (r *Registry) SetFingerprint(name, fp string) error {
 	return r.setField(name, func(m *Machine) { m.HostFingerprint = fp })
 }
 
+// SetOS grava o sistema detectado no host. Só descritivo: o app usa para o
+// ícone, nada no hub decide nada com isto.
+func (r *Registry) SetOS(name, os string) error {
+	return r.setField(name, func(m *Machine) { m.OS = os })
+}
+
+// SetTheme grava o tema do terminal escolhido para a máquina.
+func (r *Registry) SetTheme(name, theme string) error {
+	return r.setField(name, func(m *Machine) { m.Theme = theme })
+}
+
+// UsesIdentity diz se alguma máquina usa a identidade dada. É o que impede
+// apagar identidade em uso — passado como callback para o IdentityStore.Remove,
+// que não conhece máquinas.
+func (r *Registry) UsesIdentity(identity string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, m := range r.by {
+		if m.Identity == identity {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Registry) setField(name string, apply func(*Machine)) error {
 	r.mu.Lock()
 	m, ok := r.by[name]
@@ -372,21 +556,31 @@ func (r *Registry) setField(name string, apply func(*Machine)) error {
 	return r.persist()
 }
 
-// List devolve as máquinas na ordem de cadastro.
+// List devolve as máquinas na ordem de cadastro, com o Dest já resolvido.
 func (r *Registry) List() []Machine {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make([]Machine, 0, len(r.order))
+	brutas := make([]Machine, 0, len(r.order))
 	for _, n := range r.order {
-		out = append(out, r.by[n])
+		brutas = append(brutas, r.by[n])
+	}
+	idents := r.idents
+	r.mu.RUnlock()
+
+	out := make([]Machine, 0, len(brutas))
+	for _, m := range brutas {
+		out = append(out, resolve(m, idents))
 	}
 	return out
 }
 
-// Get busca uma máquina pelo nome.
+// Get busca uma máquina pelo nome, com o Dest já resolvido.
 func (r *Registry) Get(name string) (Machine, bool) {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
 	m, ok := r.by[name]
-	return m, ok
+	idents := r.idents
+	r.mu.RUnlock()
+	if !ok {
+		return Machine{}, false
+	}
+	return resolve(m, idents), true
 }

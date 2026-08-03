@@ -24,6 +24,7 @@ type routerConfig struct {
 	machines    *machine.Registry
 	machineKeys MachineKeys
 	machineTgts MachineTargets
+	identities  Identities
 }
 
 // RouterOption configura dependências opcionais do Router.
@@ -74,6 +75,15 @@ func WithMachines(reg *machine.Registry) RouterOption {
 // serve a lista em leitura e mais nada.
 func WithMachineKeys(keys MachineKeys) RouterOption {
 	return func(rc *routerConfig) { rc.machineKeys = keys }
+}
+
+// WithIdentities habilita as rotas /identities (as credenciais reutilizáveis do
+// cadastro) e liga o store ao cadastro de máquinas — sem ele o hub não sabe qual
+// conta remota nem qual chave usar numa máquina do app, e o cadastro pelo app
+// não é registrado. Depende do WithMachineKeys: a identidade nasce com um par de
+// chaves, e sem cofre não há onde gerá-lo.
+func WithIdentities(idents Identities) RouterOption {
+	return func(rc *routerConfig) { rc.identities = idents }
 }
 
 // WithMachineTargets liga o cadastro ao Launcher: confirmar a impressão digital
@@ -166,17 +176,27 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 	if rc.machines != nil {
 		mux.Handle("GET /machines", requireAuth(cfg.Token, MachinesHandler(rc.machines)))
 
-		// Cadastro pelo app (F3). Só com o cofre de chaves ligado: sem ele o hub
-		// não teria onde gerar a chave nem known_hosts próprio para confiar.
-		// Tudo atrás de token — cadastrar instala chave em host remoto.
-		if rc.machineKeys != nil {
-			k, tg := rc.machineKeys, rc.machineTgts
-			mux.Handle("POST /machines", requireAuth(cfg.Token, MachineCreateHandler(rc.machines, k)))
-			mux.Handle("PATCH /machines/{machine}", requireAuth(cfg.Token, MachinePatchHandler(rc.machines, tg)))
-			mux.Handle("DELETE /machines/{machine}", requireAuth(cfg.Token, MachineDeleteHandler(rc.machines, k, tg)))
+		// Cadastro pelo app (F3). Exige o cofre de chaves E o store de
+		// identidades: sem cofre não há onde gerar a chave nem known_hosts para
+		// confiar; sem identidade a máquina não tem conta remota nem chave, e o
+		// cadastro nasceria inconectável. Tudo atrás de token — cadastrar instala
+		// chave em host remoto.
+		if rc.machineKeys != nil && rc.identities != nil {
+			k, tg, ids := rc.machineKeys, rc.machineTgts, rc.identities
+
+			// Identidades: o objeto que o app escolhe antes de cadastrar o host.
+			mux.Handle("GET /identities", requireAuth(cfg.Token, IdentitiesHandler(ids)))
+			mux.Handle("POST /identities", requireAuth(cfg.Token, IdentityCreateHandler(ids, k)))
+			mux.Handle("PATCH /identities/{identity}", requireAuth(cfg.Token, IdentityPatchHandler(ids)))
+			mux.Handle("DELETE /identities/{identity}", requireAuth(cfg.Token, IdentityDeleteHandler(ids, k, rc.machines)))
+
+			mux.Handle("POST /machines", requireAuth(cfg.Token, MachineCreateHandler(rc.machines, k, ids)))
+			mux.Handle("PATCH /machines/{machine}", requireAuth(cfg.Token, MachinePatchHandler(rc.machines, tg, ids)))
+			mux.Handle("DELETE /machines/{machine}", requireAuth(cfg.Token, MachineDeleteHandler(rc.machines, tg)))
 			mux.Handle("GET /machines/{machine}/scan", requireAuth(cfg.Token, MachineScanHandler(rc.machines, k)))
 			mux.Handle("POST /machines/{machine}/trust", requireAuth(cfg.Token, MachineTrustHandler(rc.machines, k, tg)))
-			mux.Handle("POST /machines/{machine}/install-key", requireAuth(cfg.Token, MachineInstallKeyHandler(rc.machines, k)))
+			mux.Handle("POST /machines/{machine}/install-key", requireAuth(cfg.Token, MachineInstallKeyHandler(rc.machines, k, ids)))
+			mux.Handle("POST /machines/{machine}/detect-os", requireAuth(cfg.Token, MachineDetectOSHandler(rc.machines, k, ids)))
 		}
 	}
 

@@ -26,13 +26,19 @@ func (f *fakeTargets) UnregisterMachine(name string) {
 	f.desregistradas = append(f.desregistradas, name)
 }
 
-func doAlvos(t *testing.T, mreg *machine.Registry, keys MachineKeys, tg MachineTargets, method, path, body string) *httptest.ResponseRecorder {
+// doAlvos, como doAdmin, liga idents ao registro antes de servir a
+// requisição — a mesma relação que main.go monta em produção entre
+// machine.NewRegistryAt e WithIdentities.
+func doAlvos(t *testing.T, mreg *machine.Registry, keys MachineKeys, idents *machine.IdentityStore, tg MachineTargets, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
+	if idents != nil {
+		mreg.UseIdentities(idents)
+	}
 	cfg, reg := testDeps()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
-	Router(cfg, reg, nil, WithMachines(mreg), WithMachineKeys(keys), WithMachineTargets(tg)).ServeHTTP(rec, req)
+	Router(cfg, reg, nil, WithMachines(mreg), WithMachineKeys(keys), WithIdentities(idents), WithMachineTargets(tg)).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -40,12 +46,13 @@ func doAlvos(t *testing.T, mreg *machine.Registry, keys MachineKeys, tg MachineT
 // conexão que o hub vai recusar — a máquina precisa passar pelo /trust antes.
 func TestPostMachinesNaoCriaAlvoAntesDoTrust(t *testing.T) {
 	mreg := machine.NewRegistry(nil)
+	idents := identidadeComChave(t, "vx", "vx")
 	keys := newFakeKeys()
 	keys.scanFPs = []string{"SHA256:doHost"}
 	tg := &fakeTargets{}
 
-	rec := doAlvos(t, mreg, keys, tg, http.MethodPost, "/machines",
-		`{"name":"vps","dest":"vx@192.0.2.50","port":2222}`)
+	rec := doAlvos(t, mreg, keys, idents, tg, http.MethodPost, "/machines",
+		`{"name":"vps","host":"192.0.2.50","port":2222,"identity":"vx"}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
@@ -57,12 +64,12 @@ func TestPostMachinesNaoCriaAlvoAntesDoTrust(t *testing.T) {
 // Confirmar a impressão é o que torna a máquina utilizável: sem este registro o
 // cadastro inteiro só produziria um nome numa lista.
 func TestPostTrustFazAMaquinaVirarAlvo(t *testing.T) {
-	mreg := registroComVPS(t)
+	mreg, idents := registroComVPS(t)
 	keys := newFakeKeys()
 	keys.scanFPs = []string{"SHA256:doHost"}
 	tg := &fakeTargets{}
 
-	rec := doAlvos(t, mreg, keys, tg, http.MethodPost, "/machines/vps/trust",
+	rec := doAlvos(t, mreg, keys, idents, tg, http.MethodPost, "/machines/vps/trust",
 		`{"fingerprint":"SHA256:doHost"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
@@ -80,12 +87,12 @@ func TestPostTrustFazAMaquinaVirarAlvo(t *testing.T) {
 
 // Impressão que não bate não confia em nada — e não pode criar alvo nenhum.
 func TestTrustRecusadoNaoCriaAlvo(t *testing.T) {
-	mreg := registroComVPS(t)
+	mreg, idents := registroComVPS(t)
 	keys := newFakeKeys()
 	keys.scanFPs = []string{"SHA256:outroHost"}
 	tg := &fakeTargets{}
 
-	rec := doAlvos(t, mreg, keys, tg, http.MethodPost, "/machines/vps/trust",
+	rec := doAlvos(t, mreg, keys, idents, tg, http.MethodPost, "/machines/vps/trust",
 		`{"fingerprint":"SHA256:doHost"}`)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status %d, esperava 409: %s", rec.Code, rec.Body.String())
@@ -97,15 +104,15 @@ func TestTrustRecusadoNaoCriaAlvo(t *testing.T) {
 
 // Apontar a máquina para outro endereço derruba a confirmação. O alvo tem que
 // cair junto: continuar conectando no lugar antigo seria pior que falhar.
-func TestPatchQueMudaODestinoTiraOAlvo(t *testing.T) {
-	mreg := registroComVPS(t)
+func TestPatchQueMudaOHostTiraOAlvo(t *testing.T) {
+	mreg, idents := registroComVPS(t)
 	keys := newFakeKeys()
 	keys.scanFPs = []string{"SHA256:doHost"}
 	tg := &fakeTargets{}
-	doAlvos(t, mreg, keys, tg, http.MethodPost, "/machines/vps/trust", `{"fingerprint":"SHA256:doHost"}`)
+	doAlvos(t, mreg, keys, idents, tg, http.MethodPost, "/machines/vps/trust", `{"fingerprint":"SHA256:doHost"}`)
 
-	rec := doAlvos(t, mreg, keys, tg, http.MethodPatch, "/machines/vps",
-		`{"dest":"vx@198.51.100.9","port":2222}`)
+	rec := doAlvos(t, mreg, keys, idents, tg, http.MethodPatch, "/machines/vps",
+		`{"host":"198.51.100.9","port":2222}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
@@ -114,17 +121,17 @@ func TestPatchQueMudaODestinoTiraOAlvo(t *testing.T) {
 	}
 }
 
-// Editar só a porta mantendo o destino preserva a confirmação — e o alvo tem
+// Editar só a porta mantendo o host preserva a confirmação — e o alvo tem
 // que ser refeito com a porta nova, senão o ssh iria para a antiga.
-func TestPatchQueMantemODestinoRefazOAlvo(t *testing.T) {
-	mreg := registroComVPS(t)
+func TestPatchQueMantemOHostRefazOAlvo(t *testing.T) {
+	mreg, idents := registroComVPS(t)
 	keys := newFakeKeys()
 	keys.scanFPs = []string{"SHA256:doHost"}
 	tg := &fakeTargets{}
-	doAlvos(t, mreg, keys, tg, http.MethodPost, "/machines/vps/trust", `{"fingerprint":"SHA256:doHost"}`)
+	doAlvos(t, mreg, keys, idents, tg, http.MethodPost, "/machines/vps/trust", `{"fingerprint":"SHA256:doHost"}`)
 
-	rec := doAlvos(t, mreg, keys, tg, http.MethodPatch, "/machines/vps",
-		`{"dest":"vx@192.0.2.50","port":2222}`)
+	rec := doAlvos(t, mreg, keys, idents, tg, http.MethodPatch, "/machines/vps",
+		`{"host":"192.0.2.50","port":2222}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
@@ -132,18 +139,40 @@ func TestPatchQueMantemODestinoRefazOAlvo(t *testing.T) {
 		t.Fatalf("o alvo não foi refeito depois do patch: %v", tg.registradas)
 	}
 	if len(tg.desregistradas) != 0 {
-		t.Errorf("patch sem mudar o destino não devia derrubar o alvo: %v", tg.desregistradas)
+		t.Errorf("patch sem mudar o host não devia derrubar o alvo: %v", tg.desregistradas)
+	}
+}
+
+// Trocar só a identidade (host e porta iguais) preserva a confirmação, exatamente
+// como preservá-la é o que se espera de um patch que não muda o host: nenhum
+// alvo deveria cair.
+func TestPatchQueTrocaSoAIdentidadeNaoTiraOAlvo(t *testing.T) {
+	mreg, idents := registroComVPS(t)
+	if _, err := idents.Add(machine.Identity{Name: "outra", Username: "deploy"}, ""); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	keys := newFakeKeys()
+	keys.scanFPs = []string{"SHA256:doHost"}
+	tg := &fakeTargets{}
+	doAlvos(t, mreg, keys, idents, tg, http.MethodPost, "/machines/vps/trust", `{"fingerprint":"SHA256:doHost"}`)
+
+	rec := doAlvos(t, mreg, keys, idents, tg, http.MethodPatch, "/machines/vps", `{"identity":"outra"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(tg.desregistradas) != 0 {
+		t.Errorf("trocar de identidade não devia derrubar o alvo: %v", tg.desregistradas)
 	}
 }
 
 func TestDeleteTiraOAlvo(t *testing.T) {
-	mreg := registroComVPS(t)
+	mreg, idents := registroComVPS(t)
 	keys := newFakeKeys()
 	keys.scanFPs = []string{"SHA256:doHost"}
 	tg := &fakeTargets{}
-	doAlvos(t, mreg, keys, tg, http.MethodPost, "/machines/vps/trust", `{"fingerprint":"SHA256:doHost"}`)
+	doAlvos(t, mreg, keys, idents, tg, http.MethodPost, "/machines/vps/trust", `{"fingerprint":"SHA256:doHost"}`)
 
-	rec := doAlvos(t, mreg, keys, tg, http.MethodDelete, "/machines/vps", "")
+	rec := doAlvos(t, mreg, keys, idents, tg, http.MethodDelete, "/machines/vps", "")
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
@@ -155,7 +184,7 @@ func TestDeleteTiraOAlvo(t *testing.T) {
 // Sem CUTUQUE_MACHINES_DIR o Launcher não é ligado ao cadastro. As rotas não
 // podem cair por isso: o hub tem que seguir servindo as máquinas do hub.env.
 func TestCadastroSemLauncherNaoQuebra(t *testing.T) {
-	mreg := registroComVPS(t)
+	mreg, idents := registroComVPS(t)
 	keys := newFakeKeys()
 	keys.scanFPs = []string{"SHA256:doHost"}
 
@@ -164,10 +193,10 @@ func TestCadastroSemLauncherNaoQuebra(t *testing.T) {
 		quero              int
 	}{
 		{http.MethodPost, "/machines/vps/trust", `{"fingerprint":"SHA256:doHost"}`, http.StatusOK},
-		{http.MethodPatch, "/machines/vps", `{"dest":"vx@192.0.2.50","port":22}`, http.StatusOK},
+		{http.MethodPatch, "/machines/vps", `{"host":"192.0.2.50","port":22}`, http.StatusOK},
 		{http.MethodDelete, "/machines/vps", "", http.StatusNoContent},
 	} {
-		rec := doAlvos(t, mreg, keys, nil, c.method, c.path, c.body)
+		rec := doAlvos(t, mreg, keys, idents, nil, c.method, c.path, c.body)
 		if rec.Code != c.quero {
 			t.Errorf("%s %s: status %d, esperava %d — %s", c.method, c.path, rec.Code, c.quero, rec.Body.String())
 		}
@@ -179,11 +208,11 @@ func TestCadastroSemLauncherNaoQuebra(t *testing.T) {
 // Fechar o app no meio do cadastro não pode deixar a máquina encalhada: o scan
 // relê a impressão para a usuária poder confirmar depois.
 func TestGetScanReleAImpressaoDoHost(t *testing.T) {
-	mreg := registroComVPS(t)
+	mreg, idents := registroComVPS(t)
 	keys := newFakeKeys()
 	keys.scanFPs = []string{"SHA256:doHost"}
 
-	rec := doAdmin(t, mreg, keys, http.MethodGet, "/machines/vps/scan", "")
+	rec := doAdmin(t, mreg, keys, idents, http.MethodGet, "/machines/vps/scan", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
@@ -201,12 +230,12 @@ func TestGetScanReleAImpressaoDoHost(t *testing.T) {
 // O scan não confia em nada: relê e devolve, só isso. Confiar segue sendo do
 // /trust, que escaneia de novo por conta própria.
 func TestGetScanNaoConfiaNemCriaAlvo(t *testing.T) {
-	mreg := registroComVPS(t)
+	mreg, idents := registroComVPS(t)
 	keys := newFakeKeys()
 	keys.scanFPs = []string{"SHA256:doHost"}
 	tg := &fakeTargets{}
 
-	doAlvos(t, mreg, keys, tg, http.MethodGet, "/machines/vps/scan", "")
+	doAlvos(t, mreg, keys, idents, tg, http.MethodGet, "/machines/vps/scan", "")
 
 	m, _ := mreg.Get("vps")
 	if m.HostFingerprint != "" {
@@ -224,7 +253,8 @@ func TestGetScanDeMaquinaDoEnvE403(t *testing.T) {
 	mreg := machine.NewRegistry([]machine.Machine{
 		{Name: "macmini", Dest: "macmini", Port: 22, Source: machine.SourceEnv},
 	})
-	rec := doAdmin(t, mreg, newFakeKeys(), http.MethodGet, "/machines/macmini/scan", "")
+	idents := identidadeComChave(t, "vx", "vx")
+	rec := doAdmin(t, mreg, newFakeKeys(), idents, http.MethodGet, "/machines/macmini/scan", "")
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status %d, esperava 403: %s", rec.Code, rec.Body.String())
 	}

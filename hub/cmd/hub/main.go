@@ -212,7 +212,7 @@ func main() {
 	// APNs (Fase 4): opcional. Se configurado, sobe o Notifier e habilita a rota
 	// de registro de devices; senão, o hub segue normalmente sem push.
 	var ntf *notifier.Notifier
-	mreg := buildMachineRegistry(machines, logger)
+	mreg, idents := buildMachineRegistry(machines, logger)
 	serverOpts := []server.RouterOption{
 		server.WithBoard(boardStore),
 		server.WithMachines(mreg),
@@ -228,7 +228,8 @@ func main() {
 		// perdoa apontá-lo para o lugar errado.
 		lch.SetMachineKnownHosts(ks.KnownHostsPath())
 		restaurados := restauraAlvosDoApp(lch, mreg)
-		serverOpts = append(serverOpts, server.WithMachineKeys(ks), server.WithMachineTargets(lch))
+		serverOpts = append(serverOpts,
+			server.WithMachineKeys(ks), server.WithMachineTargets(lch), server.WithIdentities(idents))
 		logger.Info("cadastro de máquinas pelo app habilitado", "dir", dir, "alvos_restaurados", restaurados)
 	}
 	if cfg.APNSEnabled() {
@@ -366,17 +367,36 @@ func restauraAlvosDoApp(lch *launcher.Launcher, reg *machine.Registry) int {
 
 // buildMachineRegistry monta o registro da aba Máquinas: sempre com o que veio
 // do CUTUQUE_SSH_TARGETS e, quando CUTUQUE_MACHINES_DIR está configurado,
-// também com os cadastros do app persistidos em disco.
-func buildMachineRegistry(ms []machine.Machine, logger *slog.Logger) *machine.Registry {
+// também com os cadastros do app persistidos em disco, junto das identidades.
+//
+// Devolve o registro e o store de identidades (nil sem CUTUQUE_MACHINES_DIR).
+func buildMachineRegistry(ms []machine.Machine, logger *slog.Logger) (*machine.Registry, *machine.IdentityStore) {
 	base := machinesForRegistry(ms)
 	dir := os.Getenv("CUTUQUE_MACHINES_DIR")
 	if dir == "" {
-		return machine.NewRegistry(base)
+		return machine.NewRegistry(base), nil
 	}
+
+	// A chave da cifra vem do ambiente, não de /data: é o que faz um backup do
+	// volume não carregar as senhas junto. Ausente, o hub sobe sem guardar senha
+	// — cadastrar máquina continua funcionando, só pede a senha na hora.
+	idents, err := machine.NewIdentityStoreAt(
+		filepath.Join(dir, "identities.json"),
+		os.Getenv("CUTUQUE_IDENTITY_KEY"),
+	)
+	if err != nil {
+		// Chave presente e inválida: falhar alto. Subir sem cifra depois de a
+		// usuária ter configurado uma faria o hub recusar senha sem explicar.
+		logger.Error("CUTUQUE_IDENTITY_KEY inválida — o hub não vai guardar senha", "erro", err)
+		idents, _ = machine.NewIdentityStoreAt(filepath.Join(dir, "identities.json"), "")
+	}
+
 	path := filepath.Join(dir, "machines.json")
-	reg := machine.NewRegistryAt(path, base)
-	logger.Info("registro de máquinas persistido", "path", path, "total", len(reg.List()))
-	return reg
+	reg := machine.NewRegistryAt(path, base, idents)
+	logger.Info("registro de máquinas persistido",
+		"path", path, "total", len(reg.List()),
+		"identidades", len(idents.List()), "guarda_senha", idents.CanStorePassword())
+	return reg, idents
 }
 
 // machinesForRegistry devolve as máquinas que o app deve enxergar na aba

