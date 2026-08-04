@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// Aba Máquinas: lista os hosts que o hub conhece e cadastra os novos. Tocar
@@ -16,29 +17,12 @@ struct MachineListView: View {
     @State private var machines: [Machine] = []
     @State private var loading = false
     @State private var error: String?
-    /// Cadastro em andamento: máquina nova (`.nova`) ou pendente retomada.
-    @State private var cadastro: Cadastro?
+    /// Sheet de cadastro em andamento: máquina nova, pendente retomada ou
+    /// cadastro sendo editado. É o próprio `Modo` da tela que identifica a sheet
+    /// — o envelope local que existia aqui só duplicava esses três casos.
+    @State private var cadastro: NewMachineView.Modo?
     @State private var apagando: Machine?
     private let api = APIClient()
-
-    /// Identifica a sheet de cadastro. `Machine` já é Identifiable, mas "nova"
-    /// não tem máquina nenhuma — daí o envelope.
-    private enum Cadastro: Identifiable {
-        case nova
-        case retomar(Machine)
-
-        var id: String {
-            switch self {
-            case .nova: return "nova"
-            case .retomar(let m): return m.name
-            }
-        }
-
-        var machine: Machine? {
-            if case .retomar(let m) = self { return m }
-            return nil
-        }
-    }
 
     var body: some View {
         // Embutida não leva `NavigationStack`: numa coluna da split view a
@@ -92,8 +76,14 @@ struct MachineListView: View {
         .refreshable { await load() }
         .overlay { if loading && machines.isEmpty { ProgressView() } }
         .task { await load() }
-        .sheet(item: $cadastro) { item in
-            NewMachineView(retomando: item.machine) { Task { await load() } }
+        // No iPad a lista fica visível ao lado do painel: ela não "reaparece"
+        // quando a aparência muda no detalhe, e sem isto o ícone velho ficaria na
+        // barra lateral até um pull-to-refresh.
+        .onReceive(NotificationCenter.default.publisher(for: .maquinasMudaram)) { _ in
+            Task { await load() }
+        }
+        .sheet(item: $cadastro) { modo in
+            NewMachineView(modo: modo) { Task { await load() } }
         }
         .confirmationDialog(
             "Remover \(apagando?.name ?? "")?",
@@ -116,17 +106,30 @@ struct MachineListView: View {
         // pilha, e passar `nil` aqui deixa a `List` exatamente como era.
         List(selection: splitSelection) {
             ForEach(machines) { machine in
-                if machine.needsTrust {
-                    // Cadastro pela metade não navega: sem a impressão digital
-                    // confirmada o hub recusa conectar, e abrir os arquivos só
-                    // daria um erro de ssh sem explicação. O toque retoma a
-                    // confirmação, que é o que falta de verdade.
-                    Button { cadastro = .retomar(machine) } label: { linha(machine) }
-                        .buttonStyle(.plain)
-                } else if isEmbedded {
-                    linha(machine).tag(machine)
-                } else {
-                    NavigationLink(value: machine) { linha(machine) }
+                Group {
+                    if machine.needsTrust {
+                        // Cadastro pela metade não navega: sem a impressão digital
+                        // confirmada o hub recusa conectar, e abrir os arquivos só
+                        // daria um erro de ssh sem explicação. O toque retoma a
+                        // confirmação, que é o que falta de verdade.
+                        Button { cadastro = .retomar(machine) } label: { linha(machine) }
+                            .buttonStyle(.plain)
+                    } else if isEmbedded {
+                        linha(machine).tag(machine)
+                    } else {
+                        NavigationLink(value: machine) { linha(machine) }
+                    }
+                }
+                // Endereço, porta e identidade se corrigem daqui. Só as do app:
+                // as do `hub.env` o hub recusa editar (403), então não oferece.
+                // Fica na borda de arrastar oposta à de remover, de propósito.
+                .swipeActions(edge: .leading) {
+                    if machine.isEditable {
+                        Button { cadastro = .editar(machine) } label: {
+                            Label("Editar", systemImage: "pencil")
+                        }
+                        .tint(.blue)
+                    }
                 }
             }
             .onDelete { indices in
@@ -141,10 +144,11 @@ struct MachineListView: View {
         // Ícone pelo SO confirmado no `/detect-os`, não mais o palpite
         // `isLocal ? desktopcomputer : server.rack` — máquina local também cai
         // no "desconhecido" do `osIcon` (desktopcomputer), então o caso comum
-        // não muda de cara; o que muda é a remota sem SO detectado ainda.
+        // não muda de cara; o que muda é a remota sem SO detectado ainda. E a
+        // escolha à mão (`displayIcon`) ganha do detectado quando existe.
         let identidade = (machine.identity?.isEmpty == false) ? machine.identity : nil
         return HStack(spacing: 10) {
-            Image(systemName: machine.osIcon)
+            Image(systemName: machine.displayIcon)
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
                 Text(machine.name)

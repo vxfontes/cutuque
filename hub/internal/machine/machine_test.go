@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -139,6 +140,44 @@ func TestAddSemPortaUsaAPadrao(t *testing.T) {
 	m, _ := r.Add(Machine{Name: "vps", Host: "host", Identity: "vx"})
 	if m.Port != defaultSSHPort {
 		t.Errorf("porta = %d, esperava %d", m.Port, defaultSSHPort)
+	}
+}
+
+// Porta acima do teto TCP é dado impossível, e sem esta recusa ela era guardada
+// calada: a máquina só falhava depois, na conexão, com erro do ssh no lugar do
+// erro do cadastro. 65535 é válida — o teto é inclusivo.
+func TestAddRecusaPortaAcimaDoTeto(t *testing.T) {
+	for _, porta := range []int{maxPort + 1, 70000, 999999} {
+		r := NewRegistry(nil)
+		_, err := r.Add(Machine{Name: "vps", Host: "host", Identity: "vx", Port: porta})
+		if !errors.Is(err, ErrInvalidDest) {
+			t.Errorf("porta %d: err = %v, quero ErrInvalidDest", porta, err)
+		}
+		if _, ok := r.Get("vps"); ok {
+			t.Errorf("porta %d: a máquina entrou no registro mesmo recusada", porta)
+		}
+	}
+	r := NewRegistry(nil)
+	if _, err := r.Add(Machine{Name: "vps", Host: "host", Identity: "vx", Port: maxPort}); err != nil {
+		t.Errorf("porta %d devia passar: %v", maxPort, err)
+	}
+}
+
+// Recusar não é o suficiente: o PATCH que falha não pode deixar a máquina pela
+// metade (é o mesmo mapa em memória que o resto do hub lê).
+func TestUpdateRecusaPortaAcimaDoTetoESeguraOCadastro(t *testing.T) {
+	r := NewRegistry(nil)
+	_, _ = r.Add(Machine{Name: "vps", Host: "antigo", Identity: "vx", Port: 2222})
+
+	if _, err := r.Update("vps", Machine{Host: "novo", Port: 70000}); !errors.Is(err, ErrInvalidDest) {
+		t.Fatalf("err = %v, quero ErrInvalidDest", err)
+	}
+	m, ok := r.Get("vps")
+	if !ok {
+		t.Fatal("a máquina sumiu por causa de um patch recusado")
+	}
+	if m.Host != "antigo" || m.Port != 2222 {
+		t.Errorf("patch recusado mexeu no cadastro: host=%q porta=%d", m.Host, m.Port)
 	}
 }
 
@@ -406,6 +445,113 @@ func TestSetOSESetTheme(t *testing.T) {
 	}
 }
 
+// MARK: SetAppearance
+
+// A razão de existir do SetAppearance: vazio aqui é uma ESCOLHA (tema Padrão,
+// ícone automático), não uma omissão. Pelo Update isso era impossível — vazio
+// significa "mantém" —, então não havia como voltar ao tema Padrão.
+func TestSetAppearanceVoltaAoPadrao(t *testing.T) {
+	r := NewRegistry(nil)
+	_, _ = r.Add(Machine{Name: "vps", Host: "host", Identity: "vx"})
+
+	m, err := r.SetAppearance("vps", "dracula", "apple")
+	if err != nil {
+		t.Fatalf("SetAppearance falhou: %v", err)
+	}
+	if m.Theme != "dracula" || m.Icon != "apple" {
+		t.Errorf("aparência não gravou: %+v", m)
+	}
+
+	m, err = r.SetAppearance("vps", "", "")
+	if err != nil {
+		t.Fatalf("SetAppearance de volta ao padrão falhou: %v", err)
+	}
+	if m.Theme != "" || m.Icon != "" {
+		t.Errorf("vazio não apagou a escolha: %+v", m)
+	}
+	if guardada, _ := r.Get("vps"); guardada.Theme != "" || guardada.Icon != "" {
+		t.Errorf("o registro seguiu com a escolha antiga: %+v", guardada)
+	}
+}
+
+// Aparência não afeta conexão: a rota que a muda não pode ter como derrubar uma
+// confiança que a usuária conferiu à mão, nem o SO detectado (que é fato, e é o
+// que faz o ícone automático funcionar quando ela volta atrás).
+func TestSetAppearanceNaoEncostaEmConexaoNemNoSO(t *testing.T) {
+	r := NewRegistry(nil)
+	_, _ = r.Add(Machine{Name: "vps", Host: "host", Identity: "vx", Port: 2222})
+	_ = r.SetFingerprint("vps", "SHA256:abc")
+	_ = r.SetOS("vps", "Darwin 24.5.0")
+	_ = r.SetKeyPath("vps", "/data/machines/keys/vx")
+
+	m, err := r.SetAppearance("vps", "nord", "pc")
+	if err != nil {
+		t.Fatalf("SetAppearance falhou: %v", err)
+	}
+	if m.HostFingerprint != "SHA256:abc" || m.OS != "Darwin 24.5.0" {
+		t.Errorf("aparência mexeu em fingerprint ou SO: %+v", m)
+	}
+	if m.Host != "host" || m.Port != 2222 || m.Identity != "vx" || m.KeyPath != "/data/machines/keys/vx" {
+		t.Errorf("aparência mexeu em host/porta/identidade/chave: %+v", m)
+	}
+}
+
+// O ícone manual sobrevive a um PATCH: sem o `next.Icon = cur.Icon` no Update,
+// trocar o host apagaria a escolha em silêncio. O SO, ao contrário, cai de
+// propósito — ele é do par (host, conta).
+func TestUpdateNaoApagaOIconeEscolhido(t *testing.T) {
+	r := NewRegistry(nil)
+	_, _ = r.Add(Machine{Name: "vps", Host: "antigo", Identity: "vx"})
+	_, _ = r.SetAppearance("vps", "gruvboxDark", "apple")
+	_ = r.SetOS("vps", "Darwin 24.5.0")
+
+	m, err := r.Update("vps", Machine{Host: "novo"})
+	if err != nil {
+		t.Fatalf("Update falhou: %v", err)
+	}
+	if m.Icon != "apple" || m.Theme != "gruvboxDark" {
+		t.Errorf("o PATCH apagou a aparência escolhida: %+v", m)
+	}
+	if m.OS != "" {
+		t.Errorf("o SO detectado sobreviveu à troca de host: %q", m.OS)
+	}
+}
+
+// O hub valida a FORMA, não a lista: quem conhece temas e ícones é o app. O que
+// não pode é entrar lixo de tamanho arbitrário no registro.
+func TestSetAppearanceRecusaIDMalformado(t *testing.T) {
+	r := NewRegistry(nil)
+	_, _ = r.Add(Machine{Name: "vps", Host: "host", Identity: "vx"})
+	_, _ = r.SetAppearance("vps", "nord", "apple")
+
+	ruins := []struct{ theme, icon string }{
+		{"../../etc/passwd", ""},
+		{"tema com espaço", ""},
+		{strings.Repeat("a", 33), ""},
+		{"", "-flag"},
+		{"", "ícone"},
+	}
+	for _, ruim := range ruins {
+		if _, err := r.SetAppearance("vps", ruim.theme, ruim.icon); !errors.Is(err, ErrInvalidLook) {
+			t.Errorf("SetAppearance(%q, %q): err = %v, quero ErrInvalidLook", ruim.theme, ruim.icon, err)
+		}
+	}
+	// Nenhuma das recusas pode ter deixado rastro.
+	if m, _ := r.Get("vps"); m.Theme != "nord" || m.Icon != "apple" {
+		t.Errorf("uma recusa mexeu na aparência guardada: %+v", m)
+	}
+}
+
+func TestSetAppearanceRecusaEnvEInexistente(t *testing.T) {
+	r := NewRegistry([]Machine{{Name: "macbook", Dest: "vx@host", Port: 22, Source: SourceEnv}})
+	if _, err := r.SetAppearance("macbook", "nord", ""); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("máquina do env: err = %v, quero ErrReadOnly", err)
+	}
+	if _, err := r.SetAppearance("fantasma", "nord", ""); !errors.Is(err, ErrNotFound) {
+		t.Errorf("máquina inexistente: err = %v, quero ErrNotFound", err)
+	}
+}
+
 // UsesIdentity é o que impede o DELETE /identities de apagar uma identidade
 // ainda referenciada por alguma máquina.
 func TestUsesIdentity(t *testing.T) {
@@ -494,6 +640,102 @@ func TestRegistroSobreviveAoRestart(t *testing.T) {
 	}
 	if _, ok := r2.Get("macbook"); !ok {
 		t.Error("a máquina do env sumiu depois de carregar o disco")
+	}
+}
+
+// Aparência é escolha da usuária, não estado de execução: tem de sobreviver ao
+// restart. Sem o campo no diskMachine ela voltaria ao padrão a cada deploy — e o
+// sintoma (o tema "sumiu sozinho") apareceria longe da causa.
+// Dois aparelhos dela mexendo na aparência da MESMA máquina ao mesmo tempo (o
+// iPad e o iPhone com a sheet aberta). A semântica é "a última escrita ganha", e
+// para cor de terminal isso é aceitável — o que não é aceitável é o /data
+// divergir do que ficou em memória, ou sair JSON pela metade: o próximo boot
+// leria uma aparência que ninguém escolheu, ou perderia o cadastro inteiro.
+//
+// Falha sem o `saveMu` do persist: o snapshot é tirado fora do lock e todas as
+// gravações disputam o mesmo `.tmp`.
+func TestSetAppearanceConcorrenteNaoDivergeDoDisco(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "machines.json")
+	r := NewRegistryAt(path, nil, NewIdentityStore())
+	for _, n := range []string{"vps", "macmini", "casa"} {
+		if _, err := r.Add(Machine{Name: n, Host: "203.0.113.9", Identity: "vx"}); err != nil {
+			t.Fatalf("Add(%q) falhou: %v", n, err)
+		}
+	}
+
+	// Tamanhos de serialização bem diferentes de propósito: é a diferença de
+	// bytes que faz uma escrita atropelada aparecer como JSON truncado.
+	escolhas := []struct{ tema, icone string }{
+		{"catppuccinMochaComNomeLongo", "raspberrypi"},
+		{"", ""},
+		{"nord", "cloud"},
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 60; i++ {
+		e := escolhas[i%len(escolhas)]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := r.SetAppearance("vps", e.tema, e.icone); err != nil {
+				t.Errorf("SetAppearance concorrente falhou: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	memoria, ok := r.Get("vps")
+	if !ok {
+		t.Fatal("a máquina sumiu")
+	}
+	combinacaoPedida := false
+	for _, e := range escolhas {
+		if memoria.Theme == e.tema && memoria.Icon == e.icone {
+			combinacaoPedida = true
+		}
+	}
+	if !combinacaoPedida {
+		t.Errorf("sobrou combinação que ninguém pediu: tema=%q ícone=%q", memoria.Theme, memoria.Icon)
+	}
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("não deu para ler o arquivo: %v", err)
+	}
+	var disco []diskMachine
+	if err := json.Unmarshal(b, &disco); err != nil {
+		t.Fatalf("JSON inválido em disco (escrita atropelada): %v\nconteúdo: %s", err, b)
+	}
+	if len(disco) != 3 {
+		t.Fatalf("o arquivo tem %d máquinas, esperava 3: %s", len(disco), b)
+	}
+	for _, d := range disco {
+		if d.Name != "vps" {
+			continue
+		}
+		if d.Theme != memoria.Theme || d.Icon != memoria.Icon {
+			t.Errorf("disco divergiu da memória: disco tema=%q ícone=%q, memória tema=%q ícone=%q",
+				d.Theme, d.Icon, memoria.Theme, memoria.Icon)
+		}
+	}
+}
+
+func TestAparenciaSobreviveAoRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "machines.json")
+
+	r := NewRegistryAt(path, nil, NewIdentityStore())
+	if _, err := r.Add(Machine{Name: "vps", Host: "203.0.113.9", Identity: "vx"}); err != nil {
+		t.Fatalf("Add falhou: %v", err)
+	}
+	if _, err := r.SetAppearance("vps", "catppuccinMocha", "server"); err != nil {
+		t.Fatalf("SetAppearance falhou: %v", err)
+	}
+
+	m, ok := NewRegistryAt(path, nil, NewIdentityStore()).Get("vps")
+	if !ok {
+		t.Fatal("a máquina sumiu no restart")
+	}
+	if m.Theme != "catppuccinMocha" || m.Icon != "server" {
+		t.Errorf("aparência não sobreviveu: tema=%q ícone=%q", m.Theme, m.Icon)
 	}
 }
 

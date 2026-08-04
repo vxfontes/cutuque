@@ -271,8 +271,14 @@ struct RootSplitView: View {
                 // ficou pra trás. Sem ele o SwiftUI reaproveitaria a view e o
                 // `@StateObject` continuaria apontando pro host antigo: o nome
                 // na barra seria um e o shell, outro.
+                //
+                // Pelo NOME, não pela `Machine` inteira: `Machine` é `Hashable`
+                // sintetizado, então QUALQUER campo que mudasse (tema, ícone, SO
+                // detectado) trocaria o id e mataria a sessão viva por tabela. O
+                // nome é a chave do registro no hub e não muda por edição, o que o
+                // torna exatamente a identidade que este `.id` quer expressar.
                 NavigationStack { MachineDetailView(machine: machine) }
-                    .id(machine)
+                    .id(machine.name)
             } else {
                 ContentUnavailableView("Escolha uma máquina", systemImage: "server.rack",
                                        description: Text("O terminal e os arquivos do host aparecem aqui."))

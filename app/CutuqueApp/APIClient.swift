@@ -546,6 +546,25 @@ struct APIClient {
         return envelope.machine
     }
 
+    /// Troca o tema do terminal e o ícone da máquina.
+    /// `PUT /machines/{n}/appearance`.
+    ///
+    /// PUT e não PATCH: aqui vazio é ESCOLHA — `theme: ""` é o tema Padrão e
+    /// `icon: ""` é o ícone automático (pelo SO). Pelo `updateMachine` isso seria
+    /// impossível, porque lá vazio significa "mantém o atual". Os dois campos vão
+    /// sempre juntos: é substituição, não patch.
+    ///
+    /// Não encosta em host, porta, identidade nem impressão digital — trocar de
+    /// cor nunca derruba a confiança do host.
+    @discardableResult
+    func setAppearance(name: String, theme: String, icon: String) async throws -> Machine {
+        let envelope: MachineEnvelope = try await machineJSON(
+            "PUT", ["machines", name, "appearance"],
+            body: ["theme": theme, "icon": icon]
+        )
+        return envelope.machine
+    }
+
     /// Descadastra a máquina. NÃO apaga chave nenhuma — desde o redesenho a
     /// chave é da identidade (reutilizada por outros hosts); quem apaga é o
     /// `DELETE /identities/{id}`. `DELETE /machines/{n}`.

@@ -129,6 +129,15 @@ type machinePatchReq struct {
 	Theme    string `json:"theme"`
 }
 
+// machineAppearanceReq é o corpo do PUT de aparência. PUT e não PATCH porque a
+// semântica é de substituição: campo vazio é uma ESCOLHA (tema Padrão, ícone
+// automático), não uma omissão. Sem isso não haveria como voltar atrás, já que o
+// id do tema Padrão é a string vazia.
+type machineAppearanceReq struct {
+	Theme string `json:"theme"`
+	Icon  string `json:"icon"`
+}
+
 // machineResp é o corpo de sucesso do PATCH e do trust.
 type machineResp struct {
 	Machine machine.Machine `json:"machine"`
@@ -414,6 +423,46 @@ func MachineDetectOSHandler(reg *machine.Registry, keys MachineKeys, idents Mach
 		}
 		atual, _ := reg.Get(m.Name)
 		writeJSONResp(w, http.StatusOK, machineResp{Machine: atual})
+	}
+}
+
+// MachineAppearanceHandler troca o tema do terminal e o ícone de uma máquina já
+// cadastrada. Rota separada do PATCH por dois motivos, e os dois importam:
+//
+//   - semântica: aqui vazio significa "volta ao padrão", enquanto no PATCH
+//     significa "mantém o que está". Misturar as duas num campo só faria o tema
+//     Padrão (id "") ser impossível de escolher de volta.
+//   - segurança: aparência não afeta conexão, e esta rota por construção não tem
+//     como mexer em host, porta, identidade ou fingerprint. Trocar de cor nunca
+//     vai derrubar uma confiança que a usuária conferiu à mão.
+//
+// Não mexe no `os` detectado: o ícone manual é escolha, o SO é fato, e guardar os
+// dois é o que permite voltar ao automático depois.
+//
+//	PUT /machines/{machine}/appearance {"theme","icon"}
+//	→ 200 {"machine"} | 400 | 403 | 404 | 500
+func MachineAppearanceHandler(reg *machine.Registry) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxMachineBody)
+		var req machineAppearanceReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "bad_request")
+			return
+		}
+		m, err := reg.SetAppearance(r.PathValue("machine"), req.Theme, req.Icon)
+		switch {
+		case errors.Is(err, machine.ErrNotFound):
+			writeJSONError(w, http.StatusNotFound, "unknown_machine")
+		case errors.Is(err, machine.ErrReadOnly):
+			writeJSONError(w, http.StatusForbidden, "read_only")
+		case errors.Is(err, machine.ErrInvalidLook):
+			writeJSONErrorDetail(w, http.StatusBadRequest, "invalid_appearance", err.Error())
+		case err != nil:
+			writeJSONError(w, http.StatusInternalServerError, "register_failed")
+		default:
+			// Sem sincronizaAlvo: nada aqui muda o destino ssh.
+			writeJSONResp(w, http.StatusOK, machineResp{Machine: m})
+		}
 	}
 }
 

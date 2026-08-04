@@ -32,6 +32,11 @@ const (
 // defaultSSHPort é a porta usada quando a entrada não especifica outra.
 const defaultSSHPort = 22
 
+// maxPort é o teto de uma porta TCP. Existe porque `Port` é `int`: sem o teto,
+// uma porta digitada errada (70000) é guardada sem reclamação e só falha muito
+// depois, na hora de conectar, com erro do ssh no lugar do erro do cadastro.
+const maxPort = 65535
+
 // Machine é uma máquina alcançável por ssh.
 //
 // Duas naturezas convivem aqui, e a diferença está em quem define o usuário:
@@ -56,6 +61,12 @@ type Machine struct {
 	// Theme é o nome do tema do terminal escolhido para esta máquina. Vazio =
 	// o padrão do app. O hub só guarda: quem sabe desenhar cor é o app.
 	Theme string `json:"theme,omitempty"`
+	// Icon é o ícone escolhido À MÃO para esta máquina. Vazio = automático, e aí
+	// o app decide pelo OS detectado. Existe porque a detecção pode falhar para
+	// sempre num host (ssh que não devolve `uname`, shell restrito) e sem isto
+	// aquele host ficaria com o ícone genérico sem recurso. Mesma divisão do
+	// Theme: o hub guarda a escolha, o app sabe desenhá-la.
+	Icon string `json:"icon,omitempty"`
 	// RemoteCmd é o caminho do agente remoto (3º campo do CUTUQUE_SSH_TARGETS).
 	// Vazio = default. Não é exposto ao app: é detalhe interno do hub.
 	RemoteCmd string `json:"-"`
@@ -84,12 +95,22 @@ var (
 	ErrReadOnly      = errors.New("máquina do hub.env não é editável pelo app")
 	ErrInvalidName   = errors.New("nome inválido")
 	ErrInvalidDest   = errors.New("destino inválido")
+	ErrInvalidLook   = errors.New("aparência inválida")
 )
 
 // validName limita o nome ao que é seguro em URL E em caminho de arquivo: o
 // nome vira segmento de rota e nome do arquivo da chave em /data/machines/keys.
 // Sem isso, "../.." escaparia da pasta de chaves.
 var validName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// validLook confere id de tema e de ícone. O hub valida a FORMA, não a lista:
+// quem conhece os temas e os ícones é o app, e uma lista fechada aqui obrigaria
+// a um deploy do hub para cada tema novo. O app já cai no Padrão/Automático
+// quando não reconhece um id (`TerminalPalette.byID`, `MachineIcon.byID`), então
+// um valor desconhecido aqui é inofensivo — o que não pode é entrar lixo de
+// tamanho arbitrário no registro. Vazio é válido e significa Padrão/Automático:
+// é conferido antes desta regex.
+var validLook = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$`)
 
 // validate confere nome, host e identidade de uma máquina vinda do app, e
 // normaliza a porta. Devolve a máquina saneada.
@@ -120,11 +141,32 @@ func validate(m Machine) (Machine, error) {
 	if !validName.MatchString(m.Identity) {
 		return Machine{}, fmt.Errorf("%w: identidade %q", ErrInvalidDest, m.Identity)
 	}
+	if err := checkLook(m.Theme, m.Icon); err != nil {
+		return Machine{}, err
+	}
+	// Porta <= 0 é "não informada" (o app manda o campo vazio) e vira a padrão.
+	// Acima do teto é dado impossível: recusa aqui, onde a mensagem consegue
+	// dizer o que está errado.
 	if m.Port <= 0 {
 		m.Port = defaultSSHPort
 	}
+	if m.Port > maxPort {
+		return Machine{}, fmt.Errorf("%w: porta %d (o máximo é %d)", ErrInvalidDest, m.Port, maxPort)
+	}
 	m.Dest = "" // derivado na leitura, nunca guardado
 	return m, nil
+}
+
+// checkLook confere tema e ícone. Vazio passa nos dois: é o valor que significa
+// "usa o padrão", e é assim que se volta atrás de uma escolha.
+func checkLook(theme, icon string) error {
+	if theme != "" && !validLook.MatchString(theme) {
+		return fmt.Errorf("%w: tema %q", ErrInvalidLook, theme)
+	}
+	if icon != "" && !validLook.MatchString(icon) {
+		return fmt.Errorf("%w: ícone %q", ErrInvalidLook, icon)
+	}
+	return nil
 }
 
 // ParseSSHTargets interpreta o CUTUQUE_SSH_TARGETS. Formato de cada entrada:
@@ -188,6 +230,12 @@ type Registry struct {
 	// idents resolve o usuário das máquinas do app. nil = sem cadastro (o hub
 	// roda só com as máquinas do hub.env, que já trazem o dest pronto).
 	idents *IdentityStore
+	// saveMu serializa a GRAVAÇÃO. Não é o `mu`: o snapshot solta o lock de
+	// leitura antes de marshalar e escrever, então duas gravações concorrentes
+	// disputavam o mesmo `.tmp` — uma podia renomear o arquivo no meio da
+	// escrita da outra (JSON truncado em /data) ou publicar um snapshot velho
+	// por cima do novo. Ver o comentário do persist.
+	saveMu sync.Mutex
 }
 
 // NewRegistry cria o registro a partir da lista dada, preservando a ordem.
@@ -332,6 +380,7 @@ type diskMachine struct {
 	Identity        string `json:"identity,omitempty"`
 	OS              string `json:"os,omitempty"`
 	Theme           string `json:"theme,omitempty"`
+	Icon            string `json:"icon,omitempty"`
 	KeyPath         string `json:"key_path,omitempty"`
 	HostFingerprint string `json:"host_fingerprint,omitempty"`
 }
@@ -353,7 +402,7 @@ func loadDisk(path string) []Machine {
 		out = append(out, Machine{
 			Name: d.Name, Dest: d.Dest, Port: d.Port,
 			Host: d.Host, Identity: d.Identity, OS: d.OS, Theme: d.Theme,
-			KeyPath: d.KeyPath, HostFingerprint: d.HostFingerprint,
+			Icon: d.Icon, KeyPath: d.KeyPath, HostFingerprint: d.HostFingerprint,
 			Source: SourceApp,
 		})
 	}
@@ -366,10 +415,20 @@ func loadDisk(path string) []Machine {
 // Diferente do board, o erro sobe: perder em silêncio um cadastro que acabou de
 // instalar uma chave na máquina remota deixaria a usuária sem saber que precisa
 // refazer tudo.
+//
+// Uma gravação por vez (`saveMu`), e o snapshot vem DENTRO dela: sem isso, dois
+// pedidos concorrentes — dois aparelhos dela mexendo na mesma máquina — escrevem
+// no mesmo `.tmp` e um `Rename` pode publicar o arquivo do outro pela metade, ou
+// um snapshot mais velho pode chegar por último e o /data ficar divergindo da
+// memória até a próxima escrita. Serializado, quem grava por último é quem tirou
+// o snapshot por último, e o último snapshot é sempre >= a última mudança.
 func (r *Registry) persist() error {
 	if r.path == "" {
 		return nil
 	}
+	r.saveMu.Lock()
+	defer r.saveMu.Unlock()
+
 	r.mu.RLock()
 	dms := make([]diskMachine, 0, len(r.order))
 	for _, n := range r.order {
@@ -380,7 +439,7 @@ func (r *Registry) persist() error {
 		dms = append(dms, diskMachine{
 			Name: m.Name, Port: m.Port,
 			Host: m.Host, Identity: m.Identity, OS: m.OS, Theme: m.Theme,
-			KeyPath: m.KeyPath, HostFingerprint: m.HostFingerprint,
+			Icon: m.Icon, KeyPath: m.KeyPath, HostFingerprint: m.HostFingerprint,
 		})
 	}
 	r.mu.RUnlock()
@@ -467,6 +526,11 @@ func (r *Registry) Update(name string, patch Machine) (Machine, error) {
 	if patch.Theme != "" {
 		next.Theme = patch.Theme
 	}
+	// Aparência não é assunto deste patch: quem mexe em tema e ícone é o
+	// SetAppearance, que sabe apagar a escolha (vazio = padrão) — coisa que aqui
+	// seria impossível, porque vazio significa "mantém". O `Theme` acima
+	// sobrevive só pelos chamadores antigos.
+	next.Icon = cur.Icon
 	// O fingerprint pertence a um (host, porta). Apontar a máquina para outro
 	// lugar derruba a confirmação: senão o hub acharia que já confiou num host
 	// que a usuária nunca conferiu. Trocar de IDENTIDADE não derruba — o
@@ -527,6 +591,40 @@ func (r *Registry) SetOS(name, os string) error {
 // SetTheme grava o tema do terminal escolhido para a máquina.
 func (r *Registry) SetTheme(name, theme string) error {
 	return r.setField(name, func(m *Machine) { m.Theme = theme })
+}
+
+// SetAppearance troca tema e ícone da máquina, com semântica de SUBSTITUIÇÃO:
+// vazio não significa "mantém" (como no Update), significa "volta ao padrão".
+// Sem isso não haveria como desfazer uma escolha de tema — o id do tema Padrão é
+// justamente a string vazia.
+//
+// Nada aqui alcança host, porta, identidade ou fingerprint, e é de propósito:
+// aparência não afeta conexão, então a rota que a muda não deve nem ter como
+// derrubar uma confiança que a usuária conferiu à mão.
+func (r *Registry) SetAppearance(name, theme, icon string) (Machine, error) {
+	theme, icon = strings.TrimSpace(theme), strings.TrimSpace(icon)
+	if err := checkLook(theme, icon); err != nil {
+		return Machine{}, err
+	}
+	r.mu.Lock()
+	m, ok := r.by[name]
+	if !ok {
+		r.mu.Unlock()
+		return Machine{}, fmt.Errorf("%w: %q", ErrNotFound, name)
+	}
+	if !m.Editable() {
+		r.mu.Unlock()
+		return Machine{}, fmt.Errorf("%w: %q", ErrReadOnly, name)
+	}
+	m.Theme, m.Icon = theme, icon
+	r.by[name] = m
+	idents := r.idents
+	r.mu.Unlock()
+
+	if err := r.persist(); err != nil {
+		return Machine{}, err
+	}
+	return resolve(m, idents), nil
 }
 
 // UsesIdentity diz se alguma máquina usa a identidade dada. É o que impede
