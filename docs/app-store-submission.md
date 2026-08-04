@@ -5,10 +5,23 @@ enviar o build pelo App Store Connect.
 
 ## Estado atual (já pronto no repo)
 
-- [x] **Versão / build:** `CFBundleShortVersionString 2.4.0`, `CFBundleVersion 17`
+- [x] **Versão / build:** `CFBundleShortVersionString 2.5.0`, `CFBundleVersion 18`
       (iOS, watchOS e widget alinhados — ver `app/project.yml`). Lembrete: subir o
       `CFBundleVersion` a cada upload novo ao TestFlight — o número precisa ser
       único **dentro do trem daquela versão curta**, não globalmente.
+      **2.5.0 aberta em 2026-08-04**, no `master`: máquina já cadastrada passa a ter
+      **tela de edição**. Sheet **Informações** com host, porta, identidade, sistema,
+      impressão digital e origem em leitura, mais **tema do terminal** e **grade de
+      ícone** editáveis e um botão de detectar o sistema de novo; e modo **editar**
+      para endereço, porta e identidade, onde trocar o endereço faz o hub descartar
+      a impressão digital e a confirmação TOFU acontecer de novo. Minor e não patch
+      pelo mesmo critério da 2.3.0: são telas novas e visíveis, não polimento — antes
+      disso o tema era escrito uma vez só, no cadastro, e nunca mais. **Nome de
+      máquina continua não editável** de propósito (é chave do registro e da sessão).
+      A 2.4.0 (build 17) **nunca subiu** ao ASC, então a 2.5.0 não substitui
+      submissão nenhuma: ocupa o lugar que a 2.4.0 ia ocupar, e o build 18 é o
+      primeiro do trem 2.5.0. O hub que serve esta versão **já está em produção**
+      (`a46890b`, imagem `6d1cb64f840f`, verificado no ar em 04/08).
       **2.4.0 aberta em 2026-08-03**, na mesma branch `aba-maquinas`: o cadastro de
       host foi **refeito no modelo do Termius** — host (label, hostname, porta) e
       **identidade** (usuário + autenticação) passam a ser coisas separadas, e a
