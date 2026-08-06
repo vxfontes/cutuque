@@ -34,6 +34,7 @@ type (
 // childEnv/singleQuote: finos wrappers dos helpers compartilhados do pacote
 // agent (mantêm os call sites internos do claudecode intactos).
 func childEnv() []string          { return agent.ChildEnv() }
+func shellEnv() []string          { return agent.ShellEnv() }
 func singleQuote(s string) string { return agent.SingleQuote(s) }
 
 const agentKind = "claude-code"
@@ -242,9 +243,12 @@ func (t *SSHTarget) ShellCommand(ctx context.Context) *exec.Cmd {
 	opts := agent.WithIdentity(t.identity, append(sshOptsComuns(), "-tt"))
 	// "--" separa: um dest começando com "-" nunca vira opção.
 	cmd := exec.CommandContext(ctx, t.prog, append(opts, "--", t.dest)...)
-	// Mesma allowlist do Start (SEC-006): sem HOME o ssh não acha config, chave
-	// nem known_hosts.
-	cmd.Env = childEnv()
+	// Mesma allowlist do Start (SEC-006) — sem HOME o ssh não acha config, chave
+	// nem known_hosts — mas com o TERM do terminal livre, e não o do hub: é o
+	// `ssh` que anuncia o tipo de terminal ao remoto, e um hub sem tty anunciaria
+	// dumb (ver agent.ShellEnv). É a terceira diferença deste uso, junto com o
+	// `-tt` e a ausência de comando remoto.
+	cmd.Env = shellEnv()
 	return cmd
 }
 
