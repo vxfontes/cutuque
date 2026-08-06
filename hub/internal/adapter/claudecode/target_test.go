@@ -317,6 +317,51 @@ func TestShellCommandUsaAIdentidadeDaMaquina(t *testing.T) {
 	}
 }
 
+// O terminal livre precisa ANUNCIAR um terminal de verdade. Em produção o hub é
+// um container sem tty: a allowlist do ChildEnv não acha TERM nenhum para
+// copiar, o `ssh` não tem o que mandar e o remoto assume o mínimo — TERM=dumb.
+// Aí `tmux attach` recusa ("terminal does not support clear") e todo `tput` do
+// bashrc reclama na abertura. Quem desenha a tela é o SwiftTerm do app, um
+// emulador xterm; é isso que tem de ir no fio.
+func TestShellCommandDeclaraTerminalDeVerdade(t *testing.T) {
+	// Duas situações e a MESMA resposta: o TERM do processo do hub não entra na
+	// conta, porque não é ele que renderiza nada.
+	casos := map[string]func(){
+		"hub sem tty (produção)": func() { os.Unsetenv("TERM") },
+		"hub rodado de um terminal exótico": func() {
+			os.Setenv("TERM", "xterm-ghostty") // terminfo que o remoto pode não ter
+		},
+	}
+	for nome, prepara := range casos {
+		t.Run(nome, func(t *testing.T) {
+			t.Setenv("TERM", "irrelevante") // só para o cleanup restaurar o original
+			prepara()
+
+			env := NewSSHTarget("vps", "vx@192.0.2.50").ShellCommand(context.Background()).Env
+
+			var terms []string
+			for _, kv := range env {
+				if strings.HasPrefix(kv, "TERM=") {
+					terms = append(terms, kv)
+				}
+			}
+			// UMA entrada só: env duplicado é lido pela PRIMEIRA ocorrência por
+			// quem usa getenv, então "sobrescrever por cima" não sobrescreve nada.
+			if len(terms) != 1 {
+				t.Fatalf("quero exatamente um TERM no ambiente, tenho %v (env: %v)", terms, env)
+			}
+			if terms[0] != "TERM="+agent.TerminalTERM {
+				t.Errorf("TERM do terminal livre é %q, quero %q", terms[0], "TERM="+agent.TerminalTERM)
+			}
+			// E a allowlist continua de pé: sem HOME o ssh não acha config, chave
+			// nem known_hosts.
+			if !slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "HOME=") }) {
+				t.Errorf("o HOME sumiu do ambiente do terminal: %v", env)
+			}
+		})
+	}
+}
+
 // primeiroStrict devolve o valor da PRIMEIRA opção StrictHostKeyChecking — a
 // única que o ssh leva em conta.
 func primeiroStrict(args []string) string {

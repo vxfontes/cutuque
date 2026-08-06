@@ -164,6 +164,36 @@ func ChildEnv() []string {
 	return env
 }
 
+// TerminalTERM é o tipo de terminal anunciado ao shell remoto do terminal livre
+// (aba Máquinas). Fixo de propósito: quem desenha aquela tela é o SwiftTerm do
+// app, um emulador xterm — não o terminal (se existir) de onde o hub subiu.
+const TerminalTERM = "xterm-256color"
+
+// ShellEnv é o ambiente do terminal livre: a mesma allowlist do ChildEnv, com o
+// TERM SUBSTITUÍDO por TerminalTERM.
+//
+// Sem isso o terminal remoto abre com TERM=dumb, e é inevitável em produção: o
+// hub é um container sem tty, o ChildEnv não acha TERM para copiar, o `ssh` não
+// tem o que anunciar e o outro lado assume o mínimo. Com dumb, `tmux attach`
+// recusa abrir ("terminal does not support clear") e todo `tput` do bashrc
+// reclama na abertura de cada sessão. É o irmão da armadilha do resize (ver
+// SSHTarget.ShellCommand): ter tty não é o mesmo que dizer QUE tty é.
+//
+// O TERM herdado é removido antes, e não sobrescrito por cima: env duplicado é
+// resolvido pela PRIMEIRA ocorrência por quem lê com getenv — a mesma armadilha
+// das opções do `ssh`. Uma entrada só, sem depender de ordem de dedup.
+func ShellEnv() []string {
+	base := ChildEnv()
+	env := make([]string, 0, len(base)+1)
+	for _, kv := range base {
+		if strings.HasPrefix(kv, "TERM=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env, "TERM="+TerminalTERM)
+}
+
 // SingleQuote envolve s em aspas simples, escapando aspas simples internas com o
 // idioma '\''. Protege UM nível de parse de shell contra QUALQUER conteúdo
 // (inclusive input do cliente): tudo entre as aspas é literal. Para dois níveis
