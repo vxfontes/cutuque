@@ -16,7 +16,9 @@ enum SessionDetailPaneLogic {
     ) -> (machine: String, target: String, title: String)? {
         switch selection {
         case .live(let entry):
-            return (entry.machine, entry.session.id, entry.session.title)
+            // paneTarget, não `id`: o `id` carrega a máquina (identidade na
+            // lista) e o tmux do hub não sabe o que fazer com ela.
+            return (entry.machine, entry.paneTarget, entry.session.title)
         case .session(let s):
             guard let target = s.tmuxTarget else { return nil }
             return (s.machine, target, displayTitle(s))

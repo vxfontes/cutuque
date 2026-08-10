@@ -582,7 +582,7 @@ struct LiveDetailView: View {
             }
             .safeAreaInset(edge: .bottom) {
                 NavigationLink {
-                    TerminalMirrorView(machine: entry.machine, target: entry.id, title: entry.session.title)
+                    TerminalMirrorView(machine: entry.machine, target: entry.paneTarget, title: entry.session.title)
                 } label: {
                     Label("Abrir terminal ao vivo", systemImage: "terminal")
                         .fontWeight(.semibold)
@@ -615,7 +615,7 @@ struct LiveInfoList: View {
             Section("Sessão") {
                 detailRow("Nome", entry.session.title)
                 detailRow("Máquina", entry.machine, symbol: machineSymbol(entry.machine))
-                detailRow("Pane", entry.id, mono: true)
+                detailRow("Pane", entry.paneTarget, mono: true)
             }
 
             Section("Pasta") {
