@@ -194,6 +194,12 @@ func MachineCreateHandler(reg *machine.Registry, keys MachineKeys, idents Machin
 		case errors.Is(err, machine.ErrDuplicateName):
 			writeJSONError(w, http.StatusConflict, "duplicate_name")
 			return
+		case errors.Is(err, machine.ErrDuplicateHost):
+			// Detalhe junto: sem ele o app só diria "já existe", e a máquina
+			// repetida costuma estar cadastrada com OUTRO nome — que é
+			// justamente o que a usuária precisa saber para achá-la.
+			writeJSONErrorDetail(w, http.StatusConflict, "duplicate_host", err.Error())
+			return
 		case errors.Is(err, machine.ErrInvalidName), errors.Is(err, machine.ErrInvalidDest):
 			writeJSONErrorDetail(w, http.StatusBadRequest, "invalid_machine", err.Error())
 			return

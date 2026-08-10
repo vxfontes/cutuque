@@ -336,6 +336,22 @@ func TestPostMachinesSemPortaUsa22(t *testing.T) {
 	}
 }
 
+// Nome livre, mas o host já é o de outra máquina: é a mesma caixa entrando
+// duas vezes (o caso mac/macbook, que duplicou cada pane no "Ao vivo").
+func TestPostMachinesRecusaHostJaCadastrado(t *testing.T) {
+	mreg := machine.NewRegistry(nil)
+	idents := identidadeComChave(t, "vx", "vx")
+	keys := newFakeKeys()
+	doAdmin(t, mreg, keys, idents, http.MethodPost, "/machines", `{"name":"vps","host":"203.0.113.9","identity":"vx"}`)
+	rec := doAdmin(t, mreg, keys, idents, http.MethodPost, "/machines", `{"name":"vps-bis","host":"203.0.113.9","identity":"vx"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d, esperava 409: %s", rec.Code, rec.Body.String())
+	}
+	if got := erroDe(t, rec); got != "duplicate_host" {
+		t.Errorf("erro = %q, esperava duplicate_host", got)
+	}
+}
+
 func TestPostMachinesRecusaNomeJaUsado(t *testing.T) {
 	mreg := machine.NewRegistry([]machine.Machine{
 		{Name: "macbook", Dest: "vx@host", Port: 22, Source: machine.SourceEnv},

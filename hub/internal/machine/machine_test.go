@@ -181,6 +181,48 @@ func TestUpdateRecusaPortaAcimaDoTetoESeguraOCadastro(t *testing.T) {
 	}
 }
 
+// Nome diferente, MESMA máquina física: foi assim que o MacBook entrou duas
+// vezes (env "macbook" + app "mac") e cada pane dele apareceu em dobro no "Ao
+// vivo" do app. O nome não é a identidade da máquina — o destino é.
+func TestAddRecusaHostJaCadastradoPorOutroNome(t *testing.T) {
+	r := NewRegistry(nil)
+	if _, err := r.Add(Machine{Name: "vps", Host: "203.0.113.9", Port: 22, Identity: "vx"}); err != nil {
+		t.Fatalf("primeiro Add falhou: %v", err)
+	}
+	if _, err := r.Add(Machine{Name: "vps-bis", Host: "203.0.113.9", Port: 22, Identity: "vx"}); !errors.Is(err, ErrDuplicateHost) {
+		t.Errorf("err = %v, quero ErrDuplicateHost", err)
+	}
+	if len(r.List()) != 1 {
+		t.Errorf("a máquina repetida entrou assim mesmo: %+v", r.List())
+	}
+}
+
+// A mesma porta é que fecha a identidade: o mesmo host noutra porta pode ser
+// outra máquina (contêiner, VM atrás de NAT), e recusar aí seria mentira.
+func TestAddAceitaMesmoHostEmOutraPorta(t *testing.T) {
+	r := NewRegistry(nil)
+	if _, err := r.Add(Machine{Name: "vps", Host: "203.0.113.9", Port: 22, Identity: "vx"}); err != nil {
+		t.Fatalf("primeiro Add falhou: %v", err)
+	}
+	if _, err := r.Add(Machine{Name: "vps-container", Host: "203.0.113.9", Port: 2222, Identity: "vx"}); err != nil {
+		t.Errorf("mesmo host em outra porta deve passar, veio: %v", err)
+	}
+}
+
+// O dest do env é a verdade daquela máquina. Cadastrar pelo app um destino que
+// já é o de uma máquina do env é o mesmo host com dois nomes — recusa.
+func TestAddRecusaDestQueJaEhDeMaquinaDoEnv(t *testing.T) {
+	idents := NewIdentityStore()
+	if _, err := idents.Add(Identity{Name: "vanessa", Username: "vx"}, ""); err != nil {
+		t.Fatalf("Add da identidade: %v", err)
+	}
+	r := NewRegistry([]Machine{{Name: "macbook", Dest: "vx@203.0.113.9", Port: 22, Source: SourceEnv}})
+	r.UseIdentities(idents)
+	if _, err := r.Add(Machine{Name: "mac", Host: "203.0.113.9", Port: 22, Identity: "vanessa"}); !errors.Is(err, ErrDuplicateHost) {
+		t.Errorf("err = %v, quero ErrDuplicateHost", err)
+	}
+}
+
 func TestAddRecusaNomeRepetido(t *testing.T) {
 	r := NewRegistry([]Machine{{Name: "macbook", Dest: "vx@host", Port: 22, Source: SourceEnv}})
 	if _, err := r.Add(Machine{Name: "macbook", Host: "outro", Identity: "vx"}); !errors.Is(err, ErrDuplicateName) {
@@ -657,8 +699,10 @@ func TestRegistroSobreviveAoRestart(t *testing.T) {
 func TestSetAppearanceConcorrenteNaoDivergeDoDisco(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "machines.json")
 	r := NewRegistryAt(path, nil, NewIdentityStore())
+	// Hosts distintos: o alvo aqui é a gravação concorrente, e desde a guarda de
+	// destino repetido três máquinas no mesmo host são recusadas no cadastro.
 	for _, n := range []string{"vps", "macmini", "casa"} {
-		if _, err := r.Add(Machine{Name: n, Host: "203.0.113.9", Identity: "vx"}); err != nil {
+		if _, err := r.Add(Machine{Name: n, Host: "203.0.113.9-" + n, Identity: "vx"}); err != nil {
 			t.Fatalf("Add(%q) falhou: %v", n, err)
 		}
 	}

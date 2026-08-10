@@ -91,6 +91,7 @@ func (m Machine) Editable() bool { return m.Source == SourceApp }
 // comparar texto.
 var (
 	ErrDuplicateName = errors.New("já existe uma máquina com esse nome")
+	ErrDuplicateHost = errors.New("já existe uma máquina com esse destino")
 	ErrNotFound      = errors.New("máquina não encontrada")
 	ErrReadOnly      = errors.New("máquina do hub.env não é editável pelo app")
 	ErrInvalidName   = errors.New("nome inválido")
@@ -340,6 +341,29 @@ func resolve(m Machine, idents *IdentityStore) Machine {
 	return m
 }
 
+// mesmaMaquina diz se a cadastrada `e` já é a mesma caixa que a nova `m` (cujo
+// dest resolvido é `novoDest`). Existe porque o MacBook entrou duas vezes — env
+// "macbook" + app "mac" — e cada pane dele apareceu em dobro no "Ao vivo".
+//
+// A porta faz parte da identidade: o mesmo host noutra porta pode ser mesmo
+// outra máquina (contêiner, VM atrás de NAT), e recusar ali seria mentira.
+//
+// LIMITE CONHECIDO: destino do env escrito como ALIAS do ~/.ssh/config
+// ("mac-cutuque") não casa com o IP do cadastro do app — quem sabe resolver o
+// alias é o ssh, não o hub. Foi exatamente assim que o par mac/macbook passou.
+// O que fecha esse buraco é o fingerprint do host, que a máquina do env não tem
+// no cadastro.
+func mesmaMaquina(e, m Machine, novoDest string) bool {
+	if e.Port != m.Port {
+		return false
+	}
+	if e.Host != "" { // cadastro do app: o host cru é a verdade
+		return e.Host == m.Host
+	}
+	// env/local: o Dest guardado é a verdade, e pode vir com ou sem usuário.
+	return e.Dest != "" && (e.Dest == novoDest || e.Dest == m.Host)
+}
+
 // put insere sem lock e sem persistir (uso interno na construção e nas
 // mutações, que já seguram o lock). Nome repetido é ignorado.
 func (r *Registry) put(m Machine) {
@@ -462,7 +486,8 @@ func (r *Registry) persist() error {
 
 // Add cadastra uma máquina nova vinda do app. Nome e destino são validados; a
 // origem é sempre app (o app não escolhe). Nome já usado — inclusive por
-// máquina do env — é recusado.
+// máquina do env — é recusado, e DESTINO já cadastrado também: o nome não é a
+// identidade da máquina.
 func (r *Registry) Add(m Machine) (Machine, error) {
 	m, err := validate(m)
 	if err != nil {
@@ -471,10 +496,23 @@ func (r *Registry) Add(m Machine) (Machine, error) {
 	m.Source = SourceApp
 	m.RemoteCmd = "" // o app não define caminho de binário na máquina
 
+	// Dest da nova, resolvido com o lock do registro LIVRE (o IdentityStore tem
+	// lock próprio; aninhar os dois é como se inventa um deadlock — ver resolve).
+	novoDest := resolve(m, r.identityStore()).Dest
+
 	r.mu.Lock()
 	if _, dup := r.by[m.Name]; dup {
 		r.mu.Unlock()
 		return Machine{}, fmt.Errorf("%w: %q", ErrDuplicateName, m.Name)
+	}
+	// A comparação abaixo só lê campos GUARDADOS (Host/Port das do app, Dest
+	// literal das do env), nunca resolvido — por isso não precisa do store aqui
+	// dentro e a checagem fica atômica com a inserção.
+	for _, nome := range r.order {
+		if e := r.by[nome]; mesmaMaquina(e, m, novoDest) {
+			r.mu.Unlock()
+			return Machine{}, fmt.Errorf("%w: %q já aponta para lá", ErrDuplicateHost, nome)
+		}
 	}
 	r.put(m)
 	r.mu.Unlock()
