@@ -341,51 +341,42 @@ struct SessionListView: View {
     private var activeOthers: [Session] { others.filter { $0.state != .done && $0.state != .error } }
     private var concludedOthers: [Session] { others.filter { $0.state == .done || $0.state == .error } }
 
-    // "Ao vivo" agrupado por servidor tmux. A chave é MÁQUINA + socket, não só o
-    // socket: dois Macs de mesmo uid rodando um grupo de mesmo nome têm o mesmo
-    // caminho de socket, e agrupar só por ele juntaria numa seção só panes de
-    // máquinas diferentes — com um "encerrar server" que mataria a errada.
-    private var liveByServer: [(key: String, label: String, machine: String, socket: String, entries: [LiveEntry])] {
-        let groups = Dictionary(grouping: liveNotTracked) { $0.machine + "\t" + LivePaneLogic.socket(of: $0.paneTarget) }
-        let pares = groups.compactMap { _, entries -> (machine: String, server: String)? in
-            guard let first = entries.first else { return nil }
-            return (machine: first.machine, server: LivePaneLogic.nomeDoGrupo(LivePaneLogic.socket(of: first.paneTarget)))
-        }
-        let ambiguos = LivePaneLogic.serversAmbiguos(pares)
-        return groups.keys.sorted().compactMap { chave in
-            guard let entries = groups[chave], let first = entries.first else { return nil }
-            let sock = LivePaneLogic.socket(of: first.paneTarget)
-            let server = LivePaneLogic.nomeDoGrupo(sock)
-            return (key: chave,
-                    label: LivePaneLogic.rotulo(server: server, machine: first.machine,
-                                                ambiguo: ambiguos.contains(server)),
-                    machine: first.machine, socket: sock, entries: entries)
-        }
+    /// As sessões ao vivo agrupadas por grupo do tmux (D9). O agrupamento e a ordem
+    /// moram em LivePaneLogic — aqui fica só a leitura do estado da view.
+    private var gruposAoVivo: [GrupoAoVivo] {
+        LivePaneLogic.agrupadoPorGrupo(liveNotTracked)
     }
 
-    // "Ao vivo no Mac": uma seção por servidor tmux, com ação de encerrar server.
+    // "Ao vivo no Mac": uma seção por GRUPO do tmux (D9), com uma entrada de
+    // "encerrar server" por máquina presente nele.
     @ViewBuilder private var liveServerSections: some View {
-        ForEach(liveByServer, id: \.key) { group in
+        ForEach(gruposAoVivo) { grupo in
             Section {
-                ForEach(group.entries) { liveRow($0) }
+                ForEach(grupo.entries) { liveRow($0) }
             } header: {
                 HStack {
-                    Label("Ao vivo · \(group.label)", systemImage: "dot.radiowaves.left.and.right")
+                    Label("Ao vivo · \(grupo.grupo)", systemImage: "dot.radiowaves.left.and.right")
                         .foregroundStyle(accentColor)
                         .textCase(nil)
                     Spacer()
                     Menu {
-                        Button(role: .destructive) {
-                            serverToKill = ServerKill(
-                                machine: group.machine,
-                                socket: group.socket, name: group.label)
-                        } label: {
-                            Label("Encerrar server", systemImage: "xmark.octagon")
+                        // Uma entrada por MÁQUINA presente no grupo: com máquinas
+                        // misturadas numa seção só, uma ação única seria ambígua —
+                        // e ambiguidade em ação destrutiva é inaceitável.
+                        ForEach(grupo.servers) { servidor in
+                            Button(role: .destructive) {
+                                serverToKill = ServerKill(machine: servidor.machine,
+                                                          socket: servidor.socket,
+                                                          name: grupo.grupo)
+                            } label: {
+                                Label(LivePaneLogic.rotuloDeEncerrar(servidor),
+                                      systemImage: "xmark.octagon")
+                            }
                         }
                     } label: {
                         Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
                     }
-                    .accessibilityLabel("Ações do server \(group.label)")
+                    .accessibilityLabel("Ações do server \(grupo.grupo)")
                 }
             }
         }

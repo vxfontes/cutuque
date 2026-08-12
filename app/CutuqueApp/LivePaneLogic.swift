@@ -67,6 +67,13 @@ struct GrupoAoVivo: Identifiable, Equatable {
 }
 
 extension LivePaneLogic {
+    /// Rótulo da ação destrutiva. A máquina entra SEMPRE, mesmo com uma só no grupo:
+    /// aqui não vale a economia de ruído do rótulo de seção antigo, porque o custo do
+    /// erro é encerrar o server da máquina errada.
+    static func rotuloDeEncerrar(_ servidor: ServidorDoGrupo) -> String {
+        "Encerrar server no \(servidor.machine)"
+    }
+
     /// Agrupa por NOME do grupo, não por máquina + socket. Antes o agrupamento
     /// incluía a máquina para o "Encerrar server" do cabeçalho não ficar ambíguo;
     /// agora a ambiguidade é resolvida na ação (uma entrada por máquina) em vez de

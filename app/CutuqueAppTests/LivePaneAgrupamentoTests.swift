@@ -50,4 +50,11 @@ final class LivePaneAgrupamentoTests: XCTestCase {
         // Alvo sem socket (servidor default) não pode derrubar o agrupamento.
         XCTAssertEqual(LivePaneLogic.socket(of: "%3"), "")
     }
+
+    /// O menu do cabeçalho passa a ter uma entrada por máquina, e o rótulo tem de
+    /// dizer QUAL — é ação destrutiva, e ambiguidade aqui mata o server errado.
+    func testRotuloDeEncerrarNomeiaAMaquina() {
+        let s = ServidorDoGrupo(machine: "macbook", socket: "/tmp/tmux-501/defender")
+        XCTAssertEqual(LivePaneLogic.rotuloDeEncerrar(s), "Encerrar server no macbook")
+    }
 }
