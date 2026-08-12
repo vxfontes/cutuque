@@ -173,10 +173,10 @@ struct TerminalMirrorView: View {
     let machine: String
     let target: String
     let title: String
-    /// Falso quando o espelho está na hierarquia mas escondido (o painel está
-    /// no Chat). Para o poll sem desmontar a view — desmontar dispararia o
-    /// `restoreSize()`, que só deve rodar ao fechar a sessão de verdade.
-    var isActive: Bool = true
+    /// O estado do painel. Três valores porque o `✕` do iPad e a troca de aba são
+    /// coisas diferentes: um devolve a largura ao tmux, o outro a mantém. Era um
+    /// `Bool isActive` — o booleano é o que deixava o pane preso na grade do iPad.
+    var paneState: TerminalPaneState = .ativo
     /// Falso quando embutida no `SessionDetailPane` do iPad, que passa a ser
     /// a ÚNICA fonte de `.navigationTitle` (ver `OwnedNavigationTitle.swift`).
     /// Default `true` preserva o iPhone, que monta esta view sozinha e nunca
@@ -185,6 +185,7 @@ struct TerminalMirrorView: View {
 
     @StateObject private var model: TerminalMirrorModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @State private var input = ""
     @State private var confirmingKill = false
     @FocusState private var inputFocused: Bool
@@ -234,16 +235,15 @@ struct TerminalMirrorView: View {
     /// de um valor PRÓPRIO (não `"0x0"`, que poderia colidir com uma grade
     /// real de piso) só pra o `.task` reentrar quando a medida chegar.
     private var resizeKey: String {
-        guard let grid else { return "sem-medida" }
-        return "\(grid.cols)x\(grid.rows)"
+        TerminalResizeKey.chave(cols: grid?.cols, rows: grid?.rows, estado: paneState)
     }
 
-    init(machine: String, target: String, title: String, isActive: Bool = true,
+    init(machine: String, target: String, title: String, paneState: TerminalPaneState = .ativo,
          ownsNavigationTitle: Bool = true) {
         self.machine = machine
         self.target = target
         self.title = title
-        self.isActive = isActive
+        self.paneState = paneState
         self.ownsNavigationTitle = ownsNavigationTitle
         _model = StateObject(wrappedValue: TerminalMirrorModel(machine: machine, target: target))
     }
@@ -260,15 +260,39 @@ struct TerminalMirrorView: View {
         // `terminal` (a `ScrollView`), então não sobra nada pra estimar — e o
         // `GeometryReader`, que participava do layout, sai da árvore.
         .task(id: resizeKey) {
+            // Painel liberado não fixa largura nenhuma: agenda o contrário, devolver.
+            if paneState == .liberado {
+                resizeDebouncer.cancel()
+                model.stop()
+                model.restoreSize()
+                return
+            }
             if let grid {
                 resizeDebouncer.schedule(cols: grid.cols, rows: grid.rows) { c, r in
                     model.resize(cols: c, rows: r)
                 }
             }
-            if isActive { model.start() }
+            if paneState.fazPolling { model.start() } else { model.stop() }
         }
-        .onChange(of: isActive) { _, active in
-            if active { model.start() } else { model.stop() }
+        .onChange(of: paneState) { anterior, novo in
+            // A largura é devolvida na TRANSIÇÃO para liberado, não no estado — ver
+            // TerminalPaneState.devolveLargura. Suspender (aba de trás) mantém.
+            if TerminalPaneState.devolveLargura(de: anterior, para: novo) {
+                resizeDebouncer.cancel()
+                model.restoreSize()
+            }
+            if novo.fazPolling { model.start() } else { model.stop() }
+        }
+        .onChange(of: scenePhase) { _, fase in
+            switch TerminalCenaLogic.acao(fase: fase, estado: paneState) {
+            case .devolver:
+                resizeDebouncer.cancel()
+                model.restoreSize()
+            case .reaplicar:
+                if let grid { model.resize(cols: grid.cols, rows: grid.rows) }
+            case .nada:
+                break
+            }
         }
         // Título de navegação: só quando esta view é dona dele (iPhone,
         // sozinha). Embutida no `SessionDetailPane` do iPad ela recebe
@@ -289,7 +313,7 @@ struct TerminalMirrorView: View {
         // barra de navegação.
         .ownedNavigationTitle(title, owns: ownsNavigationTitle)
         .toolbar {
-            if isActive {
+            if paneState == .ativo {
                 ToolbarItem(placement: .topBarTrailing) { themeMenu }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(role: .destructive) {
