@@ -1078,7 +1078,25 @@ private struct ToolGroupView: View {
                 Text(result)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+                    // [12/08/2026] O `.textSelection(.enabled)` daqui SAIU pela
+                    // mesma razão de `userBubble`/`assistantBlock`: este `Text`
+                    // está debaixo do `.contextMenu` do funil (`chatItemView`),
+                    // toque longo é o gatilho dos dois, e o reconhecedor mais
+                    // interno ganha — o menu ficaria escondido justamente em
+                    // cima da SAÍDA do comando, que é o texto mais copiado de um
+                    // chat de agente. Este foi o achado que escapou do primeiro
+                    // conserto: o `.tool` é o terceiro ramo do funil, e só os
+                    // outros dois tinham sido tratados.
+                    //
+                    // Aqui NÃO cabe a exceção do bloco de código (que mantém a
+                    // seleção nativa porque tem `BotaoDeCopiar` sempre visível
+                    // ao lado): pôr um botão nesta linha brigaria com o que ela
+                    // é — "linha discreta que não deve competir visualmente com
+                    // a resposta do agente". E a seleção nativa aqui era frágil
+                    // de qualquer jeito: o transcrito republica enquanto o
+                    // agente trabalha, e seleção em conteúdo que republica morre
+                    // no frame seguinte (é a causa #2 desta leva, a do espelho).
+                    // Quem seleciona pedaço agora é a folha imóvel.
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
                     .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))

@@ -110,6 +110,22 @@ struct MachineDetailView: View {
                         // `.disabled` calculado lá fora travaria no valor de
                         // quando o terminal ainda estava vazio e nunca mais
                         // habilitaria.
+                        //
+                        // O que NÃO está provado (revisão de 12/08/2026): que o
+                        // SwiftUI reavalie este conteúdo a cada abertura do menu.
+                        // É o comportamento esperado — conteúdo de `Menu` é
+                        // construído perto da apresentação —, mas não há como
+                        // confirmar lendo código, não há UI test neste projeto e
+                        // nenhum outro menu do app serve de precedente (o do
+                        // espelho usa `.disabled` por fora porque LÁ o estado é
+                        // `@Published`). Se estiver errado, o dano é só
+                        // cosmético: o item pode aparecer cinza com a tela cheia.
+                        // Quem protege o DADO são os `guard` das ações abaixo,
+                        // que não dependem desse timing. Verificação no aparelho
+                        // (lista da Vanessa): abrir o ssh, tocar o botão antes do
+                        // prompt desenhar (deve estar cinza), esperar a tela
+                        // encher sem tocar em mais nada e abrir de novo (deve
+                        // habilitar).
                         let retrato = textoParaCopiar()
                         Button {
                             // Relê no TOQUE em vez de usar o `retrato` acima: é
