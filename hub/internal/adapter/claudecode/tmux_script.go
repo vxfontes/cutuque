@@ -51,11 +51,14 @@ def classify(txt,agent):
 `
 
 // tmuxDriverScript lista os panes do tmux (de TODOS os servidores, inclusive os
-// nomeados via `-L`, pois o tmx.sh da usuária agrupa por servidor) e mantém só
-// os que têm um `claude` na ÁRVORE DE PROCESSOS do pane — robusto contra o nome
-// do binário (`versions/<semver>`) e contra flicker (claude spawna `bash`).
-// Emite [{id,socket,pane,cmd,cwd,session,window}] onde id = "<socket>\t<pane>"
-// (alvo composto: pane_id só é único DENTRO de um servidor). python3 do sistema.
+// nomeados via `-L`, pois o tmx.sh da usuária agrupa por servidor). Até
+// 12/08/2026 mantinha só os panes com um `claude` na ÁRVORE DE PROCESSOS; hoje
+// (D11) mantém todos: quem tem agente na árvore sai como kind='agent' — detecção
+// robusta contra o nome do binário (`versions/<semver>`) e contra flicker
+// (claude spawna `bash`) — e o resto sai como kind='shell'.
+// Emite [{id,socket,pane,cmd,cwd,session,window,kind,state}] onde
+// id = "<socket>\t<pane>" (alvo composto: pane_id só é único DENTRO de um
+// servidor). python3 do sistema.
 const tmuxDriverScript = `import subprocess,json,os,re,glob
 os.environ['PATH']=os.environ.get('PATH','')+':/opt/homebrew/bin:/usr/local/bin:/opt/local/bin'
 def run(*a):
@@ -71,7 +74,9 @@ def agent_of(root):
     # Qual agente roda na árvore de processos do pane ('claude'|'codex'|
     # 'opencode') ou '' se nenhum. Cobertura universal do fallback tmux: qualquer
     # um dos três aparece e pode ser espelhado/digitado (capture/send-keys são
-    # agnósticos). O estado do terminal só é inferido pro Claude (ver pane_state).
+    # agnósticos). Até 12/08/2026 o estado só era inferido pro Claude; hoje é
+    # inferido pros três, com marcadores por agente na tabela MARKERS (ver
+    # classify/pane_state).
     seen=set(); stack=[root]
     while stack:
         p=stack.pop()
