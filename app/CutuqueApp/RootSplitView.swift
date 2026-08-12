@@ -57,6 +57,18 @@ struct RootSplitView: View {
     /// mesma da rotação.
     @State private var splitViewDidSettle = false
 
+    /// Resolve as abas de máquina/arquivo que voltaram do disco só com a chave
+    /// (ver `AbasResolver`). Sem isto elas girariam `ProgressView` pra sempre.
+    @StateObject private var resolver = AbasResolver()
+
+    /// Quais tipos estão esperando resolução AGORA — chave do `.task` abaixo,
+    /// pra ele reentrar quando uma aba pendente nova aparecer (e não a cada
+    /// repintura).
+    private var chaveDePendentes: String {
+        AbasResolucao.tiposPendentes(em: tabsStore.tabs.abas)
+            .map(\.rawValue).sorted().joined(separator: ",")
+    }
+
     /// `retrato = altura > largura`, lida do tamanho do próprio split view —
     /// não de `UIDevice.current.orientation` (devolve `.unknown`/`.faceUp` e
     /// exige notificação) nem de `horizontalSizeClass` (num iPad em tela
@@ -68,17 +80,22 @@ struct RootSplitView: View {
         return size.height > size.width
     }
 
-    /// Eixos que decidem o layout agora: destino, orientação, "tem sessão
-    /// escolhida" e "tem host aberto". `paneMode` sai da chave de propósito —
-    /// trocar Chat↔Terminal não pode mais mexer em `columnVisibility` (decisão
-    /// explícita da usuária).
+    /// Eixos que decidem o layout agora: destino, orientação e "tem aba
+    /// escolhida". `paneMode` sai da chave de propósito — trocar Chat↔Terminal
+    /// não pode mais mexer em `columnVisibility` (decisão explícita da
+    /// usuária).
     ///
-    /// O host entra pelo mesmo motivo que a sessão: `layoutVisibility` o
-    /// consulta (em retrato, host aberto = `.detailOnly`), e escolher um host
-    /// não muda `geo.size` por si só — fora da chave, a regra nunca rodaria e o
-    /// terminal abriria espremido na terceira coluna.
+    /// [12/08/2026 — abas globais] Antes eram DOIS eixos, `nav.selection != nil`
+    /// (Sessões) e `nav.machineSelection != nil` (Máquinas) — cada destino
+    /// tinha a própria seleção guardando conexão viva, e por isso cada um
+    /// entrava na chave. Hoje a barra de abas é global e `abaEmFoco` é o MESMO
+    /// dado pros dois destinos (e pro Board também), então um eixo só basta. O
+    /// motivo original de qualquer um deles estar aqui continua de pé: escolher
+    /// algo (aba, sessão, host) não muda `geo.size` por si só — fora da chave,
+    /// a regra nunca rodaria de novo e o painel abriria espremido na terceira
+    /// coluna.
     private var layoutRuleKey: String {
-        "\(nav.destination.rawValue)-\(isPortrait)-\(nav.selection != nil)-\(nav.machineSelection != nil)"
+        "\(nav.destination.rawValue)-\(isPortrait)-\(nav.abaEmFoco != nil)"
     }
 
     var body: some View {
@@ -141,6 +158,32 @@ struct RootSplitView: View {
             nav.abaEmFoco = tabs.selecionada
             nav.descartarModos(mantendo: Set(tabs.abas.map(\.chave)))
         }
+        // [12/08/2026 — abas globais] Tocar no destino Board abre/foca a ABA do
+        // Board. Sem `initial: true`: o destino inicial é sempre `.sessions`, e
+        // abrir uma aba na montagem atropelaria a aba restaurada do disco.
+        .onChange(of: nav.destination) { _, destino in
+            guard destino == .board else { return }
+            tabsStore.mutar {
+                $0.abrir(chave: .board, titulo: "Board", conteudo: .board)
+            }
+        }
+        // Escolher um host na lista abre/foca a aba dele. `estilo: .passagem`
+        // (padrão) é o modelo do VS Code: a próxima coisa aberta substitui esta
+        // se ela não tiver sido fixada.
+        .onChange(of: nav.machineSelection) { _, machine in
+            guard let machine else { return }
+            tabsStore.mutar {
+                $0.abrir(chave: .maquina(machine.name), titulo: machine.name,
+                         conteudo: .maquina(machine))
+            }
+        }
+        .onChange(of: nav.archiveSelection) { _, card in
+            guard let card else { return }
+            tabsStore.mutar {
+                $0.abrir(chave: .arquivado(card.id), titulo: card.title,
+                         conteudo: .arquivado(card))
+            }
+        }
         // Libera a regra de layout só depois da primeira montagem da split
         // view (ver `splitViewDidSettle`). O `.task` já roda depois do
         // primeiro render; o `yield` cede mais uma volta do runloop pra ela
@@ -152,6 +195,14 @@ struct RootSplitView: View {
             await Task.yield()
             splitViewDidSettle = true
             applyLayoutRuleIfNeeded()
+        }
+        // Resolve as abas de máquina/arquivo restauradas do disco (ver
+        // `AbasResolver`). `id: chaveDePendentes` reentra sempre que o CONJUNTO
+        // de tipos pendentes muda — não a cada repintura — e o guard interno
+        // evita tocar o hub quando não há ninguém esperando.
+        .task(id: chaveDePendentes) {
+            guard !chaveDePendentes.isEmpty else { return }
+            await resolver.resolver(tabsStore)
         }
     }
 
@@ -205,9 +256,16 @@ struct RootSplitView: View {
     /// da antiga deixaria o polling morto), e por isso ficou como tarefa
     /// separada. O terminal e o chat NÃO passam por isso: com seleção o painel
     /// nunca sai da coluna de detalhe (decisão #19).
+    ///
+    /// [12/08/2026 — abas globais] `tabsStore.tabs.selecionada == nil` entrou na
+    /// conta: com a barra de abas na coluna de detalhe, "retrato sem seleção"
+    /// deixou de significar "não há nada aberto". Sem esta condição, abrir uma
+    /// aba pelo Board e voltar pra Sessões em retrato esconderia a aba aberta
+    /// atrás da lista.
     private var sessionListLivesInDetail: Bool {
         nav.destination == .sessions
             && nav.selection == nil
+            && tabsStore.tabs.selecionada == nil
             && nav.columnVisibility == .doubleColumn
     }
 
@@ -256,68 +314,36 @@ struct RootSplitView: View {
         }
     }
 
+    /// [12/08/2026 — abas globais] A coluna de detalhe é a MESMA em todos os
+    /// destinos: a barra de abas e os painéis abertos. O destino manda só na
+    /// coluna do meio ("onde eu abro as coisas", o explorer do VS Code) — e é
+    /// por isso que trocar de destino não fecha nem troca a aba escolhida.
+    /// Os `switch nav.destination` que havia aqui (Board direto no detalhe,
+    /// `MachineDetailView` do `machineSelection`, `ArchivedTaskPane` do
+    /// `archiveSelection`) saíram: os três agora chegam como aba, pelos três
+    /// `.onChange` (destino/`machineSelection`/`archiveSelection`) no `body`,
+    /// acima. O `.id(machine.name)` que morava no case `.machines` continua
+    /// vivo em `painel(_:)`, que é onde a máquina é renderizada agora.
     @ViewBuilder private var detailColumn: some View {
-        switch nav.destination {
-        case .sessions:
-            if sessionListLivesInDetail {
-                // Retrato, nada escolhido: a lista É o detalhe (ver
-                // `sessionListLivesInDetail`). Tocar numa sessão troca a
-                // visibilidade pra `.detailOnly` e o painel toma a tela — o
-                // "ao clicar, abre terminal tela cheia" do desenho.
-                SessionListView(splitSelection: $nav.selection)
-            } else {
-                // Até 08/2026 este `.id(selection)` era o que devolvia a
-                // largura ao tmux, por desmontagem: trocar de sessão destruía
-                // o painel anterior. Com abas (G6), quem devolve é
-                // `TerminalPaneState.liberado` (ver `OpenTabs.estado(de:)`) —
-                // desmontar por troca de aba mataria a rolagem do espelho e a
-                // do chat, que é exatamente o que a decisão #19 proíbe.
-                sessionTabsDetail
-            }
-        case .board:
-            // `embedded`: sem `NavigationStack` próprio aqui dentro — numa
-            // coluna da split view a barra dele é engolida e título, busca,
-            // recarregar e o menu "⋯" somem (ver `BoardView.embedded`).
-            BoardView(embedded: true)
-        case .machines:
-            if let machine = nav.machineSelection {
-                // `NavigationStack` própria: os arquivos empilham subpasta com
-                // `NavigationLink`, e uma coluna de detalhe sem pilha não tem
-                // pra onde empurrar.
-                //
-                // O `.id` força a troca de host a DESTRUIR o painel anterior —
-                // e é isso que fecha o WebSocket e mata o `ssh` da máquina que
-                // ficou pra trás. Sem ele o SwiftUI reaproveitaria a view e o
-                // `@StateObject` continuaria apontando pro host antigo: o nome
-                // na barra seria um e o shell, outro.
-                //
-                // Pelo NOME, não pela `Machine` inteira: `Machine` é `Hashable`
-                // sintetizado, então QUALQUER campo que mudasse (tema, ícone, SO
-                // detectado) trocaria o id e mataria a sessão viva por tabela. O
-                // nome é a chave do registro no hub e não muda por edição, o que o
-                // torna exatamente a identidade que este `.id` quer expressar.
-                NavigationStack { MachineDetailView(machine: machine) }
-                    .id(machine.name)
-            } else {
-                ContentUnavailableView("Escolha uma máquina", systemImage: "server.rack",
-                                       description: Text("O terminal e os arquivos do host aparecem aqui."))
-            }
-        case .archive:
-            if let task = nav.archiveSelection {
-                ArchivedTaskPane(task: task)
-            } else {
-                ContentUnavailableView("Escolha um card", systemImage: "archivebox",
-                                       description: Text("Os concluídos das semanas fechadas ficam aqui."))
-            }
+        if sessionListLivesInDetail {
+            // Retrato, Sessões, nada aberto: a lista É o detalhe (ver
+            // `sessionListLivesInDetail`). Tocar numa sessão abre a aba dela
+            // (ver `SessionListView.apply`) e o painel toma a tela — o "ao
+            // clicar, abre terminal tela cheia" do desenho.
+            SessionListView(splitSelection: $nav.selection)
+        } else {
+            abasDetail
         }
     }
 
-    /// A coluna de detalhe de Sessões, dirigida pelas abas (G6): barra de abas
-    /// em cima (some quando não há nenhuma) e, embaixo, TODOS os painéis
-    /// abertos montados num `ZStack`, alternando por opacidade. Trocar de aba
-    /// não remonta nada — é o mesmo desenho que o `SessionDetailPane` já usa
-    /// entre chat, terminal e informações, um nível abaixo (decisão #19).
-    @ViewBuilder private var sessionTabsDetail: some View {
+    /// A coluna de detalhe de TODOS os destinos (12/08/2026 — abas globais):
+    /// barra de abas em cima (some quando não há nenhuma) e, embaixo, TODOS os
+    /// painéis abertos montados num `ZStack`, alternando por opacidade. Trocar
+    /// de aba não remonta nada — é o mesmo desenho que o `SessionDetailPane`
+    /// já usa entre chat, terminal e informações, um nível abaixo (decisão
+    /// #19). Renomeado de `sessionTabsDetail`: até aqui só a coluna de Sessões
+    /// a usava; hoje é a coluna de detalhe inteira, de qualquer destino.
+    @ViewBuilder private var abasDetail: some View {
         VStack(spacing: 0) {
             if !tabsStore.tabs.abas.isEmpty {
                 TabBar(store: tabsStore)
@@ -332,17 +358,17 @@ struct RootSplitView: View {
                 }
                 if tabsStore.tabs.abas.isEmpty {
                     ContentUnavailableView("Nada aberto", systemImage: "square.on.square",
-                                           description: Text("Toque numa sessão para abrir uma aba."))
+                                           description: Text("Toque numa sessão, no Board, numa máquina ou num card do arquivo."))
                 }
             }
         }
     }
 
     /// O conteúdo de uma aba. `TabConteudo` é exaustivo por causa do modelo
-    /// (`OpenTabs.swift`, G1), mas hoje só `.sessao` nasce de verdade — nenhum
-    /// caminho ainda abre aba de Board/máquina/arquivo (isso ficou de fora
-    /// desta task por escopo: só `SessionListView` foi ligada ao `tabsStore`
-    /// aqui). Os outros casos existem prontos para quando essa ligação vier.
+    /// (`OpenTabs.swift`, G1); até 12/08/2026 só `.sessao` nascia de verdade —
+    /// os outros casos existiam prontos, sem ninguém abrindo. Os três
+    /// `.onChange` do `body` (Board/máquina/arquivo) fecham essa lacuna:
+    /// agora todos os cinco tipos de aba nascem por algum caminho do app.
     @ViewBuilder private func painel(_ aba: AbaAberta) -> some View {
         switch aba.conteudo {
         case .sessao(let selection):
@@ -352,18 +378,54 @@ struct RootSplitView: View {
         case .board:
             BoardView(embedded: true)
         case .maquina(let machine):
-            // Mesmo motivo do `.id(machine.name)` do case `.machines` acima:
-            // identidade pelo NOME, não pela struct inteira.
-            NavigationStack { MachineDetailView(machine: machine) }
-                .id(machine.name)
+            // Mesmo motivo do antigo `.id(machine.name)` do case `.machines`:
+            // identidade pelo NOME, não pela struct inteira (tema/ícone
+            // mudariam o id e matariam o `ssh` por tabela). `paneState` é o
+            // que faz a aba de máquina obedecer ao teto de 6 e parar de ler
+            // quando sai de foco — num `ZStack` de abas o `onDisappear` dela
+            // NUNCA roda (ver `MachineTerminalLifecycle`).
+            NavigationStack {
+                MachineDetailView(machine: machine,
+                                  paneState: tabsStore.tabs.estado(de: aba.chave))
+            }
+            .id(machine.name)
         case .arquivado(let task):
-            ArchivedTaskPane(task: task)
+            // `aoFechar` fecha a ABA. Zerar `nav.archiveSelection` (o que o
+            // `ArchivedTaskPane` faz por padrão) não fecharia nada aqui — o
+            // painel não vem mais da seleção — e o botão voltaria a ser
+            // decorativo, que já foi bug relatado antes (12/08/2026).
+            ArchivedTaskPane(task: task) { tabsStore.mutar { $0.fechar(aba.chave) } }
         case .pendente:
-            ProgressView()
+            // Erro de rede não mata aba (ver `AbasResolver`), então sobra o
+            // caso de ficar girando pra sempre (host apagado antes do
+            // resolver terminar, ou o próprio resolver que falhou): o botão é
+            // a saída manual.
+            VStack(spacing: 12) {
+                ProgressView()
+                Button("Tentar de novo") {
+                    Task { await resolver.resolver(tabsStore) }
+                }
+                .buttonStyle(.bordered)
+            }
         case .morta:
-            // D2: aviso, nunca recriação. Fechar é decisão da Vanessa.
+            abaMorta(aba.chave.tipo)
+        }
+    }
+
+    /// D2: aviso, nunca recriação — fechar é decisão da Vanessa. O texto muda
+    /// por tipo porque "Sessão encerrada" numa aba de máquina ou de card
+    /// arquivado seria simplesmente falso (12/08/2026 — abas globais).
+    @ViewBuilder private func abaMorta(_ tipo: TipoDeAba) -> some View {
+        switch tipo {
+        case .live, .chat, .board:
             ContentUnavailableView("Sessão encerrada", systemImage: "exclamationmark.triangle",
                                    description: Text("Essa sessão não está mais viva. A aba fica aqui até você fechá-la."))
+        case .maquina:
+            ContentUnavailableView("Máquina fora do registro", systemImage: "exclamationmark.triangle",
+                                   description: Text("Esse host não está mais registrado no hub. A aba fica aqui até você fechá-la."))
+        case .arquivado:
+            ContentUnavailableView("Card não encontrado", systemImage: "exclamationmark.triangle",
+                                   description: Text("Esse card não está mais no arquivo semanal. A aba fica aqui até você fechá-la."))
         }
     }
 }
@@ -435,18 +497,32 @@ struct DestinationSidebar: View {
 /// Card arquivado no painel de detalhe (só leitura).
 struct ArchivedTaskPane: View {
     let task: BoardTask
+    /// Quem fecha. `nil` = comportamento de sempre (zerar `nav.archiveSelection`);
+    /// numa aba (12/08/2026 — abas globais), quem fecha é a aba, e quem passa o
+    /// fechamento é `RootSplitView.painel(_:)`.
+    var aoFechar: (() -> Void)?
     @EnvironmentObject private var nav: NavigationState
     @StateObject private var readOnlyModel = BoardModel()
 
-    /// `onClose` zerando a seleção é o que faz o card FECHAR aqui. Sem ele o
-    /// detalhe caía no `dismiss()` do ambiente — que numa coluna de split view
-    /// não tem o que dispensar, então o botão era decorativo (relatado pela
-    /// Vanessa: "o botão de fechar do card do arquivo semanal não ta
-    /// fechando"). No iPhone o mesmo detalhe é um sheet e o `dismiss()`
-    /// sempre funcionou, que é por que o furo demorou a aparecer.
+    init(task: BoardTask, aoFechar: (() -> Void)? = nil) {
+        self.task = task
+        self.aoFechar = aoFechar
+    }
+
+    /// `onClose` fechando é o que faz o card FECHAR aqui. Sem ele o detalhe
+    /// caía no `dismiss()` do ambiente — que numa coluna de split view não tem
+    /// o que dispensar, então o botão era decorativo (relatado pela Vanessa: "o
+    /// botão de fechar do card do arquivo semanal não ta fechando"). No iPhone
+    /// o mesmo detalhe é um sheet e o `dismiss()` sempre funcionou, que é por
+    /// que o furo demorou a aparecer. Fora de aba (`aoFechar == nil`), fechar
+    /// continua sendo zerar `nav.archiveSelection`, o mesmo de sempre.
+    private func fechar() {
+        if let aoFechar { aoFechar() } else { nav.archiveSelection = nil }
+    }
+
     var body: some View {
         BoardTaskDetailView(task: task, model: readOnlyModel, readOnly: true,
-                            onClose: { nav.archiveSelection = nil })
+                            onClose: fechar)
     }
 }
 

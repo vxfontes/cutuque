@@ -31,7 +31,11 @@ final class NavigationStateTests: XCTestCase {
     func testExpandirEmSessoesRetratoVoltaParaDoubleColumn() {
         let nav = NavigationState()
         nav.destination = .sessions
-        nav.selection = makeSelection()
+        let selecao = makeSelection()
+        nav.selection = selecao
+        // [12/08/2026 — abas globais] Quem decide o colapso é `abaEmFoco`
+        // agora, não `selection` — ver `layoutVisibility`.
+        nav.abaEmFoco = ChaveDeAba.para(selecao)
         nav.applyLayoutRule(isPortrait: true)   // é ela que grava a orientação
         XCTAssertEqual(nav.columnVisibility, .detailOnly)
         nav.toggleColumns()
@@ -139,6 +143,15 @@ final class NavigationStateTests: XCTestCase {
     //
     // `paneMode` não participa: trocar Chat↔Terminal não pode mexer em
     // `columnVisibility` (decisão explícita da usuária).
+    //
+    // [12/08/2026 — abas globais] O sinal que decide "sessão escolhida"/"host
+    // aberto" nesta tabela deixou de ser `selection`/`machineSelection` e
+    // passou a ser `abaEmFoco` — ver `NavigationState.layoutVisibility`. A
+    // tabela em si (o QUE cada estado produz) não mudou; só COMO ela é lida
+    // agora. Os testes abaixo passaram a gravar `nav.abaEmFoco` (além de, em
+    // alguns, continuar gravando `selection`/`machineSelection`, que
+    // continuam existindo para destacar a linha escolhida na lista — ver
+    // `RootSplitView.contentColumn`).
 
     private func makeSelection() -> DetailSelection {
         .live(LiveEntry(machine: "mac1", session: DiscoveredSession(id: "s1", cwd: "/tmp", title: "t")))
@@ -165,7 +178,9 @@ final class NavigationStateTests: XCTestCase {
     func testSessoesComSelecaoRetratoColapsaDetailOnly() {
         let nav = NavigationState()
         nav.destination = .sessions
-        nav.selection = makeSelection()
+        let selecao = makeSelection()
+        nav.selection = selecao
+        nav.abaEmFoco = ChaveDeAba.para(selecao)
         nav.applyLayoutRule(isPortrait: true)
         XCTAssertEqual(nav.columnVisibility, .detailOnly)
     }
@@ -178,22 +193,31 @@ final class NavigationStateTests: XCTestCase {
         XCTAssertEqual(nav.columnVisibility, .all)
     }
 
-    /// Sair pra outro destino solta a sessão escolhida — voltar pras Sessões
-    /// tem que cair na LISTA, não na última sessão aberta. Sem isto, em
-    /// retrato, `layoutVisibility` colapsa pra `.detailOnly` na volta e a
-    /// lista some (reportado no teste da Vanessa no iPad).
-    func testTrocarDeDestinoLimpaASelecaoDeSessao() {
+    /// [Reescrito em 12/08/2026 — abas globais] Trocar de destino NÃO limpa
+    /// mais `selection` (ver o comentário reescrito de
+    /// `NavigationState.destination`). Antes disto, sair pro Board e voltar
+    /// pras Sessões tinha que cair na LISTA em vez da última sessão aberta, e a
+    /// única ferramenta disponível pra isso era zerar `selection` na troca. Com
+    /// `abaEmFoco` decidindo o colapso (ver `layoutVisibility`), a lista aparece
+    /// de volta sozinha quando não há aba aberta — sem precisar destruir a
+    /// seleção da lista.
+    func testTrocarDeDestinoNaoLimpaMaisASelecaoDeSessao() {
         let nav = NavigationState()
         nav.selection = makeSelection()
 
         nav.destination = .board
 
-        XCTAssertNil(nav.selection)
+        XCTAssertNotNil(nav.selection)
     }
 
-    /// E a volta pras Sessões continua sem seleção: é o cenário completo do
-    /// bug — Sessões (com uma aberta) → Board → Sessões deve mostrar a lista.
-    func testVoltarPrasSessoesDepoisDoBoardMostraALista() {
+    /// Cenário completo do desenho novo: uma sessão pode continuar
+    /// "selecionada" na lista (linha destacada, `selection` não-nil) sem que
+    /// exista NENHUMA aba escolhida (`abaEmFoco == nil`) — é exatamente o caso
+    /// que este teste acrescenta à tabela-verdade do layout. Sessões (seleção
+    /// mas sem aba aberta) → Board → Sessões, em retrato, tem que mostrar a
+    /// LISTA (`.doubleColumn`), porque quem decide o colapso é `abaEmFoco`,
+    /// não `selection`.
+    func testSelecaoSemAbaEmFocoMostraAListaMesmoDepoisDeVoltarDoBoard() {
         let nav = NavigationState()
         nav.selection = makeSelection()
         nav.destination = .board
@@ -201,8 +225,10 @@ final class NavigationStateTests: XCTestCase {
         nav.destination = .sessions
         nav.applyLayoutRule(isPortrait: true)
 
-        XCTAssertNil(nav.selection)
-        XCTAssertEqual(nav.columnVisibility, .doubleColumn)
+        XCTAssertNotNil(nav.selection, "a seleção sobrevive à troca de destino agora")
+        XCTAssertNil(nav.abaEmFoco, "nenhuma aba foi aberta neste cenário")
+        XCTAssertEqual(nav.columnVisibility, .doubleColumn,
+                       "sem aba escolhida, retrato mostra a lista — não o painel")
     }
 
     /// Reatribuir o MESMO destino não é troca de destino e não pode limpar
@@ -240,7 +266,11 @@ final class NavigationStateTests: XCTestCase {
     func testMaquinasComHostAbertoEmRetratoColapsaDetailOnly() {
         let nav = NavigationState()
         nav.destination = .machines
-        nav.machineSelection = makeMachine()
+        let machine = makeMachine()
+        nav.machineSelection = machine
+        // [12/08/2026 — abas globais] Quem decide o colapso é `abaEmFoco`
+        // agora, não `machineSelection` — ver `layoutVisibility`.
+        nav.abaEmFoco = .maquina(machine.name)
         nav.applyLayoutRule(isPortrait: true)
         XCTAssertEqual(nav.columnVisibility, .detailOnly)
     }
@@ -282,19 +312,22 @@ final class NavigationStateTests: XCTestCase {
         XCTAssertEqual(nav.expandedVisibility, .doubleColumn)
     }
 
-    /// Sair da coluna DESTRÓI o painel, e com ele o WebSocket — o hub mata o
-    /// `ssh` junto. Se o host continuasse escolhido, voltar remontaria a view e
-    /// abriria um shell NOVO com cara do antigo: outro diretório, outras
-    /// variáveis, o que estava aberto perdido. É o mesmo motivo pelo qual o
-    /// `PTYSession` não reconecta sozinho.
-    func testTrocarDeDestinoLimpaOHostAberto() {
+    /// [Reescrito em 12/08/2026 — abas globais] Trocar de destino NÃO derruba
+    /// mais o host aberto. Antes, sair da coluna destruía o painel — e com ele
+    /// o WebSocket, e o hub matava o `ssh` junto — porque o painel MORAVA na
+    /// coluna do destino. Hoje o painel mora na ABA (global, em qualquer
+    /// destino), e quem manda no `ssh`/no espelho é `OpenTabs.estado(de:)` (ver
+    /// `MachineTerminalLifecycle`); `machineSelection` só destaca a linha na
+    /// lista de hosts, e limpá-la ao trocar de destino não desconectaria mais
+    /// nada — só dessincronizaria a lista da aba que segue aberta.
+    func testTrocarDeDestinoNaoDerrubaMaisOHostAberto() {
         let nav = NavigationState()
         nav.destination = .machines
         nav.machineSelection = makeMachine()
 
         nav.destination = .board
 
-        XCTAssertNil(nav.machineSelection)
+        XCTAssertNotNil(nav.machineSelection)
     }
 
     /// Tocar no destino já ativo (a `List(selection:)` da sidebar reescreve a
@@ -342,7 +375,9 @@ final class NavigationStateTests: XCTestCase {
     func testPaneModeNaoParticipaMaisDaDecisao() {
         let nav = NavigationState()
         nav.destination = .sessions
-        nav.selection = makeSelection()
+        let selecao = makeSelection()
+        nav.selection = selecao
+        nav.abaEmFoco = ChaveDeAba.para(selecao)
 
         nav.paneMode = .chat
         nav.applyLayoutRule(isPortrait: true)

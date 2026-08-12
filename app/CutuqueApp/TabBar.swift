@@ -71,6 +71,8 @@ struct TabBar: View {
                         .font(.caption2)
                         .foregroundStyle(.orange)
                 }
+                Image(systemName: aba.chave.tipo.simbolo)
+                    .font(.caption2)
                 Text(aba.titulo)
                     .lineLimit(1)
                     // Itálico é a marca da aba de passagem, como no VS Code.
