@@ -106,14 +106,16 @@ for sock in sorted(socks):
         try: pid=int(f[1])
         except: continue
         ag=agent_of(pid)
-        if not ag: continue
+        # D11: pane sem agente NÃO é descartado — é um shell, e precisa aparecer,
+        # senão o terminal vazio criado pelo app desaparece no refresh seguinte.
+        kind='agent' if ag else 'shell'
         # Estado inferido para os três agentes. Os marcadores de cada TUI foram
         # calibrados por captura de tela em 12/08/2026 (claude 2.1.228,
         # codex 0.147.0, opencode 1.18.16) e vivem em MARKERS, não aqui —
-        # agente novo é uma linha na tabela. Antes disto só o Claude tinha
-        # estado, porque os marcadores dos outros dois eram desconhecidos.
-        st=pane_state(sock,f[0],ag)
-        out.append({'id':sock+'\t'+f[0],'socket':sock,'pane':f[0],'cmd':ag,'cwd':f[2],'session':f[3],'window':f[4],'state':st})
+        # agente novo é uma linha na tabela. Shell não tem TUI para ler: sai sem
+        # estado, sem nem tentar capturar.
+        st=pane_state(sock,f[0],ag) if ag else ''
+        out.append({'id':sock+'\t'+f[0],'socket':sock,'pane':f[0],'cmd':ag,'kind':kind,'cwd':f[2],'session':f[3],'window':f[4],'state':st})
 print(json.dumps(out))
 `
 
