@@ -41,6 +41,7 @@ type TmuxPane struct {
 // "<socket>\t<pane>". SSHTarget e LocalTarget o satisfazem.
 type Tmuxer interface {
 	TmuxList(ctx context.Context) ([]TmuxPane, error)
+	TmuxNewSession(ctx context.Context, group, session, cwd, agent string) (string, error)
 	TmuxCapture(ctx context.Context, target string) (string, error)
 	TmuxSend(ctx context.Context, target, text string) error
 	TmuxKey(ctx context.Context, target, key string) error
