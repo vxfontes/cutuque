@@ -108,4 +108,27 @@ struct OpenTabs: Equatable {
     func aba(_ chave: ChaveDeAba) -> AbaAberta? {
         abas.first { $0.chave == chave }
     }
+
+    // MARK: teto de vivas (G2)
+
+    /// Teto de painéis vivos ao mesmo tempo (D3). O número saiu da conversa —
+    /// "rola, 6 vivas + dormindo" — e existe porque cada painel vivo custa um
+    /// `window-size manual` no tmux do outro lado, não só memória do app.
+    static let maxVivas = 6
+
+    /// As `maxVivas` abas mais recentemente focadas. MRU, não ordem da barra:
+    /// dormir tem de seguir o uso, senão a aba da esquerda morreria sempre.
+    var vivas: [ChaveDeAba] {
+        abas.sorted { $0.ordemDeFoco > $1.ordemDeFoco }
+            .prefix(Self.maxVivas)
+            .map(\.chave)
+    }
+
+    /// O estado do painel desta aba. Este método é a ÚNICA fonte do estado que
+    /// a `TerminalMirrorView` recebe (Task D1) — nada de View decidindo por conta.
+    func estado(de chave: ChaveDeAba) -> TerminalPaneState {
+        guard abas.contains(where: { $0.chave == chave }) else { return .liberado }
+        if chave == selecionada { return .ativo }
+        return vivas.contains(chave) ? .suspenso : .liberado
+    }
 }

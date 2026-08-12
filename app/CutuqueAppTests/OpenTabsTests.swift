@@ -85,4 +85,48 @@ final class OpenTabsTests: XCTestCase {
         let noWindows = ChaveDeAba(tipo: .live, machine: "windows", alvo: "/tmp/defender\t%1")
         XCTAssertNotEqual(noMacbook, noWindows)
     }
+
+    // MARK: - G2: teto de 6 vivas e quem dorme
+
+    /// D3: teto de 6 vivas, o resto dorme, e dormir = DEVOLVER A LARGURA. O
+    /// mapeamento é exatamente o modelo de três estados da Task D1:
+    ///   selecionada          → .ativo     (poll + largura aplicada)
+    ///   viva, não escolhida  → .suspenso  (sem poll, largura mantida)
+    ///   dormindo             → .liberado  (sem poll, largura devolvida)
+    func testSeisVivasEOSetimoDorme() {
+        var t = OpenTabs()
+        let chaves = (1...7).map { ChaveDeAba(tipo: .live, machine: "macbook", alvo: "/s\t%\($0)") }
+        for c in chaves { t.abrir(chave: c, titulo: c.alvo, conteudo: .pendente, estilo: .normal) }
+
+        XCTAssertEqual(t.selecionada, chaves[6])
+        XCTAssertEqual(t.estado(de: chaves[6]), .ativo)
+        // Os 5 seguintes mais recentes seguem vivos, mas suspensos.
+        for c in chaves[2...5] { XCTAssertEqual(t.estado(de: c), .suspenso, "\(c.alvo)") }
+        // O mais antigo dorme: 7 abertas, teto de 6.
+        XCTAssertEqual(t.estado(de: chaves[0]), .liberado)
+        XCTAssertEqual(t.vivas.count, OpenTabs.maxVivas)
+    }
+
+    /// Quem dorme é o menos usado, não o mais antigo na barra: focar acorda.
+    func testFocarAcordaEEmpurraOMenosUsadoParaDormir() {
+        var t = OpenTabs()
+        let chaves = (1...7).map { ChaveDeAba(tipo: .live, machine: "macbook", alvo: "/s\t%\($0)") }
+        for c in chaves { t.abrir(chave: c, titulo: c.alvo, conteudo: .pendente, estilo: .normal) }
+        XCTAssertEqual(t.estado(de: chaves[0]), .liberado)
+
+        t.selecionar(chaves[0])
+        XCTAssertEqual(t.estado(de: chaves[0]), .ativo)
+        XCTAssertEqual(t.estado(de: chaves[1]), .liberado, "o que sobrou de menos usado passa a dormir")
+    }
+
+    // NOTA (desvio G2, 12/08/2026): `testFixarNaoImpedeDeDormir` foi escrito na
+    // Task G3, não aqui. `fixar(_:)` ainda não existe nesta task, e diferente de
+    // uma asserção que falha, um método inexistente é ERRO DE COMPILAÇÃO — quebra
+    // a suíte inteira do `OpenTabsTests`, não só este teste. O próprio plano
+    // (G2, Step 4) prevê essa alternativa: "se preferir, escreva-o na G3".
+
+    func testEstadoDeAbaQueNaoExisteEhLiberado() {
+        let t = OpenTabs()
+        XCTAssertEqual(t.estado(de: a), .liberado)
+    }
 }
