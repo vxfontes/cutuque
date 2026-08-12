@@ -35,9 +35,13 @@ enum SessionDetailPaneLogic {
     /// herdaria o painel da anterior.
     ///
     /// - **Tem info** (entrada ao vivo do tmux): abre SEMPRE em `.terminal`.
-    ///   Vale a cada seleção, não só na primeira: o pane é remontado por
-    ///   sessão (`.id(selection)` em `RootSplitView`), então escolher outra
-    ///   sessão ao vivo volta pro terminal dela.
+    ///   Até 08/2026 isto valia a cada seleção porque o pane era remontado
+    ///   por sessão (`.id(selection)` em `RootSplitView`). Com abas (G6) esse
+    ///   `.id` saiu — cada aba tem seu próprio `SessionDetailPane`, montado
+    ///   uma vez — então agora isto vale na PRIMEIRA vez que uma sessão ao
+    ///   vivo abre (nova aba, `onAppear` roda uma vez): escolher uma sessão
+    ///   ao vivo NUNCA aberta antes ainda cai no terminal dela; reselecionar
+    ///   uma aba que já existia preserva o painel em que a Vanessa deixou.
     ///
     ///   Isto já foi `.info` — a pedido da própria usuária ("antes de abrir
     ///   assim mostra as infos e tudo mais"), pela paridade com o iPhone,

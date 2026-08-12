@@ -9,6 +9,11 @@ import SwiftUI
 /// desmontagem.
 struct SessionDetailPane: View {
     let selection: DetailSelection
+    /// Estado da ABA (G6): `.ativo` quando ela está em foco, `.suspenso`
+    /// quando está viva mas atrás de outra, `.liberado` quando dormiu (teto
+    /// de 6) ou foi fechada. Vem de `OpenTabs.estado(de:)` — este painel não
+    /// decide isso por conta própria.
+    let paneState: TerminalPaneState
     @EnvironmentObject private var nav: NavigationState
     @ObservedObject private var namer = SessionNamesStore.shared
     /// Título ao vivo do chat, subido pelo `SessionDetailView` via
@@ -83,12 +88,20 @@ struct SessionDetailPane: View {
                     .accessibilityHidden(!showsChat)
             }
             if let terminal {
+                // Regra composta do espelho (G6): só faz poll se a ABA está em
+                // foco (`paneState == .ativo`) E o seletor está no terminal
+                // (`showsTerminal`). Uma aba viva com o seletor no chat
+                // mantém a largura (`.suspenso`) mas não faz poll; `✕`
+                // (paneMode = .info) e abas dormindo/fechadas continuam indo
+                // pra `.liberado`, que devolve a largura ao tmux — NÃO é kill,
+                // a sessão segue trabalhando, é a instrução literal da
+                // Vanessa acima.
+                let estadoDoEspelho: TerminalPaneState = showsTerminal
+                    ? paneState
+                    : (paneState == .liberado ? .liberado : .suspenso)
                 TerminalMirrorView(machine: terminal.machine, target: terminal.target,
                                    title: terminal.title,
-                                   // `✕` (paneMode = .info) é fechar o terminal: devolve a
-                                   // largura ao tmux. NÃO é kill — a sessão segue
-                                   // trabalhando, é a instrução literal da Vanessa acima.
-                                   paneState: showsTerminal ? .ativo : .liberado,
+                                   paneState: estadoDoEspelho,
                                    ownsNavigationTitle: false)
                     .opacity(showsTerminal ? 1 : 0)
                     .allowsHitTesting(showsTerminal)

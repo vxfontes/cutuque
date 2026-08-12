@@ -286,6 +286,9 @@ struct SessionListView: View {
     // Estado de navegação do iPad — consumido aqui só pelos atalhos ⌘ que
     // precisam da lista carregada (Task 11): ⌘N e ⌘1…⌘9.
     @EnvironmentObject private var nav: NavigationState
+    // Abas do iPad (G6): tocar numa sessão embutida abre/foca uma aba, além
+    // de publicar `splitSelection` como sempre.
+    @EnvironmentObject private var tabsStore: OpenTabsStore
     @State private var showingNew = false
     @State private var showingDiscover = false
     @State private var showingSettings = false
@@ -586,6 +589,9 @@ struct SessionListView: View {
         .onChange(of: router.pendingSessionID) { _, _ in resolveDeepLink() }
         // A sessão do push pode chegar só depois da lista carregar via WS/REST.
         .onChange(of: model.sessions) { _, _ in resolveDeepLink() }
+        // Abas ao vivo (G6): a cada poll de "ao vivo", reconcilia com o que
+        // está aberto — aba morta volta a viver se o alvo reaparecer.
+        .onChange(of: model.liveSessions) { _, entries in reconciliarAbas(with: entries) }
         // Ao fechar a sheet de nova tarefa, resolve um deep-link que tenha
         // chegado enquanto ela estava aberta (evita navegar por baixo dela).
         .onChange(of: showingNew) { _, isShowing in
@@ -754,6 +760,15 @@ struct SessionListView: View {
     private func apply(_ target: SessionNavigationTarget?) {
         switch target {
         case .selection(let selection):
+            // G6: `.selection` só acontece embutido (iPad) — abre/foca a aba
+            // DE PASSAGEM correspondente, além de publicar `splitSelection`
+            // como sempre (é o que o iPhone ignoraria por não ter esse
+            // caminho: lá `splitSelection` é nil e `SessionNavigationLogic`
+            // nunca devolve `.selection`).
+            tabsStore.mutar {
+                $0.abrir(chave: .para(selection), titulo: tituloDaAba(selection),
+                         conteudo: .sessao(selection))
+            }
             splitSelection?.wrappedValue = selection
         case .liveSheet(let entry):
             selectedLive = entry
@@ -762,6 +777,31 @@ struct SessionListView: View {
         case nil:
             break
         }
+    }
+
+    /// Título da aba para uma seleção — o mesmo texto que a linha da lista já
+    /// mostra: apelido local para sessão do registry, título do tmux para
+    /// entrada ao vivo (`liveRowLabel` usa a mesma fonte).
+    private func tituloDaAba(_ selection: DetailSelection) -> String {
+        switch selection {
+        case .live(let entry): return entry.session.title
+        case .session(let session): return namer.displayTitle(for: session)
+        }
+    }
+
+    /// Casa as abas com o que está vivo agora (G4/G6) — chamado sempre que o
+    /// poll de "ao vivo" atualiza (o mesmo poll que alimenta `gruposAoVivo`).
+    /// É aqui, de graça, que o `LiveEntry` placeholder que a F3 usa pra abrir
+    /// a sessão recém-criada (cwd vazia, título "Novo terminal") é substituído
+    /// pelo `LiveEntry` real: a chave (`machine` + alvo tmux) é a mesma, então
+    /// `reconciliar` troca o `TabConteudo` da aba sem remontar nada.
+    private func reconciliarAbas(with entries: [LiveEntry]) {
+        guard isEmbedded else { return }
+        let vivasPorChave = Dictionary(
+            entries.map { (ChaveDeAba.para(.live($0)), TabConteudo.sessao(.live($0))) },
+            uniquingKeysWith: { primeiro, _ in primeiro }
+        )
+        tabsStore.mutar { $0.reconciliar(vivas: vivasPorChave) }
     }
 
     // MARK: Subviews

@@ -325,6 +325,10 @@ final class QuestionSheetCrashTests: XCTestCase {
             }
             .environmentObject(Router.shared)   // singleton: `init` é privado
             .environmentObject(NavigationState())
+            // Task H2: SessionDetailView agora lê o LiveHub do ambiente — sem
+            // ele, o SwiftUI derruba o processo de teste ao avaliar o body
+            // (EnvironmentObject sem provedor é fatalError, não erro silencioso).
+            .environmentObject(LiveHub(api: APIClient()))
         )
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
         window.rootViewController = host
