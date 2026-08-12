@@ -588,7 +588,16 @@ struct SessionListView: View {
         // Deep-link do push: quando o Router aponta uma sessão, navega até ela.
         .onChange(of: router.pendingSessionID) { _, _ in resolveDeepLink() }
         // A sessão do push pode chegar só depois da lista carregar via WS/REST.
-        .onChange(of: model.sessions) { _, _ in resolveDeepLink() }
+        // Também reconcilia as abas (12/08/2026 — achado crítico #2 da revisão
+        // adversarial): a aba de CHAT depende de `model.sessions`, não só do
+        // poll de "ao vivo" — sem reconciliar aqui, uma sessão de chat que
+        // ressuscita no registry só voltaria a viver na aba no próximo poll de
+        // vivas (até 15s depois). Não criamos um segundo `.onChange` para o
+        // mesmo valor: a reconciliação entra neste mesmo closure.
+        .onChange(of: model.sessions) { _, _ in
+            resolveDeepLink()
+            reconciliarAbas(with: model.liveSessions)
+        }
         // Abas ao vivo (G6): a cada poll de "ao vivo", reconcilia com o que
         // está aberto — aba morta volta a viver se o alvo reaparecer.
         .onChange(of: model.liveSessions) { _, entries in reconciliarAbas(with: entries) }
@@ -789,18 +798,28 @@ struct SessionListView: View {
         }
     }
 
-    /// Casa as abas com o que está vivo agora (G4/G6) — chamado sempre que o
-    /// poll de "ao vivo" atualiza (o mesmo poll que alimenta `gruposAoVivo`).
-    /// É aqui, de graça, que o `LiveEntry` placeholder que a F3 usa pra abrir
-    /// a sessão recém-criada (cwd vazia, título "Novo terminal") é substituído
-    /// pelo `LiveEntry` real: a chave (`machine` + alvo tmux) é a mesma, então
-    /// `reconciliar` troca o `TabConteudo` da aba sem remontar nada.
+    /// Casa as abas com o que está vivo agora (G4/G6) — chamado a cada poll de
+    /// "ao vivo" E a cada mudança de `model.sessions` (12/08/2026, ver
+    /// `.onChange` acima e `SessionNavigationLogic.vivasPorChave`: o
+    /// dicionário de vivas precisa das DUAS fontes, senão toda aba `.chat`
+    /// morre por nunca ter chave nele — achado crítico #2 da revisão
+    /// adversarial). É aqui, de graça, que o `LiveEntry` placeholder que a F3
+    /// usa pra abrir a sessão recém-criada (cwd vazia, título "Novo
+    /// terminal") é substituído pelo `LiveEntry` real: a chave (`machine` +
+    /// alvo tmux) é a mesma, então `reconciliar` troca o `TabConteudo` da aba
+    /// sem remontar nada.
     private func reconciliarAbas(with entries: [LiveEntry]) {
         guard isEmbedded else { return }
-        let vivasPorChave = Dictionary(
-            entries.map { (ChaveDeAba.para(.live($0)), TabConteudo.sessao(.live($0))) },
-            uniquingKeysWith: { primeiro, _ in primeiro }
-        )
+        // Guarda de 1ª carga (12/08/2026): antes do 1º `refresh()` (REST) e do
+        // 1º poll de vivas chegarem, as duas listas estão vazias. Reconciliar
+        // aqui destruiria uma aba viva RESTAURADA DO DISCO (que nasce
+        // `.pendente`, ver D2 em OpenTabs.swift) por AUSÊNCIA — mas ausência
+        // antes de qualquer carga é "ainda não sei", não "morreu". Isto não é
+        // sobre um hiccup de rede: `model.sessions` só é escrito dentro do
+        // `try await` de `refresh()`, então uma falha de rede não zera a
+        // lista — esta guarda cobre só a largada a frio.
+        guard !(entries.isEmpty && model.sessions.isEmpty) else { return }
+        let vivasPorChave = SessionNavigationLogic.vivasPorChave(live: entries, sessions: model.sessions)
         tabsStore.mutar { $0.reconciliar(vivas: vivasPorChave) }
     }
 
