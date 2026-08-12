@@ -38,4 +38,16 @@ final class TerminalPaneStateTests: XCTestCase {
         XCTAssertNotEqual(TerminalResizeKey.chave(cols: nil, rows: nil, estado: .ativo),
                           TerminalResizeKey.chave(cols: nil, rows: nil, estado: .liberado))
     }
+
+    /// D7: sair do app devolve o pane ao normal no PC. `.inactive` NÃO conta — ele
+    /// dispara em troca de app, Split View e central de notificações, e devolver
+    /// largura ali faria o terminal remediar toda hora.
+    func testCenaDeBackgroundDevolveLargura() {
+        XCTAssertEqual(TerminalCenaLogic.acao(fase: .background, estado: .ativo), .devolver)
+        XCTAssertEqual(TerminalCenaLogic.acao(fase: .background, estado: .suspenso), .devolver)
+        XCTAssertEqual(TerminalCenaLogic.acao(fase: .background, estado: .liberado), .nada)
+        XCTAssertEqual(TerminalCenaLogic.acao(fase: .active, estado: .ativo), .reaplicar)
+        XCTAssertEqual(TerminalCenaLogic.acao(fase: .active, estado: .suspenso), .nada)
+        XCTAssertEqual(TerminalCenaLogic.acao(fase: .inactive, estado: .ativo), .nada)
+    }
 }

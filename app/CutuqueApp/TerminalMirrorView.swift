@@ -185,6 +185,7 @@ struct TerminalMirrorView: View {
 
     @StateObject private var model: TerminalMirrorModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @State private var input = ""
     @State private var confirmingKill = false
     @FocusState private var inputFocused: Bool
@@ -281,6 +282,17 @@ struct TerminalMirrorView: View {
                 model.restoreSize()
             }
             if novo.fazPolling { model.start() } else { model.stop() }
+        }
+        .onChange(of: scenePhase) { _, fase in
+            switch TerminalCenaLogic.acao(fase: fase, estado: paneState) {
+            case .devolver:
+                resizeDebouncer.cancel()
+                model.restoreSize()
+            case .reaplicar:
+                if let grid { model.resize(cols: grid.cols, rows: grid.rows) }
+            case .nada:
+                break
+            }
         }
         // Título de navegação: só quando esta view é dona dele (iPhone,
         // sozinha). Embutida no `SessionDetailPane` do iPad ela recebe

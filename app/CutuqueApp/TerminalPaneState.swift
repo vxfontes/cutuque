@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// O estado de um painel de terminal. Três valores, não dois: o booleano `isActive`
 /// que existia antes não distinguia trocar de aba de fechar o terminal, e a
@@ -38,5 +39,32 @@ enum TerminalResizeKey {
     static func chave(cols: Int?, rows: Int?, estado: TerminalPaneState) -> String {
         guard let cols, let rows else { return "sem-medida·\(estado.rawValue)" }
         return "\(cols)x\(rows)·\(estado.rawValue)"
+    }
+}
+
+/// O que fazer com a largura do pane quando a cena do app muda.
+enum AcaoDeLargura: Equatable {
+    case devolver
+    case reaplicar
+    case nada
+}
+
+/// D7: sair do app devolve o pane ao normal no PC — ninguém está olhando, e deixar
+/// `window-size manual` fixado na grade do iPad estraga o terminal de quem está no
+/// Mac. Voltar reaplica, mas só no painel que estava ativo.
+///
+/// `.inactive` é deliberadamente ignorado: ele dispara em troca de app, Split View e
+/// central de notificações, e devolver largura ali faria o terminal remediar a cada
+/// toque fora do app.
+enum TerminalCenaLogic {
+    static func acao(fase: ScenePhase, estado: TerminalPaneState) -> AcaoDeLargura {
+        switch fase {
+        case .background:
+            return estado == .liberado ? .nada : .devolver
+        case .active:
+            return estado == .ativo ? .reaplicar : .nada
+        default:
+            return .nada
+        }
     }
 }
