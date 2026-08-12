@@ -1,14 +1,21 @@
 import SwiftUI
 
-/// Mostra — e edita — o conteúdo de um arquivo de texto da máquina. Binário ou
-/// acima do teto de 1 MB não é renderizado: puxar bytes crus para a tela do
-/// iPhone não ajuda ninguém, e o hub já manda esses casos marcados e sem
-/// conteúdo. Nesses dois casos sobra o download, que traz o arquivo inteiro.
+/// Abre — e edita — um arquivo da máquina. É a casca: carrega, guarda o estado,
+/// decide para qual lado a tela vai e é dona da toolbar. Quem desenha o
+/// conteúdo é `VisualizadorDeTexto` (texto) ou `VisualizadorBinario` (imagem,
+/// vídeo, PDF, zip, e o texto que não coube).
+///
+/// A partição em três arquivos é de 12/08/2026 e não mudou comportamento: ela
+/// existe para que a frente do preview e a frente do texto fossem escritas em
+/// paralelo sem disputar o mesmo arquivo.
 ///
 /// A edição só sobrescreve o arquivo aberto: não cria, não apaga, não move.
 struct FileViewerView: View {
     let machine: String
     let entry: FileEntry
+    /// A aba que contém esta tela está em foco? Só serve para o
+    /// `VisualizadorBinario` parar a mídia — ver o comentário lá.
+    var abaAtiva: Bool = true
 
     @State private var content: FileContent?
     @State private var error: String?
@@ -16,9 +23,6 @@ struct FileViewerView: View {
     @State private var draft = ""
     @State private var editing = false
     @State private var saving = false
-    /// Arquivo baixado para o tmp, pronto para o ShareLink (binário/grande).
-    @State private var downloaded: URL?
-    @State private var downloading = false
     /// Erro de salvar/baixar vira alerta: diferente do erro de abrir, a tela
     /// continua útil e não pode ser substituída pelo aviso.
     @State private var actionError: String?
@@ -30,8 +34,9 @@ struct FileViewerView: View {
     var body: some View {
         Group {
             if let content {
-                if content.unreadableReason != nil {
-                    unreadable(content)
+                if !content.podeMostrarTexto {
+                    VisualizadorBinario(machine: machine, entry: entry, content: content,
+                                        abaAtiva: abaAtiva) { actionError = $0 }
                 } else if editing {
                     TextEditor(text: $draft)
                         .font(.system(size: 12, design: .monospaced))
@@ -39,13 +44,7 @@ struct FileViewerView: View {
                         .textInputAutocapitalization(.never)
                         .padding(4)
                 } else {
-                    ScrollView([.vertical, .horizontal]) {
-                        Text(content.content)
-                            .font(.system(size: 12, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12)
-                    }
+                    VisualizadorDeTexto(entry: entry, content: content)
                 }
             } else if let error {
                 ContentUnavailableView {
@@ -70,27 +69,6 @@ struct FileViewerView: View {
         .task { await load() }
     }
 
-    /// Binário ou grande demais: o texto não vai aparecer, mas o arquivo inteiro
-    /// ainda pode ser baixado.
-    @ViewBuilder
-    private func unreadable(_ content: FileContent) -> some View {
-        ContentUnavailableView {
-            Label(content.binary ? "Arquivo binário" : "Arquivo grande demais",
-                  systemImage: content.binary ? "doc.badge.gearshape" : "doc.badge.ellipsis")
-        } description: {
-            Text("\(content.unreadableReason ?? "") (\(entry.sizeLabel))")
-        } actions: {
-            if let downloaded {
-                ShareLink(item: downloaded) { Label("Compartilhar", systemImage: "square.and.arrow.up") }
-            } else {
-                Button { Task { await download() } } label: {
-                    if downloading { ProgressView() } else { Text("Baixar") }
-                }
-                .disabled(downloading)
-            }
-        }
-    }
-
     @ToolbarContentBuilder
     private var toolbarItems: some ToolbarContent {
         if editing {
@@ -109,6 +87,11 @@ struct FileViewerView: View {
                 }
             }
         } else if let content, content.isReadable {
+            // `isReadable` (e não `podeMostrarTexto`) é o portão certo aqui, e a
+            // diferença entre os dois é a CAUDA: quando o hub manda só o fim de
+            // um arquivo grande, a tela mostra o texto mas Editar e Compartilhar
+            // somem — salvar 200 KB por cima de um arquivo de 5 MB o truncaria,
+            // e compartilhar um pedaço com o nome do arquivo inteiro mentiria.
             ToolbarItemGroup(placement: .topBarTrailing) {
                 // Compartilhar o texto cobre "salvar no app Arquivos" sem uma
                 // ida extra à máquina — o conteúdo já está aqui.
@@ -141,20 +124,10 @@ struct FileViewerView: View {
             let salvo = try await api.writeFile(machine: machine, path: entry.path, content: draft)
             // Reflete o que foi gravado sem reler a máquina: o size vem do hub.
             content = FileContent(path: salvo.path, size: salvo.size,
-                                  binary: false, truncated: false, content: draft)
+                                  binary: false, truncated: false, tail: nil, content: draft)
             editing = false
         } catch CutuqueError.notFound {
             actionError = "O arquivo não está mais lá (foi apagado ou virou pasta). Nada foi salvo."
-        } catch {
-            actionError = error.localizedDescription
-        }
-    }
-
-    private func download() async {
-        downloading = true
-        defer { downloading = false }
-        do {
-            downloaded = try await api.downloadFile(machine: machine, path: entry.path)
         } catch {
             actionError = error.localizedDescription
         }

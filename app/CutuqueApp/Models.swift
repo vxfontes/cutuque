@@ -526,14 +526,31 @@ struct FileContent: Decodable {
     let size: Int64
     let binary: Bool
     let truncated: Bool
+    /// Veio só o FIM do arquivo (12/08/2026 — cauda de texto grande). Vale
+    /// junto com `truncated`, que continua significando "não veio inteiro".
+    ///
+    /// **`Bool?`, não `Bool`, e isso não é preciosismo:** o hub só passa a mandar
+    /// esta chave depois do deploy, e um `Bool` não-opcional com a chave ausente
+    /// **derruba o decode do objeto inteiro** — o visualizador de arquivos
+    /// pararia de abrir qualquer coisa contra o hub de produção até ele subir.
+    let tail: Bool?
     let content: String
 
+    /// O hub mandou o fim do arquivo em vez do arquivo.
+    var ehCauda: Bool { tail == true }
+
+    /// Dá para editar e compartilhar? Só com o arquivo INTEIRO em mãos: salvar
+    /// ou compartilhar um pedaço com o nome do todo destruiria/mentiria.
     var isReadable: Bool { !binary && !truncated }
+
+    /// Dá para desenhar como texto? A cauda entra aqui e não em `isReadable`:
+    /// ler o fim de um log é exatamente o que se quer, escrever por cima não.
+    var podeMostrarTexto: Bool { !binary && (!truncated || ehCauda) }
 
     /// Por que não dá para mostrar como texto (nil quando dá).
     var unreadableReason: String? {
         if binary { return "Arquivo binário — não dá para mostrar como texto." }
-        if truncated { return "Arquivo grande demais (acima de 1 MB) para abrir aqui." }
+        if truncated && !ehCauda { return "Arquivo grande demais (acima de 1 MB) para abrir aqui." }
         return nil
     }
 }

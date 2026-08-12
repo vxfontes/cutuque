@@ -86,7 +86,12 @@ struct MachineDetailView: View {
             FileBrowserView(machine: machine.name, path: "",
                             ownsNavigationTitle: false, isActive: !showsTerminal,
                             carregaAgora: MachineTerminalLifecycle.carregaArquivos(
-                                paneState: paneState, pane: pane, naTela: naTela))
+                                paneState: paneState, pane: pane, naTela: naTela),
+                            // Foco da ABA, e nada mais: `naTela` não serve aqui
+                            // porque ele fica falso quando o visualizador está
+                            // empilhado por cima — que é exatamente quando um
+                            // vídeo estaria tocando.
+                            abaAtiva: paneState == .ativo)
                 .opacity(showsTerminal ? 0 : 1)
                 .allowsHitTesting(!showsTerminal)
                 .accessibilityHidden(showsTerminal)

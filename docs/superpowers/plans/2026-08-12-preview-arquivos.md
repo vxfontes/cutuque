@@ -134,7 +134,7 @@ nome sem extensão não quebra.
 
 ## Task R — o realçador de sintaxe
 
-**Worktree:** `cutuque-worktrees/arquivos-texto-realce` · **Simulador:**
+**Worktree:** `cutuque-worktrees/arquivos-realce` · **Simulador:**
 `C1165093-C583-47F2-A921-86A3B20BE810`
 
 **Arquivos:**
@@ -178,9 +178,11 @@ prosa.
 `0CC564B6-5D51-43DE-A603-F933197BF779`
 
 **Arquivos:**
-- Modificar: `app/CutuqueApp/VisualizadorDeTexto.swift` (só este)
-- Modificar: `app/CutuqueApp/Models.swift` (campo `tail` em `FileContent`)
+- Modificar: `app/CutuqueApp/VisualizadorDeTexto.swift` (**só este**)
 - Teste: `app/CutuqueAppTests/VisualizadorDeTextoTests.swift` (novo)
+
+> `FileContent.tail` **já existe** na base (`Bool?`, com `ehCauda` e
+> `podeMostrarTexto`). Não mexa em `Models.swift`.
 
 **Consome:** `TipoDeArquivo`, `RealceDeSintaxe.aplicar(_:linguagem:)` (hoje devolve sem cor — a Task R
 troca o corpo; **não reimplemente**), `MarkdownText` (do chat, já com botão de copiar no bloco de
@@ -192,18 +194,17 @@ código).
 2. `.json` → indentado antes de realçar. JSON inválido **não** é erro de tela: mostra o texto cru
    como veio (arquivo em edição é caso normal). Isole a indentação numa função pura e teste-a.
 3. Demais textos → realce quando houver linguagem; monoespaçado quando não houver.
-4. `content.tail == true` → faixa no topo dizendo que é **o fim do arquivo**, com o tamanho total e o
-   botão de baixar o inteiro. `FileContent.tail` é **`Bool?`** — o hub de produção ainda não manda o
-   campo, e `Bool` não-opcional com chave ausente **derruba o decode do arquivo inteiro**.
+4. `content.ehCauda` → faixa no topo dizendo que é **o fim do arquivo**, com o tamanho total
+   (`entry.sizeLabel`). O botão de baixar o inteiro **não é seu**: a toolbar da casca já esconde
+   Editar/Compartilhar quando há cauda (`isReadable` é falso) — não recrie isso aqui.
 5. **Um único `Text`** com o `AttributedString`, `.textSelection(.enabled)` mantido. Não quebre em um
    `Text` por linha: mataria a seleção, que é exatamente o bug que a leva anterior consertou.
-6. A edição (`TextEditor`) continua funcionando como hoje, sem realce — editar texto colorido é outro
-   projeto. Com cauda, **desabilite salvar**: salvar 200 KB por cima de um arquivo de 5 MB o
-   truncaria. Esse é o pior defeito possível desta task; trate-o explicitamente.
+6. A edição (`TextEditor`) vive na casca e continua como hoje, sem realce — editar texto colorido é
+   outro projeto. **Não** adicione edição aqui.
 
-**Testes:** indentação de JSON válido e o passa-adiante do inválido; decode de `FileContent` **sem** a
-chave `tail` (não pode lançar); decode com `tail: true`; a regra "com cauda não salva"; roteamento
-`.md`/`.json`/`.ts`/`.log` para o modo certo.
+**Testes:** indentação de JSON válido e o passa-adiante do inválido; que a faixa de cauda só existe
+com `ehCauda`; roteamento `.md`/`.json`/`.ts`/`.log` para o modo certo; texto acima do teto de realce
+sai sem cor mas com o conteúdo inteiro.
 
 **Commit:** `feat(arquivos): markdown renderizado, json formatado, cauda e realce no visualizador`.
 

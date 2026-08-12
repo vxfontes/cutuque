@@ -32,6 +32,15 @@ struct FileBrowserView: View {
     /// viravam N chamadas a `api.listFiles` de aba que a usuária nem está
     /// vendo — ver `MachineTerminalLifecycle.carregaArquivos`.
     var carregaAgora: Bool = true
+    /// A ABA que contém esta pilha está em foco (12/08/2026 — leva do preview).
+    /// Só serve para o `FileViewerView` parar a mídia que estiver tocando, e
+    /// por isso NÃO pode ser nenhum dos dois sinais que já existem aqui:
+    /// `isActive` é a troca terminal/arquivos, e o `naTela` de que
+    /// `carregaAgora` depende fica FALSO justamente quando o visualizador está
+    /// empilhado por cima — ou seja, quando o vídeo está tocando. O único sinal
+    /// que responde "a usuária ainda está olhando para esta aba?" é o
+    /// `paneState`, que vem de fora.
+    var abaAtiva: Bool = true
 
     @State private var listing: FileListing?
     @State private var loading = false
@@ -50,7 +59,7 @@ struct FileBrowserView: View {
             ForEach(visible) { entry in
                 if entry.isDir {
                     NavigationLink {
-                        FileBrowserView(machine: machine, path: entry.path)
+                        FileBrowserView(machine: machine, path: entry.path, abaAtiva: abaAtiva)
                     } label: {
                         Label(entry.name, systemImage: "folder")
                             .lineLimit(1)
@@ -58,7 +67,7 @@ struct FileBrowserView: View {
                     }
                 } else {
                     NavigationLink {
-                        FileViewerView(machine: machine, entry: entry)
+                        FileViewerView(machine: machine, entry: entry, abaAtiva: abaAtiva)
                     } label: {
                         HStack(spacing: 8) {
                             Label(entry.name, systemImage: "doc")
