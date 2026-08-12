@@ -116,7 +116,27 @@ struct FileBrowserView: View {
             listing = try await api.listFiles(machine: machine, path: path)
             error = nil
         } catch {
+            // Cancelamento NÃO é falha de rede. O `.task(id: carregaAgora)` acima
+            // cancela o fetch em voo toda vez que o portão fecha — trocar de
+            // painel (.files → .terminal) ou a aba perder o foco. A URLSession
+            // devolve isso como URLError(.cancelled) e, sem este guarda, o alerta
+            // "Não deu para listar" pipocava por NAVEGAÇÃO, numa aba que a usuária
+            // já não está olhando (achado importante da revisão da fase D,
+            // 12/08/2026 — o portão consertou a carga e criou este modo de falha).
+            // Mesmo guarda que BoardView, TerminalMirrorView e PTYSession já usam.
+            guard !Task.isCancelled, !ErroDeCarga.ehCancelamento(error) else { return }
             self.error = error.localizedDescription
         }
+    }
+}
+
+/// Classifica o erro de uma carga cancelada. Vive aqui porque hoje só o
+/// navegador de arquivos precisa dela; se outro chamador aparecer, promove pra
+/// arquivo próprio. `Task.isCancelled` sozinho não basta: quando a Task já
+/// morreu, a checagem no `catch` pode rodar fora dela, e o que sobra é o erro.
+enum ErroDeCarga {
+    static func ehCancelamento(_ erro: Error) -> Bool {
+        if erro is CancellationError { return true }
+        return (erro as? URLError)?.code == .cancelled
     }
 }
