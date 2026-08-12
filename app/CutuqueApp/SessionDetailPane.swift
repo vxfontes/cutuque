@@ -14,6 +14,13 @@ struct SessionDetailPane: View {
     /// de 6) ou foi fechada. Vem de `OpenTabs.estado(de:)` — este painel não
     /// decide isso por conta própria.
     let paneState: TerminalPaneState
+    /// [12/08/2026] Identidade da aba que este painel representa
+    /// (`ChaveDeAba.para(selection)`, calculada por quem monta — ver
+    /// `RootSplitView.painel(_:)`). É a chave sob a qual este painel lê/
+    /// escreve o modo em `NavigationState` — nunca o `nav.paneMode` cru
+    /// direto, porque N `SessionDetailPane` ficam montados ao mesmo tempo
+    /// (decisão #19) e cada um precisa do PRÓPRIO modo, não do de um vizinho.
+    let chave: ChaveDeAba
     @EnvironmentObject private var nav: NavigationState
     @ObservedObject private var namer = SessionNamesStore.shared
     /// Título ao vivo do chat, subido pelo `SessionDetailView` via
@@ -44,16 +51,32 @@ struct SessionDetailPane: View {
         SessionDetailPaneLogic.terminalTarget(for: selection) { namer.displayTitle(for: $0) }
     }
 
-    private var showsChat: Bool { nav.paneMode == .chat }
+    /// [12/08/2026] O modo que ESTE painel renderiza agora — nunca o
+    /// `nav.paneMode(de: chave)` guardado cru. Passa por
+    /// `SessionDetailPaneLogic.modoValido`, que traduz um modo IMPOSSÍVEL
+    /// pra esta seleção (herdado de quando `chave` guardava outra coisa, ou
+    /// de uma aba de vizinho que empurrou `.chat`/`.terminal` globalmente
+    /// antes desta correção) pro primeiro segmento do seletor. Sem essa
+    /// tradução, `showsChat`/`showsTerminal`/`showsInfo` podiam sair todos
+    /// `false` juntos — painel em foco em BRANCO até a usuária tocar no
+    /// seletor (achado crítico da revisão adversarial pós-G6).
+    private var modo: PaneMode {
+        SessionDetailPaneLogic.modoValido(
+            nav.paneMode(de: chave),
+            hasChat: session != nil, hasTerminal: terminal != nil, hasInfo: liveEntry != nil
+        )
+    }
+
+    private var showsChat: Bool { modo == .chat }
 
     /// O terminal só fica ATIVO quando é ele que está na frente. Antes isto
     /// era `!showsChat` — com três modos, "não é chat" passou a incluir
     /// `.info`, e o espelho ficaria fazendo poll por trás da tela de
     /// informações. Ele continua MONTADO nos três casos (é o que preserva o
     /// pane do tmux, decisão #19); o que muda é só o poll.
-    private var showsTerminal: Bool { nav.paneMode == .terminal }
+    private var showsTerminal: Bool { modo == .terminal }
 
-    private var showsInfo: Bool { nav.paneMode == .info }
+    private var showsInfo: Bool { modo == .info }
 
     /// Título do chat pra entrar em `paneTitle`: prefere o ao vivo
     /// (`liveChatTitle`, subido via `LiveChatTitleKey`) e só cai pro estático
@@ -140,11 +163,18 @@ struct SessionDetailPane: View {
             // Onde este painel abre: seleção sem chat não pode mostrar chat, e
             // entrada ao vivo abre no terminal. Decisão pura (testável sem
             // hosting de View) em `SessionDetailPaneLogic.entryPaneMode`.
+            //
+            // [12/08/2026] Lê e escreve na CHAVE desta aba, não em
+            // `nav.paneMode` cru — por decisão #19 a aba fica montada pra
+            // sempre depois de criada, então este `.onAppear` dispara UMA vez
+            // só, na criação. Escrever no global aqui é exatamente o achado
+            // crítico da revisão pós-G6: a segunda aba aberta forçaria o modo
+            // de entrada dela sobre TODAS as outras.
             if let entry = SessionDetailPaneLogic.entryPaneMode(
                 hasChat: session != nil, hasTerminal: terminal != nil,
-                hasInfo: liveEntry != nil, current: nav.paneMode
+                hasInfo: liveEntry != nil, current: nav.paneMode(de: chave)
             ) {
-                nav.paneMode = entry
+                nav.definirPaneMode(entry, de: chave)
             }
         }
     }
@@ -158,8 +188,23 @@ struct SessionDetailPane: View {
         )
     }
 
+    /// [12/08/2026] Binding manual — `$nav.paneMode` deixou de existir
+    /// (`paneMode` virou computada, ver `NavigationState`). Não é cosmético:
+    /// o GET devolve `modo` (já validado por `modoValido`), nunca o valor
+    /// guardado cru. Se devolvesse o cru, um modo IMPOSSÍVEL pra esta seleção
+    /// deixaria o `Picker` sem nenhum segmento marcado — exatamente o aviso
+    /// do comentário de `selectorSegments`/`modoValido` sobre as duas
+    /// concordarem por construção. O SET escreve cru na chave desta aba: é a
+    /// escolha explícita da usuária, não precisa passar por validação.
+    private var paneModeBinding: Binding<PaneMode> {
+        Binding(
+            get: { modo },
+            set: { nav.definirPaneMode($0, de: chave) }
+        )
+    }
+
     private func selector(segments: [(label: String, mode: PaneMode)]) -> some View {
-        Picker("Painel", selection: $nav.paneMode) {
+        Picker("Painel", selection: paneModeBinding) {
             ForEach(segments, id: \.mode) { segment in
                 Text(segment.label).tag(segment.mode)
             }
@@ -180,7 +225,7 @@ struct SessionDetailPane: View {
     /// simples e cinza.
     private var closeTerminalButton: some View {
         Button {
-            nav.paneMode = .info
+            nav.definirPaneMode(.info, de: chave)
         } label: {
             Image(systemName: "xmark")
         }

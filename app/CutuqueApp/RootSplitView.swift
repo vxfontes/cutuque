@@ -126,6 +126,21 @@ struct RootSplitView: View {
         .onChange(of: router.pendingSessionID) { _, id in
             if id != nil { nav.destination = .sessions }
         }
+        // [12/08/2026] Mantém o `NavigationState` em dia com as abas — dois
+        // efeitos, um `.onChange`. `abaEmFoco` é o que faz `nav.paneMode` (a
+        // propriedade de compatibilidade) continuar apontando pro modo que a
+        // usuária está vendo agora, em vez de ficar preso na última aba que
+        // escreveu; o descarte é a limpeza de `modosPorAba` (ver
+        // `NavigationState.descartarModos`) — sem ela o dicionário cresceria
+        // pra sempre a cada aba fechada. `initial: true` porque a primeira
+        // aba (restaurada do disco ou aberta na hora) também precisa entrar
+        // em foco sem esperar uma troca. Um handler SÓ, não um por aba: as
+        // duas escritas dependem do conjunto INTEIRO de abas, não de uma
+        // aba isolada.
+        .onChange(of: tabsStore.tabs, initial: true) { _, tabs in
+            nav.abaEmFoco = tabs.selecionada
+            nav.descartarModos(mantendo: Set(tabs.abas.map(\.chave)))
+        }
         // Libera a regra de layout só depois da primeira montagem da split
         // view (ver `splitViewDidSettle`). O `.task` já roda depois do
         // primeiro render; o `yield` cede mais uma volta do runloop pra ela
@@ -332,7 +347,8 @@ struct RootSplitView: View {
         switch aba.conteudo {
         case .sessao(let selection):
             SessionDetailPane(selection: selection,
-                              paneState: tabsStore.tabs.estado(de: aba.chave))
+                              paneState: tabsStore.tabs.estado(de: aba.chave),
+                              chave: aba.chave)
         case .board:
             BoardView(embedded: true)
         case .maquina(let machine):

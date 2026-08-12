@@ -90,10 +90,13 @@ final class SessionDetailPaneLogicTests: XCTestCase {
             hasChat: true, hasTerminal: false, hasInfo: false, current: .chat))
     }
 
-    /// Entrada ao vivo abre no TERMINAL — mesmo herdando `.chat` ou `.info` de
-    /// outra sessão, já que `paneMode` é estado compartilhado. Isto já foi
-    /// `.info` (paridade com o iPhone); a usuária testou no iPad e pediu o
-    /// contrário em 2026-07-27, ver `entryPaneMode`.
+    /// Entrada ao vivo abre no TERMINAL, seja qual for o `current` recebido.
+    /// [12/08/2026] Até a G6 isto cobria "herdando de outra sessão", porque
+    /// `paneMode` era estado compartilhado; com abas o modo é por aba, então
+    /// o `current` aqui é só o valor com que a aba NOVA nasceu — mas
+    /// `entryPaneMode` continua tendo que vencer ele do mesmo jeito. Isto já
+    /// foi `.info` (paridade com o iPhone); a usuária testou no iPad e pediu
+    /// o contrário em 2026-07-27, ver `entryPaneMode`.
     func testEntradaAoVivoAbreNoTerminal() {
         XCTAssertEqual(SessionDetailPaneLogic.entryPaneMode(
             hasChat: false, hasTerminal: true, hasInfo: true, current: .info), .terminal)
@@ -102,17 +105,22 @@ final class SessionDetailPaneLogicTests: XCTestCase {
     }
 
     /// Já no terminal, nada a corrigir — a função não pode devolver um valor
-    /// "igual ao atual", senão o `onAppear` do pane escreveria em
-    /// `nav.paneMode` a cada montagem à toa. É o que preserva o ✕ do terminal:
-    /// ele leva pra `.info`, e nada remonta o pane pra desfazer isso.
+    /// "igual ao atual", senão o `onAppear` do pane escreveria no modo guardado
+    /// a cada montagem à toa. [12/08/2026] Isto vale tanto para o `paneMode`
+    /// compartilhado de antes da G6 quanto para o modo por aba de agora: o ✕
+    /// do terminal leva pra `.info`, e nada remonta o pane pra desfazer isso
+    /// — se `entryPaneMode` reescrevesse a cada `onAppear` redundante, o ✕
+    /// perderia efeito na hora.
     func testJaNoTerminalNaoForcaNada() {
         XCTAssertNil(SessionDetailPaneLogic.entryPaneMode(
             hasChat: false, hasTerminal: true, hasInfo: true, current: .terminal))
     }
 
     /// O caminho de volta: sessão do registry NÃO tem informações ao vivo, e
-    /// um `.info` herdado de uma entrada ao vivo anterior viraria um painel
-    /// vazio. Cai pro chat.
+    /// um `.info` — [12/08/2026] antes da G6, herdado de uma entrada ao vivo
+    /// anterior via `paneMode` compartilhado; com abas, o valor com que a aba
+    /// nova nasceu — viraria um painel vazio se não fosse corrigido. Cai pro
+    /// chat.
     func testInfoHerdadoNumaSessaoDoRegistryViraChat() {
         XCTAssertEqual(SessionDetailPaneLogic.entryPaneMode(
             hasChat: true, hasTerminal: true, hasInfo: false, current: .info), .chat)
@@ -159,8 +167,10 @@ final class SessionDetailPaneLogicTests: XCTestCase {
 
     /// O par tem que concordar: a aba que abre (`entryPaneMode`) precisa
     /// existir entre os segmentos, senão o segmentado aparece sem nada
-    /// marcado. Cobre as oito combinações dos três "tem/não tem" × o
-    /// `paneMode` herdado.
+    /// marcado. Cobre as oito combinações dos três "tem/não tem" × o valor
+    /// com que a aba nasce (`current` — [12/08/2026] antes da G6 era o
+    /// `paneMode` herdado de outra sessão; com abas é o modo inicial da aba
+    /// nova, mas a mesma conta vale).
     func testAAbaQueAbreSempreExisteNoSeletor() {
         for hasChat in [true, false] {
             for hasTerminal in [true, false] {
@@ -176,6 +186,78 @@ final class SessionDetailPaneLogicTests: XCTestCase {
                             segments.contains { $0.mode == opens },
                             "abre em \(opens) mas o seletor só tem \(segments.map(\.mode)) "
                             + "(chat: \(hasChat), terminal: \(hasTerminal), info: \(hasInfo), atual: \(current))"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - modoValido
+
+    /// Modo possível: função identidade — devolve o mesmo valor recebido,
+    /// sem consultar `selectorSegments`. Cobre os três modos, cada um numa
+    /// seleção onde ele é legítimo.
+    func testModoPossivelVoltaIntacto() {
+        XCTAssertEqual(SessionDetailPaneLogic.modoValido(
+            .chat, hasChat: true, hasTerminal: true, hasInfo: false), .chat)
+        XCTAssertEqual(SessionDetailPaneLogic.modoValido(
+            .terminal, hasChat: true, hasTerminal: true, hasInfo: false), .terminal)
+        XCTAssertEqual(SessionDetailPaneLogic.modoValido(
+            .info, hasChat: false, hasTerminal: true, hasInfo: true), .info)
+    }
+
+    /// Entrada ao vivo (chat: false, terminal: true, info: true) — o único
+    /// modo impossível é `.chat`, e cai no primeiro segmento do seletor
+    /// (`Terminal | Info`), que é `.terminal`. Mesmo resultado que
+    /// `entryPaneMode` dá pra esta combinação (ver `testEntradaAoVivoAbreNoTerminal`).
+    func testModoImpossivelNaEntradaAoVivoCaiProTerminal() {
+        XCTAssertEqual(SessionDetailPaneLogic.modoValido(
+            .chat, hasChat: false, hasTerminal: true, hasInfo: true), .terminal)
+    }
+
+    /// Sessão do registry no tmux (chat: true, terminal: true, info: false)
+    /// — o único modo impossível é `.info`, e cai no primeiro segmento
+    /// (`Chat | Terminal`), que é `.chat`. Mesmo resultado que `entryPaneMode`
+    /// dá pra esta combinação (ver `testInfoHerdadoNumaSessaoDoRegistryViraChat`).
+    func testModoImpossivelNaSessaoDoRegistryNoTmuxCaiProChat() {
+        XCTAssertEqual(SessionDetailPaneLogic.modoValido(
+            .info, hasChat: true, hasTerminal: true, hasInfo: false), .chat)
+    }
+
+    /// Sessão fora do tmux (chat: true, terminal: false, info: false) — dois
+    /// modos impossíveis (`.terminal` e `.info`), e `selectorSegments` vem
+    /// vazia (nada pra alternar, só chat). Cai no único modo possível: `.chat`.
+    /// Mesmo resultado que `entryPaneMode` dá pra esta combinação (ver
+    /// `testSemTerminalForcaChat`).
+    func testModoImpossivelForaDoTmuxCaiProUnicoPossivel() {
+        XCTAssertEqual(SessionDetailPaneLogic.modoValido(
+            .terminal, hasChat: true, hasTerminal: false, hasInfo: false), .chat)
+        XCTAssertEqual(SessionDetailPaneLogic.modoValido(
+            .info, hasChat: true, hasTerminal: false, hasInfo: false), .chat)
+    }
+
+    /// O par com `selectorSegments`: o resultado de `modoValido`, pra
+    /// QUALQUER modo guardado, está sempre entre os segmentos que o próprio
+    /// seletor oferece — nunca um modo que o segmentado nem lista. É este
+    /// teste que impede alguém de quebrar o par depois (mesma ideia de
+    /// `testAAbaQueAbreSempreExisteNoSeletor`, agora para `modoValido`).
+    /// Só se aplica quando HÁ segmentos: sem seletor (só um modo possível)
+    /// não há "segmento marcado" a garantir.
+    func testModoValidoSempreEntreOsSegmentosQuandoHaSegmentos() {
+        for hasChat in [true, false] {
+            for hasTerminal in [true, false] {
+                for hasInfo in [true, false] {
+                    let segments = SessionDetailPaneLogic.selectorSegments(
+                        hasChat: hasChat, hasTerminal: hasTerminal, hasInfo: hasInfo)
+                    guard !segments.isEmpty else { continue }
+                    for modo in PaneMode.allCases {
+                        let resultado = SessionDetailPaneLogic.modoValido(
+                            modo, hasChat: hasChat, hasTerminal: hasTerminal, hasInfo: hasInfo)
+                        XCTAssertTrue(
+                            segments.contains { $0.mode == resultado },
+                            "modoValido(\(modo)) devolveu \(resultado) mas o seletor só tem "
+                            + "\(segments.map(\.mode)) (chat: \(hasChat), terminal: \(hasTerminal), info: \(hasInfo))"
                         )
                     }
                 }
@@ -203,9 +285,9 @@ final class SessionDetailPaneLogicTests: XCTestCase {
     }
 
     /// Seleção sem chat (só `.live` sem sessão do registry, hipoteticamente):
-    /// `correctedPaneMode` já forçaria `showsChat == false` neste caso, mas
-    /// mesmo que `showsChat` chegasse `true` por algum motivo, o título cai
-    /// pro terminal em vez de virar `""` — nunca fica em branco à toa.
+    /// `modoValido` já forçaria `showsChat == false` neste caso, mas mesmo que
+    /// `showsChat` chegasse `true` por algum motivo, o título cai pro
+    /// terminal em vez de virar `""` — nunca fica em branco à toa.
     func testSemChatCaiProTituloDoTerminalMesmoComShowsChatTrue() {
         let title = SessionDetailPaneLogic.paneTitle(
             showsChat: true, chatTitle: nil, terminalTitle: "sessão (tmux)"
@@ -223,7 +305,7 @@ final class SessionDetailPaneLogicTests: XCTestCase {
     }
 
     /// Minor da revisão (rodada 2): sem chat NEM terminal (hoje inatingível
-    /// em uso normal — `correctedPaneMode` sempre garante pelo menos um dos
+    /// em uso normal — `modoValido` sempre garante pelo menos um dos
     /// dois), o pane não quebra: devolve `""` em vez de crashar ou forçar um
     /// unwrap. Trava o comportamento pra não regredir silenciosamente se a
     /// lógica de seleção mudar.

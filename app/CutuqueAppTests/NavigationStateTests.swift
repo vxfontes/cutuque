@@ -604,4 +604,89 @@ final class NavigationStateTests: XCTestCase {
         nav.boardSelection = task
         XCTAssertEqual(nav.boardSelection?.id, "x")
     }
+
+    // MARK: - Modo do painel por aba [12/08/2026]
+    //
+    // Achado crítico da revisão adversarial pós-G6: `paneMode` era um
+    // `@Published` ÚNICO compartilhado por todo o app. Com N `SessionDetailPane`
+    // montados ao mesmo tempo (um por aba, decisão #19), escrever nele de uma
+    // aba vazava pra todas as outras. Estes três testes cobrem a parte pura
+    // (sem hosting de View) da correção: o dicionário por chave, o redirect via
+    // `abaEmFoco` e a limpeza de abas fechadas.
+
+    /// O bug em miniatura: duas abas guardam modos DIFERENTES, e escrever numa
+    /// não pode tocar na outra.
+    func testDoisModosDeDuasChavesDiferentesNaoSeAtropelam() {
+        let nav = NavigationState()
+        let abaAoVivo = ChaveDeAba(tipo: .live, machine: "m1", alvo: "%1")
+        let abaDeChat = ChaveDeAba(tipo: .chat, machine: "m1", alvo: "sessao-1")
+
+        nav.definirPaneMode(.terminal, de: abaAoVivo)
+        nav.definirPaneMode(.chat, de: abaDeChat)
+
+        XCTAssertEqual(nav.paneMode(de: abaAoVivo), .terminal)
+        XCTAssertEqual(nav.paneMode(de: abaDeChat), .chat)
+
+        // Reescrever a de chat pra `.terminal` não pode mexer na ao vivo —
+        // era exatamente isto que o `@Published var paneMode` único fazia.
+        nav.definirPaneMode(.terminal, de: abaDeChat)
+        XCTAssertEqual(nav.paneMode(de: abaAoVivo), .terminal)
+        XCTAssertEqual(nav.paneMode(de: abaDeChat), .terminal)
+    }
+
+    /// Uma chave nunca visitada devolve `.chat` (o padrão antigo do
+    /// `@Published var paneMode = .chat`); `nil` (iPhone, sem aba em foco)
+    /// devolve o modo "sem aba", independente do que qualquer aba guarda.
+    func testChaveNuncaVisitadaComecaEmChatENilUsaModoSemAba() {
+        let nav = NavigationState()
+        let aba = ChaveDeAba(tipo: .chat, machine: "m1", alvo: "sessao-1")
+
+        XCTAssertEqual(nav.paneMode(de: aba), .chat)
+        XCTAssertEqual(nav.paneMode(de: nil), .chat)
+
+        nav.definirPaneMode(.terminal, de: aba)
+        XCTAssertEqual(nav.paneMode(de: aba), .terminal)
+        XCTAssertEqual(nav.paneMode(de: nil), .chat, "escrever numa aba não pode mudar o modo sem aba")
+    }
+
+    /// `nav.paneMode` (a propriedade de compatibilidade que `CutuqueCommands`
+    /// e o ⌘⇧T leem/escrevem sem saber de abas) tem de seguir `abaEmFoco` — é
+    /// isso que faz o atalho continuar agindo sobre a aba que a usuária está
+    /// olhando, mesmo depois de trocar de aba sem tocar no seletor.
+    func testAbaEmFocoRedirecionaOPaneModeDeCompatibilidade() {
+        let nav = NavigationState()
+        let aba1 = ChaveDeAba(tipo: .chat, machine: "m1", alvo: "sessao-1")
+        let aba2 = ChaveDeAba(tipo: .live, machine: "m1", alvo: "%2")
+
+        nav.definirPaneMode(.chat, de: aba1)
+        nav.definirPaneMode(.terminal, de: aba2)
+
+        nav.abaEmFoco = aba1
+        XCTAssertEqual(nav.paneMode, .chat)
+
+        nav.abaEmFoco = aba2
+        XCTAssertEqual(nav.paneMode, .terminal)
+
+        // Escrever em `nav.paneMode` (o que `CutuqueCommands` faz) tem de
+        // escrever na aba em foco, não em algum lugar solto.
+        nav.paneMode = .info
+        XCTAssertEqual(nav.paneMode(de: aba2), .info)
+        XCTAssertEqual(nav.paneMode(de: aba1), .chat, "aba1 não pode ser afetada por uma escrita com foco em aba2")
+    }
+
+    /// `descartarModos` é a limpeza que impede `modosPorAba` de crescer pra
+    /// sempre: tira o que fechou, preserva o que ficou.
+    func testDescartarModosTiraOQueFechouEMantemOQueFicou() {
+        let nav = NavigationState()
+        let ficou = ChaveDeAba(tipo: .chat, machine: "m1", alvo: "sessao-1")
+        let fechou = ChaveDeAba(tipo: .live, machine: "m1", alvo: "%2")
+
+        nav.definirPaneMode(.terminal, de: ficou)
+        nav.definirPaneMode(.info, de: fechou)
+
+        nav.descartarModos(mantendo: Set([ficou]))
+
+        XCTAssertEqual(nav.paneMode(de: ficou), .terminal, "a que ficou guarda o valor de antes")
+        XCTAssertEqual(nav.paneMode(de: fechou), .chat, "a que fechou volta ao padrão — não existe mais valor guardado")
+    }
 }

@@ -28,11 +28,16 @@ enum SessionDetailPaneLogic {
     /// Em que painel o detalhe ABRE, dado o que esta seleção tem. `nil` quando
     /// `current` já serve — não há nada a mudar.
     ///
-    /// Duas responsabilidades, e a segunda é nova: além de corrigir um
-    /// `paneMode` impossível (seleção sem chat não pode mostrar chat), ela
-    /// impõe o padrão de entrada das sessões AO VIVO. `paneMode` é estado
-    /// compartilhado em `NavigationState`, então sem isso a sessão ao vivo
-    /// herdaria o painel da anterior.
+    /// [12/08/2026] Até a G6, `paneMode` era estado compartilhado em
+    /// `NavigationState` — só existia UM `SessionDetailPane` montado por vez,
+    /// então corrigir um modo impossível e escolher o padrão de entrada eram
+    /// a mesma conta. Com abas, o modo virou POR ABA (quem liga isso na view é
+    /// o agente seguinte a este comentário; a correção do modo impossível a
+    /// cada render agora é `modoValido`, abaixo). `entryPaneMode` perde a
+    /// primeira responsabilidade — ela nunca mais precisa "corrigir" nada,
+    /// porque `modoValido` já torna um modo em branco impossível por
+    /// construção — e sobra só a segunda: escolher onde a aba NOVA abre
+    /// (`onAppear`, uma vez por aba).
     ///
     /// - **Tem info** (entrada ao vivo do tmux): abre SEMPRE em `.terminal`.
     ///   Até 08/2026 isto valia a cada seleção porque o pane era remontado
@@ -93,6 +98,72 @@ enum SessionDetailPaneLogic {
         return []
     }
 
+    /// [12/08/2026] O modo que esta seleção deve MOSTRAR agora, a cada
+    /// render — não confundir com `entryPaneMode`, que só decide onde uma aba
+    /// NOVA abre. Função identidade no caso comum: se `modo` (o modo GUARDADO
+    /// da aba, hoje `nav.paneMode`) já é possível nesta seleção, devolve ele
+    /// mesmo sem tocar em nada.
+    ///
+    /// Existe porque, com abas (G6), N `SessionDetailPane` ficam montados ao
+    /// mesmo tempo — decisão #19, é o que preserva a rolagem do chat e o
+    /// espelho do tmux — e o modo guardado de UMA aba pode não existir na
+    /// seleção de OUTRA: uma aba de chat puro força `.chat`; a aba ao vivo
+    /// que estava em `.terminal` continua guardando `.chat` quando volta ao
+    /// foco, e `.chat` não existe numa entrada ao vivo. Sem esta função o
+    /// pane renderiza os três `if`/`opacity` de `SessionDetailPane.body` com
+    /// `showsChat`/`showsTerminal`/`showsInfo` todos `false` — TELA EM
+    /// BRANCO. Chamar `modoValido` na hora de decidir `showsChat` etc. (o
+    /// agente seguinte faz essa ligação) torna esse branco impossível por
+    /// construção: o valor usado pra renderizar nunca é o guardado bruto,
+    /// é sempre ele passado por aqui.
+    ///
+    /// Quando o modo pedido NÃO é possível, cai no PRIMEIRO segmento de
+    /// `selectorSegments` — não num valor fixo escolhido à mão. As duas
+    /// funções leem os mesmos três "tem/não tem" (ver o comentário de
+    /// `selectorSegments` sobre o par) e concordar por construção é o que
+    /// garante que o seletor do topo sempre abre com ALGO marcado: o modo que
+    /// a view escolhe pra mostrar é, por definição, um dos segmentos que ela
+    /// oferece. Quando `selectorSegments` vem vazia (sessão fora do tmux, só
+    /// chat — nada pra alternar) não há "primeiro segmento": o único modo
+    /// possível já está determinado pelos próprios `hasChat`/`hasTerminal`/
+    /// `hasInfo`, então é ele que devolvemos.
+    ///
+    /// Por que não reusar `entryPaneMode` aqui em vez de duplicar a ideia de
+    /// "cair pro seletor"? Porque são duas perguntas diferentes.
+    /// `entryPaneMode` responde "onde uma aba NOVA deve abrir" e por isso
+    /// força `.terminal` toda vez que `hasInfo` — mesmo quando o modo GUARDADO
+    /// já era `.terminal` ou `.info` e continua perfeitamente válido.
+    /// Chamar `entryPaneMode` a cada render prenderia toda aba ao vivo pra
+    /// sempre em `.terminal`: o ✕ do terminal (que leva pra `.info`) e o
+    /// segmento "Info" do seletor nunca teriam efeito, porque no próximo
+    /// render a "correção" reverteria os dois de volta. `modoValido` só age
+    /// quando o modo guardado é IMPOSSÍVEL nesta seleção — nunca quando ele é
+    /// só "diferente do padrão de entrada".
+    static func modoValido(_ modo: PaneMode, hasChat: Bool, hasTerminal: Bool,
+                           hasInfo: Bool) -> PaneMode {
+        let segments = selectorSegments(hasChat: hasChat, hasTerminal: hasTerminal, hasInfo: hasInfo)
+        // "Possível" é definido pelos SEGMENTOS, não por reler hasChat/
+        // hasTerminal/hasInfo direto: `selectorSegments` já tem prioridade
+        // sobre a combinação deles (info bate chat — ver seu comentário), e
+        // uma checagem independente por flag divergiria dela bem aqui, na
+        // combinação (impossível na prática, mas não impedida pelos tipos)
+        // de ter chat E info ao mesmo tempo. Ler o mesmo lugar que
+        // `selectorSegments` lê é o que faz as duas concordarem por
+        // construção em vez de por sorte.
+        if segments.contains(where: { $0.mode == modo }) { return modo }
+        if let primeiro = segments.first { return primeiro.mode }
+
+        // `selectorSegments` vem vazia quando só existe UM modo possível —
+        // nada pra alternar, então nenhum segmento entra no seletor (ver o
+        // comentário de `selectorSegments`). O "tem/não tem" já entrega, sem
+        // ambiguidade, qual é esse único modo: sessão fora do tmux só tem
+        // chat; a sessão-só-terminal (hipotética, sem chat e sem info) só tem
+        // terminal.
+        if hasChat { return .chat }
+        if hasTerminal { return .terminal }
+        return .info
+    }
+
     /// Único título de navegação do pane, computado a partir de `showsChat` —
     /// a fonte de verdade que substitui os dois `.navigationTitle` que
     /// disputavam a mesma barra quando `SessionDetailView` e
@@ -103,9 +174,10 @@ enum SessionDetailPaneLogic {
     /// `chatTitle`/`terminalTitle` já vêm resolvidos (apelido local incluso)
     /// — esta função só decide QUAL dos dois mostrar. Quando o lado
     /// preferido por `showsChat` não existe (seleção só tem um dos dois
-    /// painéis — ver `correctedPaneMode`), cai pro que houver; `""` só no
-    /// caso, teoricamente inatingível em uso normal, de nenhum dos dois
-    /// existir.
+    /// painéis — ver `modoValido`, [12/08/2026] nome atual desta referência,
+    /// antes apontava pra uma função que nunca chegou a existir com este
+    /// nome), cai pro que houver; `""` só no caso, teoricamente inatingível
+    /// em uso normal, de nenhum dos dois existir.
     static func paneTitle(showsChat: Bool, chatTitle: String?, terminalTitle: String?) -> String {
         if showsChat, let chatTitle { return chatTitle }
         if !showsChat, let terminalTitle { return terminalTitle }
