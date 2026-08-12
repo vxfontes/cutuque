@@ -2,6 +2,20 @@ import Foundation
 
 enum TipoDeAba: String, Codable, CaseIterable {
     case live, chat, board, maquina, arquivado
+
+    /// Ícone da aba na barra. Os três últimos são os MESMOS símbolos dos
+    /// destinos da sidebar (`PadDestination.symbol`) de propósito: com abas
+    /// globais (12/08/2026) a sidebar é "onde eu abro" e a barra é "o que está
+    /// aberto" — o mesmo desenho nos dois lugares é o que liga uma coisa à outra.
+    var simbolo: String {
+        switch self {
+        case .live:      return "apple.terminal"
+        case .chat:      return "bubble.left.and.bubble.right"
+        case .board:     return "rectangle.split.3x1"
+        case .maquina:   return "server.rack"
+        case .arquivado: return "archivebox"
+        }
+    }
 }
 
 /// Identidade da aba, e a única coisa que vai pro disco (G4). Deliberadamente
@@ -188,19 +202,31 @@ struct OpenTabs: Equatable {
         abas.map { AbaPersistida(chave: $0.chave, titulo: $0.titulo, fixa: $0.fixa) }
     }
 
-    /// Abas do disco nascem `pendente` e `normal`. A ordem de foco é a da barra
-    /// (a primeira é a mais "recente"), o que faz o teto de 6 da G2 dormir as da
-    /// direita até a Vanessa tocar nelas.
+    /// Abas do disco nascem `normal`, com o conteúdo que já podem mostrar sem
+    /// perguntar a ninguém (ver `conteudoInicial`). A ordem de foco é a da
+    /// barra (a primeira é a mais "recente"), o que faz o teto de 6 da G2
+    /// dormir as da direita até a Vanessa tocar nelas.
     static func restaurando(_ salvas: [AbaPersistida]) -> OpenTabs {
         var t = OpenTabs()
         for (i, s) in salvas.enumerated() {
             t.abas.append(AbaAberta(chave: s.chave, titulo: s.titulo, estilo: .normal,
-                                    fixa: s.fixa, conteudo: .pendente,
+                                    fixa: s.fixa, conteudo: Self.conteudoInicial(s.chave),
                                     ordemDeFoco: salvas.count - i))
         }
         t.contadorDeFoco = salvas.count
         t.selecionada = t.abas.first?.chave
         return t
+    }
+
+    /// O que uma aba restaurada do disco já pode mostrar sem perguntar a
+    /// ninguém. Só o Board: ele não tem carga útil nenhuma além da própria
+    /// identidade (12/08/2026 — abas globais). Máquina precisa da `Machine`
+    /// de verdade (tema, ícone, SO) e card arquivado precisa do `BoardTask`;
+    /// as duas nascem `.pendente` e quem as resolve é o `AbasResolver`.
+    /// Sessão (`.live`/`.chat`) nasce `.pendente` pelo motivo de sempre (D2):
+    /// restaurar NÃO recria pane.
+    private static func conteudoInicial(_ chave: ChaveDeAba) -> TabConteudo {
+        chave.tipo == .board ? .board : .pendente
     }
 
     /// Casa as abas com o que está vivo agora. Quem não aparece vira `.morta` —
@@ -239,13 +265,29 @@ struct OpenTabs: Equatable {
         }
     }
 
-    /// Board e Arquivo são telas do hub, não panes: não morrem por ausência na
-    /// lista ao vivo. Máquina também não — o host existe no registro mesmo com
-    /// o ssh caído, e quem mostra "não conectei" é a própria tela da máquina.
+    /// Quem pode virar `.morta` por AUSÊNCIA no retrato de quem está julgando.
+    ///
+    /// [Reescrito em 12/08/2026, abas globais] Antes deste dia, `.maquina` e
+    /// `.arquivado` devolviam `false` com a justificativa de que "o host existe no
+    /// registro mesmo com o ssh caído, e quem mostra 'não conectei' é a própria
+    /// tela da máquina". A razão continua verdadeira para o `ssh` — e é justamente
+    /// por isso que ela não serve mais para a ABA: desde que máquina e card
+    /// arquivado podem ser abas restauradas do disco, existe um caso em que a aba
+    /// aponta para algo que o hub NÃO tem mais (máquina apagada, semana que nunca
+    /// existiu), e aí `false` significaria `ProgressView` girando para sempre. Quem
+    /// julga esses dois é o `AbasResolver`, com o retrato de `listMachines()` /
+    /// `boardArchive()` — e é o parâmetro `julgando` de `reconciliar` que garante
+    /// que só quem TEM retrato agora possa matar por ausência (a lista de sessões
+    /// nunca passa `.maquina`/`.arquivado`, então o poll de vivas não encosta
+    /// nelas).
+    ///
+    /// `.board` segue `false`, e agora por um motivo mais forte que "é tela do
+    /// hub": não existe autoridade que possa dizer que o Board não existe. Ele
+    /// nasce resolvido em `conteudoInicial`.
     private static func dependeDeAlgoVivo(_ tipo: TipoDeAba) -> Bool {
         switch tipo {
-        case .live, .chat:              return true
-        case .board, .maquina, .arquivado: return false
+        case .live, .chat, .maquina, .arquivado: return true
+        case .board:                             return false
         }
     }
 }
