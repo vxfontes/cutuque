@@ -9,6 +9,13 @@ import SwiftUI
 /// sobreviver). O inativo recebe `isActive: false` e para o trabalho de fundo.
 struct MachineDetailView: View {
     let machine: Machine
+    /// Estado da ABA (12/08/2026 — abas globais), vindo de fora via
+    /// `OpenTabs.estado(de:)`: `.ativo` quando ela está em foco, `.suspenso`
+    /// quando está viva mas atrás de outra, `.liberado` quando dormiu (teto de
+    /// 6) ou foi fechada. Padrão `.ativo` para os chamadores que não vivem em
+    /// aba (iPhone, e o `MachineListView`/`RootSplitView` de hoje) — ver
+    /// `MachineTerminalLifecycle`.
+    let paneState: TerminalPaneState
 
     @StateObject private var session: PTYSession
     /// Painel aberto, lembrado POR HOST: a máquina onde se edita arquivo e a
@@ -43,11 +50,20 @@ struct MachineDetailView: View {
     private var pane: MachinePane { MachinePane(rawValue: paneRaw) ?? .terminal }
     private var showsTerminal: Bool { pane == .terminal }
 
-    /// O terminal só trabalha quando é o painel aberto E está na tela.
-    private var terminalAtivo: Bool { showsTerminal && naTela }
+    /// O que o terminal deve estar fazendo agora — ver `MachineTerminalLifecycle`.
+    private var acao: AcaoDoTerminalDaMaquina {
+        MachineTerminalLifecycle.acao(paneState: paneState, pane: pane, naTela: naTela)
+    }
 
-    init(machine: Machine) {
+    /// O terminal só trabalha quando esta é a decisão. Substitui o antigo
+    /// `showsTerminal && naTela`: aquele não sabia de aba, e dentro do `ZStack`
+    /// de abas ele ficava `true` em TODAS as abas de máquina ao mesmo tempo
+    /// (12/08/2026 — abas globais).
+    private var terminalAtivo: Bool { acao == .trabalhar }
+
+    init(machine: Machine, paneState: TerminalPaneState = .ativo) {
         self.machine = machine
+        self.paneState = paneState
         _session = StateObject(wrappedValue: PTYSession(machine: machine.name))
         _paneRaw = AppStorage(wrappedValue: MachinePane.terminal.rawValue,
                               MachinePane.storageKey(machine: machine.name))
@@ -88,20 +104,35 @@ struct MachineDetailView: View {
                 NotificationCenter.default.post(name: .maquinasMudaram, object: nil)
             }
         }
-        // Empilhar uma subpasta chama o `onDisappear` desta view: o terminal
-        // para de ler, mas o socket segue aberto e o shell do outro lado vivo —
-        // voltar reencontra tudo onde estava.
+        // [Reescrito em 12/08/2026 — abas globais] Empilhar uma subpasta chama
+        // o `onDisappear` DESTA view — isso continua valendo, e é o que faz o
+        // terminal parar de ler enquanto a subpasta está por cima (o socket
+        // segue aberto, o shell do outro lado vivo). O que deixou de valer é
+        // tratar isto como o ciclo de vida INTEIRO: dentro do `ZStack` de abas
+        // (decisão #19) a aba em si nunca desmonta, então o `onDisappear` da
+        // ABA nunca roda — sair de foco, dormir pelo teto de 6 ou fechar não
+        // passam mais por aqui. Quem decide isso agora é `paneState`, recebido
+        // de fora (`OpenTabs.estado(de:)`) — ver `MachineTerminalLifecycle` e o
+        // `.onChange(of: acao)` abaixo.
         .onAppear { naTela = true }
         .onDisappear { naTela = false }
-        .onChange(of: terminalAtivo) { _, ativo in
-            if ativo {
-                // A ordem importa: `abre()` para quem chegou nos arquivos e só
-                // depois foi ao terminal (nunca houve conexão); `resume()` para
-                // quem já tinha uma, suspensa.
+        // `initial: true` porque uma aba pode NASCER dormindo (restaurada do
+        // disco além do teto de 6): sem isto, a decisão só chegaria na primeira
+        // transição, e `PTYTerminalView` só chama `abre()` quando `isActive`
+        // (ver PTYTerminalView.swift:131) — então nascer dormindo já não abre
+        // conexão, e nascer `.liberado` depois de ter aberto precisa fechar.
+        .onChange(of: acao, initial: true) { _, acao in
+            switch acao {
+            case .trabalhar:
+                // A ordem importa: `abre()` para quem nunca conectou (chegou
+                // pelos arquivos, ou acordou depois de dormir); `resume()` para
+                // quem já tinha uma conexão, suspensa.
                 session.abre()
                 session.resume()
-            } else {
+            case .suspender:
                 session.suspend()
+            case .desconectar:
+                session.disconnect()
             }
         }
     }
