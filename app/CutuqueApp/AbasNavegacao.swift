@@ -36,10 +36,18 @@ enum AbasNavegacao {
         var maquina = false
         var arquivo = false
 
-        /// Atalho pro chamador decidir se vale a pena mexer em alguma coisa —
-        /// escrever as três seleções incondicionalmente a cada mudança de aba
-        /// publicaria `@Published` à toa na imensa maioria das trocas (nenhuma
-        /// órfã).
+        /// Resumo "sobrou alguma sujeira?".
+        ///
+        /// [Comentário reescrito em 12/08/2026, achado `menor` da revisão da
+        /// fase D.] O texto anterior dizia que era um atalho para o chamador
+        /// decidir se valia mexer em algo — e isso ficou falso: o
+        /// `RootSplitView` escreve **campo por campo** (`if orfas.sessao { … }`),
+        /// justamente para não publicar as três `@Published` à toa, então ele
+        /// nunca lê este resumo. Quem lê são os testes, e é por isso que ele
+        /// fica: `XCTAssertFalse(orfas.alguma)` afirma numa linha o que de outro
+        /// modo seriam três asserções — a diferença entre "este campo não é
+        /// órfão" e "**nenhum** campo é órfão", que é a garantia que importa nos
+        /// casos de seleção `nil` e de aba de tipo diferente.
         var alguma: Bool { sessao || maquina || arquivo }
     }
 
