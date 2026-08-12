@@ -282,6 +282,17 @@ struct SessionDetailView: View {
     // porque só o transcrito (ScrollView) ignora a safe area do teclado;
     // a VStack externa, essa sim, empurra a barra pra cima normalmente.
     @FocusState private var inputFocused: Bool
+    /// A folha de seleção pedida por um item do chat. `Identifiable` com `id`
+    /// próprio (e não `String?`) porque pedir DUAS vezes o mesmo texto tem de
+    /// reabrir a folha.
+    private struct FolhaPedida: Identifiable {
+        let id = UUID()
+        let titulo: String
+        let texto: String
+        let monoespacado: Bool
+    }
+
+    @State private var folhaDeTexto: FolhaPedida?
 
     init(session: Session, isActive: Bool = true, ownsNavigationTitle: Bool = true) {
         _model = StateObject(wrappedValue: SessionDetailViewModel(session: session))
@@ -488,6 +499,10 @@ struct SessionDetailView: View {
             // Casa a barra de navegação com o fundo agrupado do card — sem
             // isso fica uma faixa branca costurada acima do conteúdo cinza.
             .presentationBackground(Color(.systemGroupedBackground))
+        }
+        .sheet(item: $folhaDeTexto) { pedida in
+            FolhaDeTexto(titulo: pedida.titulo, texto: pedida.texto,
+                         monoespacado: pedida.monoespacado)
         }
         // Sessão saiu de needs_you (respondida por outro cliente/terminal,
         // timeout, ou a própria resposta) enquanto o sheet estava aberto →
@@ -916,13 +931,56 @@ struct SessionDetailView: View {
     /// Desenha um item do transcrito conforme seu papel.
     @ViewBuilder
     private func chatItemView(_ item: ChatItem) -> some View {
+        // O menu vai NO FUNIL, não nas três folhas: bolha da usuária, resposta
+        // do agente e tool call ganham copiar de uma vez, e o texto que ele
+        // copia é o CRU de `ChatItem.content` — não o markdown renderizado, que
+        // é justamente o que a seleção nativa não consegue atravessar
+        // (MarkdownText faz um `Text` por bloco).
+        Group {
+            switch item.content {
+            case .user(let text):
+                userBubble(text)
+            case .assistant(let text):
+                assistantBlock(text)
+            case .tool(let command, let result):
+                ToolGroupView(command: command, result: result)
+            }
+        }
+        .contextMenu {
+            Button {
+                AreaDeTransferencia.copiar(textoCruDoItem(item))
+            } label: {
+                Label("Copiar", systemImage: "doc.on.doc")
+            }
+            Button {
+                folhaDeTexto = FolhaPedida(titulo: tituloDaFolha(item),
+                                           texto: textoCruDoItem(item),
+                                           monoespacado: ehFerramenta(item))
+            } label: {
+                Label("Selecionar texto…", systemImage: "selection.pin.in.out")
+            }
+        }
+    }
+
+    /// Único lugar que traduz `ChatItem.Content` no texto que sai do app.
+    private func textoCruDoItem(_ item: ChatItem) -> String {
         switch item.content {
-        case .user(let text):
-            userBubble(text)
-        case .assistant(let text):
-            assistantBlock(text)
-        case .tool(let command, let result):
-            ToolGroupView(command: command, result: result)
+        case .user(let t):        return TextoParaCopiar.aparado(t)
+        case .assistant(let t):   return TextoParaCopiar.aparado(t)
+        case .tool(let c, let r): return TextoParaCopiar.deFerramenta(comando: c, resultado: r)
+        }
+    }
+
+    private func ehFerramenta(_ item: ChatItem) -> Bool {
+        if case .tool = item.content { return true }
+        return false
+    }
+
+    private func tituloDaFolha(_ item: ChatItem) -> String {
+        switch item.content {
+        case .user:      return "Sua mensagem"
+        case .assistant: return "Resposta do agente"
+        case .tool:      return "Comando e saída"
         }
     }
 
