@@ -198,9 +198,16 @@ struct DiscoveredSession: Decodable, Identifiable, Equatable, Hashable {
     let modified: Int64   // mtime do transcript (epoch em segundos)
     let state: String     // "running"|"waiting"|"idle" (só panes vivos do tmux; lido do terminal)
     let agent: String     // "claude-code"|"codex" (qual agente gerou a sessão)
+    /// "shell" = pane sem agente (D11). Vazio = pane de agente ou sessão que não vem
+    /// do tmux. Campo novo → hub antigo não manda → default seguro.
+    let kind: String
 
     /// Instante da última atividade, derivado do mtime.
     var modifiedAt: Date { Date(timeIntervalSince1970: TimeInterval(modified)) }
+
+    /// Terminal livre: aparece na lista marcado, senão o que o formulário criou
+    /// desaparece no refresh seguinte.
+    var ehShell: Bool { kind == "shell" }
 
     /// Último componente da pasta (ex.: "personal") para rótulo compacto.
     var folderName: String {
@@ -214,7 +221,7 @@ struct DiscoveredSession: Decodable, Identifiable, Equatable, Hashable {
     }
 
     // Campos novos podem faltar em respostas de um hub antigo → default seguro.
-    private enum CodingKeys: String, CodingKey { case id, cwd, title, last, count, modified, state, agent }
+    private enum CodingKeys: String, CodingKey { case id, cwd, title, last, count, modified, state, agent, kind }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -226,13 +233,15 @@ struct DiscoveredSession: Decodable, Identifiable, Equatable, Hashable {
         state = (try? c.decode(String.self, forKey: .state)) ?? ""
         // Hub antigo não manda agent → assume claude-code (legado).
         agent = (try? c.decode(String.self, forKey: .agent)) ?? "claude-code"
+        kind = (try? c.decode(String.self, forKey: .kind)) ?? ""
     }
 
     /// Init direto (para sintetizar uma entrada viva a partir de uma sessão do
     /// registry que tem um pane tmux).
-    init(id: String, cwd: String, title: String, last: String = "", count: Int = 0, modified: Int64 = 0, state: String = "", agent: String = "claude-code") {
+    init(id: String, cwd: String, title: String, last: String = "", count: Int = 0, modified: Int64 = 0, state: String = "", agent: String = "claude-code", kind: String = "") {
         self.id = id; self.cwd = cwd; self.title = title
         self.last = last; self.count = count; self.modified = modified; self.state = state; self.agent = agent
+        self.kind = kind
     }
 }
 

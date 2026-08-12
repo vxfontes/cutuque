@@ -60,6 +60,9 @@ final class SessionListViewModel: ObservableObject {
     // "some e volta" de um hiccup transitório).
     private var cachedMachines: [String] = []
     private var emptyLiveStreak = 0
+    /// Máquinas conhecidas pelo último poll de "ao vivo" — o formulário de novo
+    /// terminal usa esta lista pronta em vez de buscar `targets()` de novo.
+    var machineNames: [String] { cachedMachines }
 
     // Haptics locais: "gostinho do cutucão" antes do push da Fase 4.
     private let haptics = UINotificationFeedbackGenerator()
@@ -289,6 +292,8 @@ struct SessionListView: View {
     @State private var showingStatus = false
     @State private var showingHistory = false
     @State private var showingHelp = false
+    // Formulário de novo terminal tmux (D11/F4) — o botão "+" da lista.
+    @State private var mostrandoNovoTerminal = false
     // Sessão em processo de renomear (nil = alerta fechado) + texto do apelido.
     @State private var renameTarget: Session?
     @State private var renameText = ""
@@ -490,6 +495,16 @@ struct SessionListView: View {
         .sheet(isPresented: $showingHelp) {
             HelpView()
         }
+        .sheet(isPresented: $mostrandoNovoTerminal) {
+            NovoTerminalForm(maquinas: model.machineNames,
+                             gruposSugeridos: NovoTerminalFormLogic.gruposConhecidos(gruposAoVivo.map(\.grupo))) { maquina, alvo in
+                // Criou → atualiza a lista e abre o espelho no pane novo, pelo
+                // MESMO caminho de abertura que as linhas da lista já usam
+                // (apply, não um caminho novo — a Task G1 teria de reconciliar).
+                Task { await model.refreshLive() }
+                abrirAoVivo(machine: maquina, target: alvo)
+            }
+        }
         .sheet(item: $selectedLive) { entry in
             NavigationStack {
                 LiveDetailView(entry: entry)
@@ -613,6 +628,11 @@ struct SessionListView: View {
                 .accessibilityLabel("Status do hub")
             }
             ToolbarItem(placement: .topBarTrailing) {
+                // Desvio do plano (12/08/2026): o plano pedia um SEGUNDO botão "+"
+                // (placement .primaryAction) só para o novo terminal. Já existia
+                // este Menu com o mesmo símbolo "+"; dois ícones "+" lado a lado na
+                // toolbar seriam ambíguos, então "Novo terminal" entra como terceira
+                // opção dele em vez de um caminho novo.
                 Menu {
                     Button {
                         showingNew = true
@@ -624,10 +644,15 @@ struct SessionListView: View {
                     } label: {
                         Label("Continuar sessão", systemImage: "macbook.and.iphone")
                     }
+                    Button {
+                        mostrandoNovoTerminal = true
+                    } label: {
+                        Label("Novo terminal", systemImage: "terminal")
+                    }
                 } label: {
                     Image(systemName: "plus")
                 }
-                .accessibilityLabel("Nova tarefa ou continuar sessão")
+                .accessibilityLabel("Nova tarefa, continuar sessão ou novo terminal")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -712,6 +737,18 @@ struct SessionListView: View {
         apply(SessionNavigationLogic.goTo(session: session, embedded: isEmbedded, pathTopID: path.last?.id))
     }
 
+    /// Abre a sessão recém-criada pelo formulário de novo terminal como entrada
+    /// ao vivo — pelo MESMO funil (`apply`) que já é o único lugar que toca
+    /// `splitSelection`/`selectedLive`/`path` (não um caminho de abertura novo,
+    /// que a Task G1 teria de reconciliar). Título e pasta reais chegam no
+    /// próximo poll de `refreshLive()`; aqui é só o suficiente para abrir o
+    /// terminal na hora.
+    private func abrirAoVivo(machine: String, target: String) {
+        let entry = LiveEntry(machine: machine,
+                              session: DiscoveredSession(id: target, cwd: "", title: "Novo terminal"))
+        apply(isEmbedded ? .selection(.live(entry)) : .liveSheet(entry))
+    }
+
     /// Executa a decisão pura de `SessionNavigationLogic` — o único lugar que
     /// toca `splitSelection`/`selectedLive`/`path` (o "I/O" da navegação).
     private func apply(_ target: SessionNavigationTarget?) {
@@ -764,6 +801,12 @@ struct SessionListView: View {
                 HStack(spacing: 4) {
                     Image(systemName: machineSymbol(entry.machine))
                     Text(entry.session.folderName)
+                    if entry.session.ehShell {
+                        // D11: sem esta marca, o terminal livre criado pelo app fica
+                        // indistinguível de uma sessão de agente sem estado.
+                        Label("shell", systemImage: "terminal")
+                            .labelStyle(.titleAndIcon)
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
