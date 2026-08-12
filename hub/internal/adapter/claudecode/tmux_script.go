@@ -1,0 +1,130 @@
+package claudecode
+
+// tmuxStateFuncs é a parte PURA do script de varredura: recebe a tela do pane como
+// texto e devolve o estado. Vive separada do driver por dois motivos — é a única
+// parte que dá para testar sem tmux (ver tmux_script_test.go), e é a que muda
+// quando uma TUI de agente muda de string.
+//
+// Estados:
+//   - 'running' : trabalhando agora. Sinal principal = o TIMER VIVO do spinner
+//                 entre parênteses ("(8s" / "(4m 18s"), que aparece enquanto gera
+//                 ou roda ferramenta e some ao ficar ocioso. "esc to interrupt"
+//                 NÃO aparece no modo bypass-permissions do Claude, então não dá
+//                 para depender só dele; "agent(s) to finish" = espera subagente.
+//   - 'waiting' : parado num diálogo de permissão/escolha ("Do you want to...").
+//   - 'idle'    : ocioso no prompt = concluiu o turno (o "concluído" → verde).
+//
+// O "\(" do work_re NÃO é detalhe: o status ocioso do Claude é passado
+// ("Cogitated for 10s") e o opencode imprime a duração DEPOIS de concluir
+// ("▣ Build · <modelo> · 3.2s"). Sem o parêntese, as duas telas ociosas viram
+// 'running' para sempre. Não afrouxe — há teste para isso.
+const tmuxStateFuncs = `import re
+work_re=re.compile(r'\((?:\d+m )?\d+s')
+# Marcadores por agente, calibrados por captura de tela em 12/08/2026
+# (claude 2.1.228 · codex 0.147.0 · opencode 1.18.16). Agente novo = linha nova.
+# 'timer' liga a regra do work_re (parêntese + Ns), que é o sinal mais forte de
+# "trabalhando agora" nas TUIs que mostram spinner com cronômetro.
+MARKERS={
+ 'claude':{'timer':True,
+           'running':['esc to interrupt','agent to finish','agents to finish'],
+           'waiting':['do you want to proceed','do you want to make this edit']},
+ 'codex':{'timer':True,
+          'running':['esc to interrupt'],
+          # Portão de confiança de pasta nova: a sessão fica travada esperando
+          # tecla, então é 'waiting', não 'idle'. O formulário de novo terminal
+          # escolhe pasta arbitrária — este caso é rotina, não exceção.
+          'waiting':['do you trust the contents of this directory']},
+ 'opencode':{'timer':False,
+             'running':['esc interrupt'],
+             'waiting':[]},
+}
+def classify(txt,agent):
+    m=MARKERS.get(agent)
+    if not m: return ''
+    low=txt.lower()
+    if m['timer'] and work_re.search(txt): return 'running'
+    for s in m['running']:
+        if s in low: return 'running'
+    for s in m['waiting']:
+        if s in low: return 'waiting'
+    return 'idle'
+`
+
+// tmuxDriverScript lista os panes do tmux (de TODOS os servidores, inclusive os
+// nomeados via `-L`, pois o tmx.sh da usuária agrupa por servidor). Até
+// 12/08/2026 mantinha só os panes com um `claude` na ÁRVORE DE PROCESSOS; hoje
+// (D11) mantém todos: quem tem agente na árvore sai como kind='agent' — detecção
+// robusta contra o nome do binário (`versions/<semver>`) e contra flicker
+// (claude spawna `bash`) — e o resto sai como kind='shell'.
+// Emite [{id,socket,pane,cmd,cwd,session,window,kind,state}] onde
+// id = "<socket>\t<pane>" (alvo composto: pane_id só é único DENTRO de um
+// servidor). python3 do sistema.
+const tmuxDriverScript = `import subprocess,json,os,re,glob
+os.environ['PATH']=os.environ.get('PATH','')+':/opt/homebrew/bin:/usr/local/bin:/opt/local/bin'
+def run(*a):
+    try: return subprocess.run(list(a),capture_output=True,text=True).stdout
+    except Exception: return ''
+kids={}; cmd={}
+for line in run('ps','-axo','pid=,ppid=,command=').splitlines():
+    m=re.match(r'\s*(\d+)\s+(\d+)\s+(.*)',line)
+    if not m: continue
+    pid,ppid,c=int(m.group(1)),int(m.group(2)),m.group(3)
+    cmd[pid]=c; kids.setdefault(ppid,[]).append(pid)
+def agent_of(root):
+    # Qual agente roda na árvore de processos do pane ('claude'|'codex'|
+    # 'opencode') ou '' se nenhum. Cobertura universal do fallback tmux: qualquer
+    # um dos três aparece e pode ser espelhado/digitado (capture/send-keys são
+    # agnósticos). Até 12/08/2026 o estado só era inferido pro Claude; hoje é
+    # inferido pros três, com marcadores por agente na tabela MARKERS (ver
+    # classify/pane_state).
+    seen=set(); stack=[root]
+    while stack:
+        p=stack.pop()
+        if p in seen: continue
+        seen.add(p)
+        c=cmd.get(p,'').lower()
+        if 'daemon' not in c and 'bg-pty-host' not in c:
+            if 'claude' in c: return 'claude'
+            if 'codex' in c: return 'codex'
+            if 'opencode' in c: return 'opencode'
+        stack+=kids.get(p,[])
+    return ''
+def norm(x):
+    # /tmp e /private/tmp são o mesmo dir no macOS (symlink); normaliza pra uma
+    # forma só, senão o mesmo socket apareceria duas vezes e não casaria com o
+    # socket que o hook reporta.
+    return x[len('/private'):] if x.startswith('/private/') else x
+def pane_state(sock,pane,agent):
+    # Lê a tela visível do pane e delega a classificação para classify (parte pura).
+    return classify(run('tmux','-S',sock,'capture-pane','-t',pane,'-p'),agent)
+uid=os.getuid()
+socks=set()
+for d in ('/private/tmp/tmux-%d'%uid,'/tmp/tmux-%d'%uid,os.path.join(os.environ.get('TMPDIR','/tmp').rstrip('/'),'tmux-%d'%uid)):
+    for s in glob.glob(d+'/*'):
+        socks.add(norm(s))
+fmt='#{pane_id}\t#{pane_pid}\t#{pane_current_path}\t#{session_name}\t#{window_name}'
+out=[]
+for sock in sorted(socks):
+    for line in run('tmux','-S',sock,'list-panes','-a','-F',fmt).splitlines():
+        f=line.split('\t')
+        if len(f)<5: continue
+        try: pid=int(f[1])
+        except: continue
+        ag=agent_of(pid)
+        # D11: pane sem agente NÃO é descartado — é um shell, e precisa aparecer,
+        # senão o terminal vazio criado pelo app desaparece no refresh seguinte.
+        kind='agent' if ag else 'shell'
+        # Estado inferido para os três agentes. Os marcadores de cada TUI foram
+        # calibrados por captura de tela em 12/08/2026 (claude 2.1.228,
+        # codex 0.147.0, opencode 1.18.16) e vivem em MARKERS, não aqui —
+        # agente novo é uma linha na tabela. Shell não tem TUI para ler: sai sem
+        # estado, sem nem tentar capturar.
+        st=pane_state(sock,f[0],ag) if ag else ''
+        out.append({'id':sock+'\t'+f[0],'socket':sock,'pane':f[0],'cmd':ag,'kind':kind,'cwd':f[2],'session':f[3],'window':f[4],'state':st})
+print(json.dumps(out))
+`
+
+// tmuxListScript é o que roda de fato na máquina remota (via `python3 -`): as
+// funções puras mais o driver que varre os servidores. Concatenado, e não um
+// arquivo único, porque só a primeira metade é testável isoladamente.
+const tmuxListScript = tmuxStateFuncs + tmuxDriverScript

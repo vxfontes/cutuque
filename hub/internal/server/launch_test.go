@@ -52,6 +52,9 @@ type fakeLauncher struct {
 	adoptSession session.Session
 	adoptErr     error
 
+	tmuxNewTarget string
+	gotTmuxAgent  string
+
 	// Terminal livre: o teste do PTY roda um programa de verdade no lugar do
 	// `ssh` (não dá para fingir um pty com um mock).
 	shellProg string
@@ -160,6 +163,13 @@ func (f *fakeLauncher) TmuxKill(machine, target string) error {
 func (f *fakeLauncher) TmuxKillServer(machine, socket string) error {
 	f.gotTmuxTarget = socket
 	return f.tmuxErr
+}
+func (f *fakeLauncher) TmuxNewSession(machine, group, sess, cwd, agent string) (string, error) {
+	f.gotTmuxAgent = agent
+	if f.tmuxErr != nil {
+		return "", f.tmuxErr
+	}
+	return f.tmuxNewTarget, nil
 }
 
 func (f *fakeLauncher) Adopt(machine, id, cwd, title, agent string) (session.Session, error) {
@@ -753,6 +763,35 @@ func TestTmuxKillServer(t *testing.T) {
 	rec = do(t, f, http.MethodPost, "/machines/macbook/tmux/kill-server", `{"socket":""}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("socket vazio => %d, quero 400", rec.Code)
+	}
+}
+
+func TestTmuxNewSession(t *testing.T) {
+	f := &fakeLauncher{tmuxNewTarget: "/tmp/tmux-501/defender\t%42"}
+	rec := do(t, f, http.MethodPost, "/machines/macbook/tmux/new",
+		`{"group":"defender","session":"mike","cwd":"/Users/vanessa/x","agent":"codex"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, queria 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `%42`) {
+		t.Fatalf("corpo sem o alvo criado: %s", rec.Body.String())
+	}
+	if f.gotTmuxAgent != "codex" {
+		t.Fatalf("agente = %q, queria codex", f.gotTmuxAgent)
+	}
+}
+
+// Campo faltando é 400 e NÃO chega ao launcher — criar sessão é efeito colateral
+// numa máquina de verdade.
+func TestTmuxNewSessionCorpoIncompleto(t *testing.T) {
+	f := &fakeLauncher{}
+	rec := do(t, f, http.MethodPost, "/machines/macbook/tmux/new",
+		`{"group":"defender","session":"","cwd":"/x","agent":"codex"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, queria 400", rec.Code)
+	}
+	if f.gotTmuxAgent != "" {
+		t.Fatal("o launcher foi chamado com corpo inválido")
 	}
 }
 

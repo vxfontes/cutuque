@@ -84,7 +84,11 @@ struct SessionDetailPane: View {
             }
             if let terminal {
                 TerminalMirrorView(machine: terminal.machine, target: terminal.target,
-                                   title: terminal.title, isActive: showsTerminal,
+                                   title: terminal.title,
+                                   // `✕` (paneMode = .info) é fechar o terminal: devolve a
+                                   // largura ao tmux. NÃO é kill — a sessão segue
+                                   // trabalhando, é a instrução literal da Vanessa acima.
+                                   paneState: showsTerminal ? .ativo : .liberado,
                                    ownsNavigationTitle: false)
                     .opacity(showsTerminal ? 1 : 0)
                     .allowsHitTesting(showsTerminal)

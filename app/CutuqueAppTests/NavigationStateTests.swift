@@ -13,12 +13,15 @@ final class NavigationStateTests: XCTestCase {
         XCTAssertNil(nav.selection)
     }
 
+    /// D4 (12/08/2026): o destino inicial (Sessões) volta pra `.doubleColumn`
+    /// ao reabrir — antes voltava pra `.all`, porque a orientação padrão
+    /// (paisagem) fazia `expandedVisibility` devolver `.all` nas Sessões.
     func testExpandirEhReversivel() {
         let nav = NavigationState()
         nav.toggleColumns()
         XCTAssertEqual(nav.columnVisibility, .detailOnly)
         nav.toggleColumns()
-        XCTAssertEqual(nav.columnVisibility, .all)
+        XCTAssertEqual(nav.columnVisibility, .doubleColumn)
     }
 
     /// Em Sessões o ⤡ depende da orientação: em pé, "aberto" são DUAS colunas
@@ -35,8 +38,11 @@ final class NavigationStateTests: XCTestCase {
         XCTAssertEqual(nav.columnVisibility, .doubleColumn)
     }
 
-    /// Deitado, "aberto" continua sendo as três colunas do desenho.
-    func testExpandirEmSessoesPaisagemVoltaParaAll() {
+    /// Deitado, "aberto" também são duas colunas — D4 (12/08/2026): deixou de
+    /// haver diferença por orientação aqui. Era `.all` (três colunas) antes;
+    /// virou `.doubleColumn` junto com `expandedVisibility` (ver
+    /// `testExpandidoEhSempreDuasColunasNasSessoes`, acima).
+    func testExpandirEmSessoesPaisagemTambemVoltaParaDoubleColumn() {
         let nav = NavigationState()
         nav.destination = .sessions
         nav.selection = makeSelection()
@@ -44,20 +50,21 @@ final class NavigationStateTests: XCTestCase {
         nav.toggleColumns()                     // .all -> .detailOnly
         XCTAssertEqual(nav.columnVisibility, .detailOnly)
         nav.toggleColumns()
-        XCTAssertEqual(nav.columnVisibility, .all)
+        XCTAssertEqual(nav.columnVisibility, .doubleColumn)
     }
 
-    /// Girar com o painel em tela cheia não reabre nada — mas troca o que o
-    /// ⤡ vai abrir depois. Sem isto, girar pra paisagem e tocar no ⤡ ainda
-    /// devolveria as duas colunas do retrato.
-    func testOrientacaoGravadaMudaOAlvoDoExpandir() {
+    /// D4 (12/08/2026): girar o iPad não muda mais o alvo do ⤡ nas Sessões —
+    /// antes a orientação gravada por `applyLayoutRule` decidia entre
+    /// `.doubleColumn` e `.all`; agora `expandedVisibility` é `.doubleColumn`
+    /// nas duas, então trocar de orientação não move o alvo.
+    func testOrientacaoNaoMudaMaisOAlvoDoExpandirEmSessoes() {
         let nav = NavigationState()
         nav.destination = .sessions
         nav.selection = makeSelection()
         nav.applyLayoutRule(isPortrait: true)
         XCTAssertEqual(nav.expandedVisibility, .doubleColumn)
         nav.applyLayoutRule(isPortrait: false)
-        XCTAssertEqual(nav.expandedVisibility, .all)
+        XCTAssertEqual(nav.expandedVisibility, .doubleColumn)
     }
 
     /// No Board o ⤡ volta pra `.doubleColumn`, não pra `.all` — ali a lista
@@ -70,6 +77,34 @@ final class NavigationStateTests: XCTestCase {
         XCTAssertEqual(nav.columnVisibility, .detailOnly)
         nav.toggleColumns()
         XCTAssertEqual(nav.columnVisibility, .doubleColumn)
+    }
+
+    /// D4: a barra lateral unificada é de DUAS colunas sempre — é ela que faz o
+    /// app "parecer PC" e é o que devolve largura no 11". Antes disto, retrato
+    /// dava `.doubleColumn` e paisagem dava `.all` (três colunas), e a coluna do
+    /// meio comia a largura que o terminal precisava.
+    ///
+    /// Desvio do plano (12/08/2026): `lastIsPortrait` tem setter `private`
+    /// (`private(set)`), então este teste não pode escrever nele direto —
+    /// usa `applyLayoutRule(isPortrait:)`, que já é como todo o resto deste
+    /// arquivo grava a orientação antes de ler `expandedVisibility`.
+    func testExpandidoEhSempreDuasColunasNasSessoes() {
+        let nav = NavigationState()
+        nav.destination = .sessions
+        nav.applyLayoutRule(isPortrait: false)
+        XCTAssertEqual(nav.expandedVisibility, .doubleColumn)
+        nav.applyLayoutRule(isPortrait: true)
+        XCTAssertEqual(nav.expandedVisibility, .doubleColumn)
+    }
+
+    /// O Board é a exceção declarada: `contentColumn` (`RootSplitView.swift`)
+    /// depende de `columnVisibility == .all` para NÃO desenhar a lista de destinos
+    /// duas vezes lado a lado. Mexer nisto sem ler aquele comentário duplica a
+    /// sidebar na tela.
+    func testBoardSegueComOArranjoDeleProprio() {
+        let nav = NavigationState()
+        nav.destination = .board
+        XCTAssertEqual(nav.expandedVisibility, .doubleColumn)
     }
 
     // MARK: - applyLayoutRule (Tarefa B: orientação decide o layout, no lugar
@@ -233,7 +268,8 @@ final class NavigationStateTests: XCTestCase {
         XCTAssertEqual(nav.columnVisibility, .all)
     }
 
-    /// O ⤡ em Máquinas segue as Sessões: em pé, "aberto" são duas colunas.
+    /// O ⤡ em Máquinas segue as Sessões: "aberto" são duas colunas em
+    /// qualquer orientação (D4, 12/08/2026 — antes paisagem devolvia `.all`).
     /// Voltar pras três devolveria o terminal-filete que o botão existe pra
     /// desfazer.
     func testExpandirEmMaquinasSegueAOrientacao() {
@@ -243,7 +279,7 @@ final class NavigationStateTests: XCTestCase {
         nav.applyLayoutRule(isPortrait: true)
         XCTAssertEqual(nav.expandedVisibility, .doubleColumn)
         nav.applyLayoutRule(isPortrait: false)
-        XCTAssertEqual(nav.expandedVisibility, .all)
+        XCTAssertEqual(nav.expandedVisibility, .doubleColumn)
     }
 
     /// Sair da coluna DESTRÓI o painel, e com ele o WebSocket — o hub mata o
