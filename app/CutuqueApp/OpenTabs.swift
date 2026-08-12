@@ -1,0 +1,111 @@
+import Foundation
+
+enum TipoDeAba: String, Codable {
+    case live, chat, board, maquina, arquivado
+}
+
+/// Identidade da aba, e a única coisa que vai pro disco (G4). Deliberadamente
+/// pequena e `Codable`: guardar `Session`/`Machine` inteiros no `@AppStorage`
+/// congelaria dados que envelhecem, e a reconciliação da G4 depende de a chave
+/// ser só um endereço.
+///
+/// `machine` faz parte da identidade porque grupo de tmux com o mesmo nome pode
+/// existir em duas máquinas — é o que `identidade-pane-ao-vivo` separou.
+struct ChaveDeAba: Hashable, Codable {
+    let tipo: TipoDeAba
+    let machine: String
+    let alvo: String
+
+    init(tipo: TipoDeAba, machine: String = "", alvo: String = "") {
+        self.tipo = tipo
+        self.machine = machine
+        self.alvo = alvo
+    }
+
+    static let board = ChaveDeAba(tipo: .board)
+    static func maquina(_ nome: String) -> ChaveDeAba { .init(tipo: .maquina, alvo: nome) }
+    static func arquivado(_ id: String) -> ChaveDeAba { .init(tipo: .arquivado, alvo: id) }
+
+    static func para(_ selection: DetailSelection) -> ChaveDeAba {
+        switch selection {
+        case .live(let e):    return .init(tipo: .live, machine: e.machine, alvo: e.paneTarget)
+        case .session(let s): return .init(tipo: .chat, machine: s.machine, alvo: s.id)
+        }
+    }
+}
+
+/// O que a aba mostra. `pendente` e `morta` existem por causa da persistência
+/// (D2): uma aba restaurada do disco não recria pane nenhum — ela nasce
+/// `pendente` e a reconciliação a resolve em conteúdo de verdade ou em `morta`,
+/// que é um **aviso**, nunca uma tentativa de ressuscitar.
+enum TabConteudo: Equatable {
+    case sessao(DetailSelection)
+    case board
+    case maquina(Machine)
+    case arquivado(BoardTask)
+    case pendente
+    case morta
+}
+
+/// `passagem` é a aba de preview do VS Code: existe no máximo uma, e a próxima
+/// coisa aberta toma o lugar dela. `fixa` é ortogonal (G3) — protege de "fechar
+/// outras"/"fechar todas".
+enum EstiloDeAba {
+    case passagem, normal
+}
+
+struct AbaAberta: Identifiable, Equatable {
+    let chave: ChaveDeAba
+    var titulo: String
+    var estilo: EstiloDeAba
+    var fixa: Bool
+    var conteudo: TabConteudo
+    /// Contador monotônico de foco, não relógio: dá MRU testável sem injetar
+    /// tempo (G2 usa isto para decidir quem dorme).
+    var ordemDeFoco: Int
+
+    var id: ChaveDeAba { chave }
+}
+
+struct OpenTabs: Equatable {
+    private(set) var abas: [AbaAberta] = []
+    private(set) var selecionada: ChaveDeAba?
+    private var contadorDeFoco = 0
+
+    // MARK: abrir e selecionar
+
+    mutating func abrir(chave: ChaveDeAba, titulo: String, conteudo: TabConteudo,
+                        estilo: EstiloDeAba = .passagem) {
+        contadorDeFoco += 1
+
+        if let i = abas.firstIndex(where: { $0.chave == chave }) {
+            // Já aberta: foca, atualiza o título e PROMOVE. Nunca duplica, e
+            // nunca rebaixa um conteúdo resolvido de volta a `pendente`.
+            abas[i].titulo = titulo
+            abas[i].estilo = .normal
+            abas[i].ordemDeFoco = contadorDeFoco
+            if conteudo != .pendente { abas[i].conteudo = conteudo }
+            selecionada = chave
+            return
+        }
+
+        if estilo == .passagem, let i = abas.firstIndex(where: { $0.estilo == .passagem && !$0.fixa }) {
+            abas.remove(at: i)
+        }
+
+        abas.append(AbaAberta(chave: chave, titulo: titulo, estilo: estilo,
+                              fixa: false, conteudo: conteudo, ordemDeFoco: contadorDeFoco))
+        selecionada = chave
+    }
+
+    mutating func selecionar(_ chave: ChaveDeAba) {
+        guard let i = abas.firstIndex(where: { $0.chave == chave }) else { return }
+        contadorDeFoco += 1
+        abas[i].ordemDeFoco = contadorDeFoco
+        selecionada = chave
+    }
+
+    func aba(_ chave: ChaveDeAba) -> AbaAberta? {
+        abas.first { $0.chave == chave }
+    }
+}
