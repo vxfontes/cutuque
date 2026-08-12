@@ -51,6 +51,17 @@ enum Ansi {
         return result
     }
 
+    /// O mesmo texto que `attributed` mostraria, sem os atributos — para SAIR do
+    /// app (área de transferência, e daí WhatsApp).
+    ///
+    /// Construída EM CIMA de `attributed` de propósito, não com um segundo
+    /// varredor de ANSI: dois varredores divergem com o tempo, e este aqui já é
+    /// o que a usuária vê na tela todo dia. `size` e `defaultColor` são
+    /// irrelevantes (os atributos são descartados na saída), daí valores fixos.
+    static func plain(_ input: String) -> String {
+        String(attributed(input, size: 12, defaultColor: .primary).characters)
+    }
+
     private static func applySGR(_ params: String, _ fg: inout Color?, _ bg: inout Color?, _ bold: inout Bool) {
         let tokens = params.split(separator: ";", omittingEmptySubsequences: false).map { Int($0) ?? 0 }
         if tokens.isEmpty { fg = nil; bg = nil; bold = false; return } // ESC[m = reset
