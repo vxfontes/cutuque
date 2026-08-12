@@ -21,34 +21,6 @@ struct LiveEntry: Identifiable, Equatable, Hashable {
     var id: String { machine + "\t" + session.id }
 }
 
-/// Lógica pura das sessões ao vivo. Fora da View porque é o que dá para testar
-/// sem simulador — e é onde moram os erros que a tela só mostra depois.
-enum LivePaneLogic {
-    /// Remoção otimista do "encerrar server": só os panes DAQUELA máquina.
-    /// Casar só por socket apagava da tela as linhas da outra máquina quando
-    /// duas rodam um grupo de mesmo nome com o mesmo uid.
-    static func removendoServer(_ entries: [LiveEntry], machine: String, socket: String) -> [LiveEntry] {
-        entries.filter { !($0.machine == machine && $0.paneTarget.hasPrefix(socket + "\t")) }
-    }
-
-    /// Nomes de server que aparecem em MAIS DE UMA máquina. O cabeçalho da
-    /// seção é o basename do socket, então "interconexao" no macbook e
-    /// "interconexao" no macmini davam dois cabeçalhos idênticos.
-    static func serversAmbiguos(_ grupos: [(machine: String, server: String)]) -> Set<String> {
-        var maquinasPorServer: [String: Set<String>] = [:]
-        for g in grupos {
-            maquinasPorServer[g.server, default: []].insert(g.machine)
-        }
-        return Set(maquinasPorServer.filter { $0.value.count > 1 }.keys)
-    }
-
-    /// A máquina só entra no rótulo quando ela é o que desempata — acrescentar
-    /// sempre viraria ruído nas listas de uma máquina só, que é o caso comum.
-    static func rotulo(server: String, machine: String, ambiguo: Bool) -> String {
-        ambiguo ? "\(server) · \(machine)" : server
-    }
-}
-
 /// Alvo de "encerrar server" (kill-server), para a confirmação.
 struct ServerKill: Identifiable, Equatable {
     let machine: String
@@ -374,29 +346,21 @@ struct SessionListView: View {
     // caminho de socket, e agrupar só por ele juntaria numa seção só panes de
     // máquinas diferentes — com um "encerrar server" que mataria a errada.
     private var liveByServer: [(key: String, label: String, machine: String, socket: String, entries: [LiveEntry])] {
-        let groups = Dictionary(grouping: liveNotTracked) { $0.machine + "\t" + Self.socket(of: $0.paneTarget) }
+        let groups = Dictionary(grouping: liveNotTracked) { $0.machine + "\t" + LivePaneLogic.socket(of: $0.paneTarget) }
         let pares = groups.compactMap { _, entries -> (machine: String, server: String)? in
             guard let first = entries.first else { return nil }
-            return (machine: first.machine, server: Self.serverName(Self.socket(of: first.paneTarget)))
+            return (machine: first.machine, server: LivePaneLogic.nomeDoGrupo(LivePaneLogic.socket(of: first.paneTarget)))
         }
         let ambiguos = LivePaneLogic.serversAmbiguos(pares)
         return groups.keys.sorted().compactMap { chave in
             guard let entries = groups[chave], let first = entries.first else { return nil }
-            let sock = Self.socket(of: first.paneTarget)
-            let server = Self.serverName(sock)
+            let sock = LivePaneLogic.socket(of: first.paneTarget)
+            let server = LivePaneLogic.nomeDoGrupo(sock)
             return (key: chave,
                     label: LivePaneLogic.rotulo(server: server, machine: first.machine,
                                                 ambiguo: ambiguos.contains(server)),
                     machine: first.machine, socket: sock, entries: entries)
         }
-    }
-    /// Socket (parte antes do TAB) do alvo composto de pane "<socket>\t<pane>".
-    static func socket(of paneTarget: String) -> String {
-        String(paneTarget.split(separator: "\t", maxSplits: 1).first ?? "")
-    }
-    /// Nome legível do server = último componente do socket (ex.: "main", "teste").
-    static func serverName(_ socket: String) -> String {
-        (socket as NSString).lastPathComponent
     }
 
     // "Ao vivo no Mac": uma seção por servidor tmux, com ação de encerrar server.
