@@ -28,6 +28,7 @@ var (
 type TmuxPane struct {
 	ID      string `json:"id"`      // alvo composto "<socket>\t<pane>"
 	Cmd     string `json:"cmd"`     // agente detectado: "claude"|"codex"|"opencode"
+	Kind    string `json:"kind"`    // "agent" (um dos três) | "shell" (pane sem agente)
 	Cwd     string `json:"cwd"`     // diretório do pane
 	Session string `json:"session"` // nome da sessão tmux
 	Window  string `json:"window"`  // nome da janela tmux
@@ -65,14 +66,14 @@ func parseTmuxJSON(out []byte) []TmuxPane {
 		return nil
 	}
 	var raw []struct {
-		ID, Cmd, Cwd, Session, Window, State string
+		ID, Cmd, Kind, Cwd, Session, Window, State string
 	}
 	if err := json.Unmarshal([]byte(trimmed), &raw); err != nil {
 		return nil
 	}
 	panes := make([]TmuxPane, 0, len(raw))
 	for _, r := range raw {
-		panes = append(panes, TmuxPane{ID: r.ID, Cmd: r.Cmd, Cwd: r.Cwd, Session: r.Session, Window: r.Window, State: r.State})
+		panes = append(panes, TmuxPane{ID: r.ID, Cmd: r.Cmd, Kind: r.Kind, Cwd: r.Cwd, Session: r.Session, Window: r.Window, State: r.State})
 	}
 	return panes
 }
@@ -303,7 +304,7 @@ func TmuxPaneAsDiscovered(p TmuxPane) session.Discovered {
 			title = base
 		}
 	}
-	return session.Discovered{ID: p.ID, Cwd: p.Cwd, Title: title, State: p.State, Agent: p.Cmd}
+	return session.Discovered{ID: p.ID, Cwd: p.Cwd, Title: title, State: p.State, Agent: p.Cmd, Kind: p.Kind}
 }
 
 func isAllDigits(s string) bool {
