@@ -29,4 +29,25 @@ enum MachineTerminalLifecycle {
         guard pane == .terminal, naTela, paneState == .ativo else { return .suspender }
         return .trabalhar
     }
+
+    /// Decisão pura de quando o painel Arquivos pode chamar a API do hub
+    /// (achado 2 da revisão adversarial da Task 5, 12/08/2026). Antes das abas
+    /// globais, `FileBrowserView` tinha um `.task` incondicional: só existia UM
+    /// `MachineDetailView` montado por vez, então uma chamada REST extra na
+    /// troca de painel era barata. Com a barra de abas global (decisão #19: aba
+    /// criada fica montada para sempre, `.onAppear` dispara uma vez só) isso
+    /// virou um vazamento: N abas de máquina restauradas do disco no boot = N
+    /// `listFiles` simultâneos, um por aba, mesmo para abas que a usuária nunca
+    /// olhou — escapando do teto de 6 abas vivas, que existe exatamente para
+    /// limitar esse tipo de custo. O `isActive` que já existe em
+    /// `FileBrowserView` não resolve: seu comentário está certo ao dizer que ele
+    /// só governa a toolbar (`.opacity` não alcança a `.toolbar`, que compõe
+    /// todas as views montadas) — ele nunca foi pensado para portão de rede.
+    /// Verdadeiro só quando a aba está em foco (`naTela`), o painel selecionado
+    /// é Arquivos e a aba está `.ativo` (não suspensa atrás de outra, não
+    /// liberada pelo teto de 6).
+    static func carregaArquivos(paneState: TerminalPaneState, pane: MachinePane,
+                                naTela: Bool) -> Bool {
+        pane == .files && naTela && paneState == .ativo
+    }
 }
