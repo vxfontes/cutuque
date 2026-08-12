@@ -79,7 +79,9 @@ struct MachineDetailView: View {
                 .accessibilityHidden(!showsTerminal)
 
             FileBrowserView(machine: machine.name, path: "",
-                            ownsNavigationTitle: false, isActive: !showsTerminal)
+                            ownsNavigationTitle: false, isActive: !showsTerminal,
+                            carregaAgora: MachineTerminalLifecycle.carregaArquivos(
+                                paneState: paneState, pane: pane, naTela: naTela))
                 .opacity(showsTerminal ? 0 : 1)
                 .allowsHitTesting(!showsTerminal)
                 .accessibilityHidden(showsTerminal)

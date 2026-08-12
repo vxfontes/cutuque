@@ -21,6 +21,17 @@ struct FileBrowserView: View {
     /// alcança a barra de navegação — sem isto o botão de ocultos apareceria
     /// com o terminal em foco.
     var isActive: Bool = true
+    /// Portão de rede do `.task` abaixo (12/08/2026 — achado 2 da revisão
+    /// adversarial da Task 5). Default `true` é o que preserva a navegação por
+    /// pilha: entrar numa pasta empurra `FileBrowserView(machine:path:)` SEM
+    /// este parâmetro, e pasta empilhada é sempre pasta que a usuária acabou de
+    /// abrir — deve carregar. Quem passa `false` é só o `MachineDetailView`, a
+    /// raiz montada dentro do `ZStack` de abas: com abas globais uma aba criada
+    /// fica montada para sempre (decisão #19) e `.task` incondicional dispara
+    /// UMA vez na criação, então N abas de máquina restauradas do disco no boot
+    /// viravam N chamadas a `api.listFiles` de aba que a usuária nem está
+    /// vendo — ver `MachineTerminalLifecycle.carregaArquivos`.
+    var carregaAgora: Bool = true
 
     @State private var listing: FileListing?
     @State private var loading = false
@@ -81,7 +92,10 @@ struct FileBrowserView: View {
         }
         .overlay { if loading && listing == nil { ProgressView() } }
         .refreshable { await load() }
-        .task { await load() }
+        .task(id: carregaAgora) {
+            guard carregaAgora else { return }
+            await load()
+        }
         .alert("Não deu para listar", isPresented: .constant(error != nil)) {
             Button("OK") { error = nil }
         } message: {
