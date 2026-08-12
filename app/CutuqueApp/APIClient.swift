@@ -968,6 +968,46 @@ struct APIClient {
         try await send(request)
     }
 
+    /// Corpo e resposta de `POST /machines/{machine}/tmux/new`.
+    private struct TmuxNewBody: Encodable {
+        let group: String
+        let session: String
+        let cwd: String
+        let agent: String
+    }
+    private struct TmuxNewResponse: Decodable {
+        let target: String
+    }
+
+    /// Cria (ou anexa, pelo `-A` do tmux) uma sessão na máquina e devolve o alvo do
+    /// pane ("<socket>\t<pane>"), pronto para abrir o espelho. `group` é o servidor
+    /// tmux, que é também o escopo do board — grupo novo não tem cerimônia (D13).
+    /// `agent` é um de claude|codex|opencode|terminal.
+    /// Sessão que já existe NÃO é erro: o hub anexa e devolve o alvo dela.
+    func tmuxNewSession(machine: String, group: String, session: String,
+                        cwd: String, agent: String) async throws -> String {
+        let url = baseURL
+            .appendingPathComponent("machines").appendingPathComponent(machine)
+            .appendingPathComponent("tmux").appendingPathComponent("new")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            TmuxNewBody(group: group, session: session, cwd: cwd, agent: agent))
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        switch http.statusCode {
+        case 200:
+            return try JSONDecoder.cutuque.decode(TmuxNewResponse.self, from: data).target
+        case 404:
+            throw CutuqueError.notFound
+        default:
+            throw CutuqueError.unexpected(status: http.statusCode)
+        }
+    }
+
     /// Corpo de `POST /machines/{machine}/adopt`.
     private struct AdoptBody: Encodable {
         let id: String
