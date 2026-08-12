@@ -30,7 +30,10 @@ MARKERS={
            'waiting':['do you want to proceed','do you want to make this edit']},
  'codex':{'timer':True,
           'running':['esc to interrupt'],
-          'waiting':[]},
+          # Portão de confiança de pasta nova: a sessão fica travada esperando
+          # tecla, então é 'waiting', não 'idle'. O formulário de novo terminal
+          # escolhe pasta arbitrária — este caso é rotina, não exceção.
+          'waiting':['do you trust the contents of this directory']},
  'opencode':{'timer':False,
              'running':['esc interrupt'],
              'waiting':[]},
