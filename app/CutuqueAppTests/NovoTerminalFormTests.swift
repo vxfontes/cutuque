@@ -47,4 +47,20 @@ final class NovoTerminalFormTests: XCTestCase {
         XCTAssertEqual(AgenteNovoTerminal.allCases.map(\.rawValue),
                        ["claude", "codex", "opencode", "terminal"])
     }
+
+    /// O `kind` vem com `omitempty` do hub: um hub antigo não manda o campo, e isso
+    /// NÃO pode virar erro de decodificação — é o padrão que `state` e `agent` já
+    /// seguem em DiscoveredSession.
+    func testKindAusenteNaoQuebraADecodificacao() throws {
+        let json = Data(#"{"id":"s\t%1","cwd":"/x","title":"t"}"#.utf8)
+        let s = try JSONDecoder.cutuque.decode(DiscoveredSession.self, from: json)
+        XCTAssertEqual(s.kind, "")
+        XCTAssertFalse(s.ehShell)
+    }
+
+    func testShellVemMarcado() throws {
+        let json = Data(#"{"id":"s\t%1","cwd":"/x","title":"t","kind":"shell"}"#.utf8)
+        let s = try JSONDecoder.cutuque.decode(DiscoveredSession.self, from: json)
+        XCTAssertTrue(s.ehShell)
+    }
 }
