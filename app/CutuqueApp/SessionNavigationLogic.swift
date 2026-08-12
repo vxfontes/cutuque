@@ -43,4 +43,35 @@ enum SessionNavigationLogic {
         }
         return nil
     }
+
+    /// O dicionário "o que está vivo agora" que `OpenTabs.reconciliar(vivas:)`
+    /// usa pra decidir quem fica, quem volta a viver e quem vira `.morta`.
+    ///
+    /// Extraída pura (12/08/2026 — achado crítico #2 da revisão adversarial):
+    /// a `SessionListView` só montava este dicionário a partir de `live`
+    /// (as entradas do poll de "ao vivo"), então nenhuma chave `.chat` jamais
+    /// aparecia nele — e `OpenTabs.dependeDeAlgoVivo` marca `.chat` como
+    /// "depende de algo vivo" (corretamente: uma aba de chat cuja sessão saiu
+    /// do registry DEVE virar aviso). Resultado: toda aba de chat morria no
+    /// primeiro reconciliar, ~15s depois de aberta, mesmo com a sessão viva.
+    /// O bug era o dicionário incompleto, não o `dependeDeAlgoVivo`.
+    ///
+    /// `sessions` cobre o lado `.chat` (uma chave por `Session` do registry);
+    /// `live` cobre o lado `.live`. Os dois tipos nunca colidem em
+    /// `ChaveDeAba` (o campo `tipo` já os separa), então o único cuidado é
+    /// colisão DENTRO de `live` (dois panes podem produzir a mesma chave) —
+    /// mantém "o primeiro ganha" como o `Dictionary(_:uniquingKeysWith:)`
+    /// original já fazia.
+    static func vivasPorChave(live: [LiveEntry], sessions: [Session]) -> [ChaveDeAba: TabConteudo] {
+        var vivas = Dictionary(
+            live.map { (ChaveDeAba.para(.live($0)), TabConteudo.sessao(.live($0))) },
+            uniquingKeysWith: { primeiro, _ in primeiro }
+        )
+        let chats = Dictionary(
+            sessions.map { (ChaveDeAba.para(.session($0)), TabConteudo.sessao(.session($0))) },
+            uniquingKeysWith: { primeiro, _ in primeiro }
+        )
+        vivas.merge(chats) { primeiro, _ in primeiro }
+        return vivas
+    }
 }

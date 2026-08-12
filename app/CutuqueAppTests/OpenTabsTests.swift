@@ -284,4 +284,98 @@ final class OpenTabsTests: XCTestCase {
         XCTAssertTrue(t.abas.isEmpty)
         XCTAssertNil(t.selecionada)
     }
+
+    // MARK: - G6: `julgando` (12/08/2026 — críticos #A e #B da revisão adversarial)
+    //
+    // O registry (`.chat`) e os panes do tmux (`.live`) chegam em dois tempos
+    // independentes; `julgando` diz explicitamente sobre qual FONTE o chamador
+    // tem retrato agora, pra ausência na outra não parecer morte.
+
+    /// Crítico #A: com retrato só do registry, uma aba `.live` ausente NÃO
+    /// morre — é o cold start em que o REST completa antes do poll de vivas,
+    /// e a aba `.live` restaurada do disco (terminal tmux de verdade, vivo no
+    /// hub) ainda não teve chance de aparecer em `vivas`.
+    func testJulgandoSoChatNaoMataAbaLiveAusenteMasMataChatAusente() {
+        let liveChave = ChaveDeAba(tipo: .live, machine: "macbook", alvo: "/s\t%1")
+        let chatChave = ChaveDeAba(tipo: .chat, machine: "macbook", alvo: "s1")
+        var t = OpenTabs.restaurando([
+            AbaPersistida(chave: liveChave, titulo: "term", fixa: false),
+            AbaPersistida(chave: chatChave, titulo: "chat", fixa: false),
+        ])
+        t.reconciliar(vivas: [:], julgando: [.chat])
+        XCTAssertEqual(t.aba(liveChave)?.conteudo, .pendente, "sem retrato dos vivos: não julga")
+        XCTAssertEqual(t.aba(chatChave)?.conteudo, .morta, "retrato do registry: ausência mata")
+    }
+
+    /// O simétrico: com retrato só dos vivos, uma aba `.chat` ausente NÃO
+    /// morre, mas uma `.live` ausente morre.
+    func testJulgandoSoLiveNaoMataAbaChatAusenteMasMataLiveAusente() {
+        let liveChave = ChaveDeAba(tipo: .live, machine: "macbook", alvo: "/s\t%1")
+        let chatChave = ChaveDeAba(tipo: .chat, machine: "macbook", alvo: "s1")
+        var t = OpenTabs.restaurando([
+            AbaPersistida(chave: liveChave, titulo: "term", fixa: false),
+            AbaPersistida(chave: chatChave, titulo: "chat", fixa: false),
+        ])
+        t.reconciliar(vivas: [:], julgando: [.live])
+        XCTAssertEqual(t.aba(chatChave)?.conteudo, .pendente, "sem retrato do registry: não julga")
+        XCTAssertEqual(t.aba(liveChave)?.conteudo, .morta, "retrato dos vivos: ausência mata")
+    }
+
+    /// Crítico #B: com os DOIS tipos julgados e dicionário vazio, as duas
+    /// ainda morrem — o comportamento antigo continua disponível quando o app
+    /// REALMENTE tem retrato das duas fontes. Não existe mais estado em que a
+    /// reconciliação fique desligada para sempre.
+    func testJulgandoOsDoisTiposComDicionarioVazioMataAsDuas() {
+        let liveChave = ChaveDeAba(tipo: .live, machine: "macbook", alvo: "/s\t%1")
+        let chatChave = ChaveDeAba(tipo: .chat, machine: "macbook", alvo: "s1")
+        var t = OpenTabs.restaurando([
+            AbaPersistida(chave: liveChave, titulo: "term", fixa: false),
+            AbaPersistida(chave: chatChave, titulo: "chat", fixa: false),
+        ])
+        t.reconciliar(vivas: [:], julgando: [.live, .chat])
+        XCTAssertEqual(t.aba(liveChave)?.conteudo, .morta)
+        XCTAssertEqual(t.aba(chatChave)?.conteudo, .morta)
+    }
+
+    /// Chamada sem o parâmetro (default = todos os tipos) preserva o
+    /// significado antigo — prova que os testes e chamadores que já existiam
+    /// não mudaram de comportamento com este parâmetro novo.
+    func testReconciliarSemParametroContinuaMatandoTudoQueDependeDeAlgoVivo() {
+        let liveChave = ChaveDeAba(tipo: .live, machine: "macbook", alvo: "/s\t%1")
+        let chatChave = ChaveDeAba(tipo: .chat, machine: "macbook", alvo: "s1")
+        var t = OpenTabs.restaurando([
+            AbaPersistida(chave: liveChave, titulo: "term", fixa: false),
+            AbaPersistida(chave: chatChave, titulo: "chat", fixa: false),
+        ])
+        t.reconciliar(vivas: [:])
+        XCTAssertEqual(t.aba(liveChave)?.conteudo, .morta)
+        XCTAssertEqual(t.aba(chatChave)?.conteudo, .morta)
+    }
+
+    /// Board/Máquina/Arquivo continuam imunes com QUALQUER conjunto de tipos
+    /// julgados — não dependem de nada vivo, e `julgando` é uma condição A
+    /// MAIS pra matar, nunca uma exceção pra poupar.
+    func testJulgandoNaoAfetaAbasQueNaoDependemDeAlgoVivo() {
+        let maquinaChave = ChaveDeAba.maquina("mike")
+        let arquivadoChave = ChaveDeAba.arquivado("t1")
+        var t = OpenTabs.restaurando([
+            AbaPersistida(chave: .board, titulo: "Board", fixa: false),
+            AbaPersistida(chave: maquinaChave, titulo: "mike", fixa: false),
+            AbaPersistida(chave: arquivadoChave, titulo: "t1", fixa: false),
+        ])
+        t.reconciliar(vivas: [:], julgando: [.board, .maquina, .arquivado, .live, .chat])
+        XCTAssertEqual(t.aba(.board)?.conteudo, .pendente)
+        XCTAssertEqual(t.aba(maquinaChave)?.conteudo, .pendente)
+        XCTAssertEqual(t.aba(arquivadoChave)?.conteudo, .pendente)
+    }
+
+    /// A substituição de conteúdo NÃO depende do julgamento: chave presente
+    /// em `vivas` é adotada mesmo quando o tipo dela não está no conjunto
+    /// julgado.
+    func testConteudoEhAdotadoParaChavePresenteMesmoQuandoTipoNaoEstaSendoJulgado() {
+        let liveChave = ChaveDeAba(tipo: .live, machine: "macbook", alvo: "/s\t%1")
+        var t = OpenTabs.restaurando([AbaPersistida(chave: liveChave, titulo: "term", fixa: false)])
+        t.reconciliar(vivas: [liveChave: .board], julgando: [.chat])
+        XCTAssertEqual(t.aba(liveChave)?.conteudo, .board, "presença adota sempre, independente do julgamento")
+    }
 }

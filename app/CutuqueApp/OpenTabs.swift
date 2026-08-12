@@ -1,6 +1,6 @@
 import Foundation
 
-enum TipoDeAba: String, Codable {
+enum TipoDeAba: String, Codable, CaseIterable {
     case live, chat, board, maquina, arquivado
 }
 
@@ -207,12 +207,33 @@ struct OpenTabs: Equatable {
     /// um aviso na barra, e nada mais: sem recriar pane, sem fechar sozinho.
     /// Reversível de propósito (`morta` → viva de novo) porque hub reiniciado e
     /// ssh que caiu e voltou são o caso comum, não o raro.
-    mutating func reconciliar(vivas: [ChaveDeAba: TabConteudo]) {
+    ///
+    /// `julgando` existe porque o app descobre o mundo em DOIS TEMPOS
+    /// INDEPENDENTES (12/08/2026 — críticos #A e #B da revisão adversarial à
+    /// guarda de 1ª carga que a rodada anterior deste fix tinha posto em
+    /// `SessionListView.reconciliarAbas`): o registry (REST/WebSocket,
+    /// alimenta `.chat`) e os panes do tmux (poll de ~15s, alimenta `.live`)
+    /// não chegam juntos. Um `vivas` só com chaves de UMA fonte faz a outra
+    /// parecer morta por ausência — é exatamente o cold start: o REST
+    /// completa primeiro e dispara a reconciliação com `vivas` só de `.chat`,
+    /// e sem este parâmetro toda aba `.live` restaurada do disco (inclusive
+    /// um terminal tmux DE VERDADE, vivo no hub) seria marcada `.morta` antes
+    /// do 1º poll de vivas terminar (crítico #A). Ausência só mata quem está
+    /// no conjunto de tipos que o CHAMADOR diz ter retrato AGORA — nunca
+    /// "as duas listas vieram vazias", que é proxy furado (crítico #B: um hub
+    /// usado só com terminais tmux avulsos, sem sessão de registry, tem as
+    /// duas listas legitimamente vazias em regime estacionário, e por esse
+    /// proxy a reconciliação desligaria PARA SEMPRE). O valor padrão (todos
+    /// os tipos) preserva o comportamento antigo e o significado dos testes/
+    /// chamadores que não passam este parâmetro — não "simplifique" isto de
+    /// volta a um dicionário único sem lembrar por que ele foi separado.
+    mutating func reconciliar(vivas: [ChaveDeAba: TabConteudo],
+                              julgando tipos: Set<TipoDeAba> = Set(TipoDeAba.allCases)) {
         for i in abas.indices {
             let chave = abas[i].chave
             if let conteudo = vivas[chave] {
                 abas[i].conteudo = conteudo
-            } else if Self.dependeDeAlgoVivo(chave.tipo) {
+            } else if Self.dependeDeAlgoVivo(chave.tipo) && tipos.contains(chave.tipo) {
                 abas[i].conteudo = .morta
             }
         }

@@ -81,4 +81,62 @@ final class SessionNavigationLogicTests: XCTestCase {
         let target = SessionNavigationLogic.goTo(session: s, embedded: false, pathTopID: "s1")
         XCTAssertNil(target)
     }
+
+    // MARK: vivasPorChave — dicionário de reconciliação das abas (G6)
+    //
+    // Cobre o achado crítico #2 da revisão adversarial (12/08/2026): o
+    // dicionário que alimenta `OpenTabs.reconciliar(vivas:)` só tinha chaves
+    // `.live`, então toda aba `.chat` morria no primeiro reconciliar mesmo
+    // com a sessão viva no registry.
+
+    func testVivasPorChaveIncluiChaveDeChatDeSessaoViva() {
+        let s = session(id: "s1", pane: nil)
+        let vivas = SessionNavigationLogic.vivasPorChave(live: [], sessions: [s])
+        XCTAssertEqual(vivas[.para(.session(s))], .sessao(.session(s)))
+    }
+
+    func testVivasPorChaveNaoIncluiSessaoQueSaiuDaLista() {
+        // A sessão existe (poderia estar numa aba aberta antes), mas não é
+        // passada em `sessions` — como se tivesse saído do registry. A chave
+        // dela não deve aparecer: é isso que faz `OpenTabs.reconciliar`
+        // marcar a aba como `.morta`.
+        let s = session(id: "s1", pane: nil)
+        let vivas = SessionNavigationLogic.vivasPorChave(live: [], sessions: [])
+        XCTAssertNil(vivas[.para(.session(s))])
+    }
+
+    func testVivasPorChaveIncluiChaveAoVivoComoAntes() {
+        let s = session(pane: "main\t%3")
+        let entry = liveEntry(for: s, target: "main\t%3")
+        let vivas = SessionNavigationLogic.vivasPorChave(live: [entry], sessions: [])
+        XCTAssertEqual(vivas[.para(.live(entry))], .sessao(.live(entry)))
+    }
+
+    func testVivasPorChaveColisaoDeChaveAoVivoNaoEstouraEMantemOPrimeiro() {
+        // Dois panes podem produzir a MESMA chave (mesma máquina + mesmo alvo
+        // tmux) — o `Dictionary(_:uniquingKeysWith:)` original existia por
+        // isso. A função nova preserva "o primeiro ganha".
+        let s = session(pane: "main\t%3")
+        let primeiro = liveEntry(for: s, target: "main\t%3")
+        let segundo = LiveEntry(machine: s.machine,
+                                session: DiscoveredSession(id: "main\t%3", cwd: "/outra", title: "outro"))
+        let vivas = SessionNavigationLogic.vivasPorChave(live: [primeiro, segundo], sessions: [])
+        XCTAssertEqual(vivas.count, 1)
+        XCTAssertEqual(vivas[.para(.live(primeiro))], .sessao(.live(primeiro)))
+    }
+
+    func testOpenTabsReconciliarComVivasPorChaveMantemAbaDeChatVivaAberta() {
+        // É este o bug: alimentado pelo dicionário incompleto (só `.live`),
+        // `OpenTabs.reconciliar` marcava esta aba como `.morta` mesmo com a
+        // sessão presente em `sessions`. Com `vivasPorChave`, ela sobrevive.
+        let s = session(id: "s1", pane: nil)
+        var tabs = OpenTabs()
+        let chave = ChaveDeAba.para(.session(s))
+        tabs.abrir(chave: chave, titulo: "t", conteudo: .sessao(.session(s)))
+
+        let vivas = SessionNavigationLogic.vivasPorChave(live: [], sessions: [s])
+        tabs.reconciliar(vivas: vivas)
+
+        XCTAssertEqual(tabs.aba(chave)?.conteudo, .sessao(.session(s)))
+    }
 }
