@@ -122,28 +122,23 @@ struct IntentEvent: Equatable {
 /// com ela, o espelho do tmux de ser derrubado.
 @MainActor
 final class NavigationState: ObservableObject {
-    /// Trocar de destino LIMPA a seleção de sessão.
+    /// [Reescrito em 12/08/2026 — abas globais] Trocar de destino NÃO limpa
+    /// mais `selection`/`machineSelection`.
     ///
-    /// Sem isto, sair pro Board e voltar pra Sessões caía direto na última
-    /// sessão aberta em vez da lista — em retrato a regra de layout colapsa
-    /// pra `.detailOnly` quando há seleção, então a lista simplesmente não
-    /// aparecia (reportado pela Vanessa testando no iPad).
-    ///
-    /// `boardSelection`/`archiveSelection` NÃO são limpas: não participam de
-    /// `layoutVisibility`, e deixar um card aberto pra quando você voltar é
-    /// lembrança útil. `selection` e `machineSelection` são, por dois motivos
-    /// que se somam: as duas participam do layout (uma seleção pendurada
-    /// esconde a lista em retrato) e as duas guardam conexão viva — sair da
-    /// coluna destrói o painel, e voltar reabriria um terminal NOVO com cara
-    /// do antigo, que é justamente o que o `PTYSession` evita não
-    /// reconectando sozinho.
-    @Published var destination: PadDestination = .sessions {
-        didSet {
-            guard oldValue != destination else { return }
-            selection = nil
-            machineSelection = nil
-        }
-    }
+    /// A limpeza existia por duas razões que a barra de abas global desfez. A
+    /// primeira: "sair pro Board e voltar pra Sessões caía direto na última
+    /// sessão aberta em vez da lista" — em retrato a regra de layout colapsava
+    /// pra `.detailOnly` quando havia seleção. Hoje quem decide o colapso é
+    /// `abaEmFoco` (ver `layoutVisibility`), e cair na coisa que estava aberta é
+    /// exatamente o desenho pedido: "voltar pra Sessões troca a LISTA, não a aba
+    /// escolhida". A segunda: "as duas guardam conexão viva — sair da coluna
+    /// destrói o painel, e voltar reabriria um terminal NOVO com cara do
+    /// antigo". Também deixou de valer: o painel não mora mais na coluna do
+    /// destino, mora na aba, e quem manda no `ssh`/no espelho é
+    /// `OpenTabs.estado(de:)` (ver `MachineTerminalLifecycle`). Limpar aqui
+    /// hoje só dessincronizaria a lista (sem linha destacada) da aba que segue
+    /// aberta.
+    @Published var destination: PadDestination = .sessions
     @Published var selection: DetailSelection?
     /// [12/08/2026] Modo do painel, GUARDADO POR ABA. Até a G6 isto era um
     /// `@Published var paneMode: PaneMode` único — inofensivo enquanto só
@@ -284,9 +279,16 @@ final class NavigationState: ObservableObject {
             return .doubleColumn
         case .sessions:
             guard isPortrait else { return .all }
-            return selection != nil ? .detailOnly : .doubleColumn
+            // [12/08/2026 — abas globais] Era `selection != nil`. O sinal de
+            // "tem coisa aberta" mudou de lugar: quem mostra o painel agora é a
+            // barra de abas, e ela é global — voltar pra Sessões com uma aba de
+            // máquina em foco tem de continuar em tela cheia, e uma sessão
+            // "selecionada" na lista sem aba nenhuma escolhida não é nada
+            // aberto. `abaEmFoco` é o mesmo dado que `nav.paneMode` já usa.
+            return abaEmFoco != nil ? .detailOnly : .doubleColumn
         case .machines:
-            return (isPortrait && machineSelection != nil) ? .detailOnly : .all
+            // Mesma troca de sinal do caso acima (era `machineSelection != nil`).
+            return (isPortrait && abaEmFoco != nil) ? .detailOnly : .all
         case .archive:
             return .all
         }
