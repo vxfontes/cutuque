@@ -107,10 +107,12 @@ for sock in sorted(socks):
         except: continue
         ag=agent_of(pid)
         if not ag: continue
-        # Estado real só é confiável pro Claude (os marcadores da TUI são dele);
-        # pro Codex/OpenCode deixamos '' (neutro) — o espelho mostra a tela de
-        # verdade e não arriscamos rotular um estado errado.
-        st=pane_state(sock,f[0],ag) if ag=='claude' else ''
+        # Estado inferido para os três agentes. Os marcadores de cada TUI foram
+        # calibrados por captura de tela em 12/08/2026 (claude 2.1.228,
+        # codex 0.147.0, opencode 1.18.16) e vivem em MARKERS, não aqui —
+        # agente novo é uma linha na tabela. Antes disto só o Claude tinha
+        # estado, porque os marcadores dos outros dois eram desconhecidos.
+        st=pane_state(sock,f[0],ag)
         out.append({'id':sock+'\t'+f[0],'socket':sock,'pane':f[0],'cmd':ag,'cwd':f[2],'session':f[3],'window':f[4],'state':st})
 print(json.dumps(out))
 `
