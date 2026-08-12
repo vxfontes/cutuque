@@ -22,6 +22,12 @@ struct CutuqueApp: App {
     // RootSplitView e RootTabView igualmente — no iPhone fica sem uso (as
     // abas são um mecanismo do iPad, montado por cima da navegação de sempre).
     @StateObject private var tabsStore = OpenTabsStore()
+    // Uma conexão /ws para todos os painéis de sessão abertos (chain H) — cada
+    // `SessionDetailView` assina via `hub.inscrever(sessionID:)` em vez de abrir
+    // a própria conexão. A lista de sessões (`SessionListView`) não usa este
+    // hub: continua com a conexão dela mesma, de propósito (não é um painel por
+    // sessão, é uma tela só).
+    @StateObject private var liveHub = LiveHub(api: APIClient())
 
     var body: some Scene {
         WindowGroup {
@@ -41,6 +47,7 @@ struct CutuqueApp: App {
             .environmentObject(nav)
             .environmentObject(board)
             .environmentObject(tabsStore)
+            .environmentObject(liveHub)
             .tint((AppAccent(rawValue: accentRaw) ?? .blue).color)
             .preferredColorScheme((AppColorScheme(rawValue: colorSchemeRaw) ?? .system).scheme)
             // Deep-link da Live Activity: cutuque://session/<id> abre a sessão.

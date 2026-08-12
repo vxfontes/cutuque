@@ -29,7 +29,12 @@ final class SessionDetailViewModel: ObservableObject {
     // MARK: Carga inicial + stream ao vivo
 
     /// Carrega o histórico de output e assina o stream ao vivo.
-    func start() async {
+    ///
+    /// `hub` chega por parâmetro, não pelo `init`: a view monta este ViewModel
+    /// dentro do próprio `init(session:...)` (`_model = StateObject(wrappedValue:
+    /// ...)`), ponto onde `@EnvironmentObject` ainda não está disponível — o
+    /// `LiveHub` só existe no ambiente depois que a view entra na hierarquia.
+    func start(hub: LiveHub) async {
         // Lê o output guardado. Se estiver VAZIO e dá pra reconstruir do transcript
         // do Mac — sessão externa (nunca foi transmitida pelo hub) OU concluída
         // (pode ter perdido o output num restart do hub, e você pode querer rever/
@@ -45,21 +50,25 @@ final class SessionDetailViewModel: ObservableObject {
         // Encerrada e AINDA vazia após tentar importar → não há transcript no
         // Mac pra recuperar (ex.: uma sessão que deu erro antes de salvar nada).
         recapUnavailable = history.isEmpty && concluded
-        startLiveUpdates()
+        startLiveUpdates(hub: hub)
     }
 
     /// Teto de chunks mantidos, alinhado ao `maxOutputChunks` do hub (500) para
     /// caber o histórico importado ao adotar uma sessão do Mac.
     static let maxChunks = 500
 
-    /// Assina o /ws e reage a mudanças de estado e a chunks da sessão aberta.
-    private func startLiveUpdates() {
+    /// Assina o `LiveHub` (uma conexão `/ws` para todas as abas — chain H) e
+    /// reage a mudanças de estado e a chunks da sessão aberta. Antes desta
+    /// task cada painel abria a própria conexão via `api.liveUpdates()`; com o
+    /// teto de 6 abas isso eram até seis conexões fazendo o mesmo trabalho.
+    private func startLiveUpdates(hub: LiveHub) {
         guard liveTask == nil else { return }
         liveTask = Task { [weak self] in
             // Não reter self pela vida do loop: desembrulha a cada iteração e
             // encerra quando o ViewModel morrer (evita ciclo self→task→self
             // que vazaria a conexão WS — review F2, achado #2).
-            guard let stream = self?.api.liveUpdates() else { return }
+            guard let sessionID = self?.session.id else { return }
+            let stream = hub.inscrever(sessionID: sessionID)
             for await message in stream {
                 guard let self else { break }
                 switch message {
@@ -89,6 +98,16 @@ final class SessionDetailViewModel: ObservableObject {
     }
 
     /// Encerra o stream ao sair da tela.
+    ///
+    /// Não chama nenhum `hub.cancelar(sessionID:)` — esse método é PRIVADO no
+    /// `LiveHub` de propósito (revisão adversarial da chain H: a versão
+    /// pública, chaveada só por sessionID, deixava a SEGUNDA assinatura da
+    /// mesma sessão sobrescrever a primeira em silêncio, órfã sem `.finish()`).
+    /// O cancelamento é por TOKEN, disparado pelo `continuation.onTermination`
+    /// da própria `AsyncStream` quando ninguém mais a itera. `liveTask?.cancel()`
+    /// já basta: cancelar a Task encerra o `for await` do loop acima, o que
+    /// termina a `AsyncStream` e aciona esse `onTermination` — o `LiveHub`
+    /// limpa a inscrição e derruba a conexão sozinho quando a última sai.
     func stop() {
         liveTask?.cancel()
         liveTask = nil
@@ -210,6 +229,11 @@ struct SessionDetailView: View {
     // Router p/ navegar ao detalhe da nova sessão ao relançar de uma encerrada.
     @EnvironmentObject private var router: Router
     @EnvironmentObject private var nav: NavigationState
+    // Uma conexão /ws para todas as abas (chain H) — chega pelo ambiente, não
+    // pelo init do ViewModel: o `_model = StateObject(wrappedValue: ...)` no
+    // `init` desta view monta o ViewModel ANTES de `@EnvironmentObject` estar
+    // disponível, então o hub só pode ser entregue mais tarde, no `.task`.
+    @EnvironmentObject private var hub: LiveHub
     /// Falso quando esta view está viva na hierarquia mas escondida atrás do
     /// terminal (painel Chat|Terminal do iPad, `SessionDetailPane`, decisão
     /// #19). Default `true` preserva o iPhone, que só monta um painel por
@@ -471,7 +495,7 @@ struct SessionDetailView: View {
         .onChange(of: pendingQuestions) { _, newValue in
             if newValue == nil { questionSheet = nil }
         }
-        .task { await model.start() }
+        .task { await model.start(hub: hub) }
         .onDisappear { model.stop() }
         .alert("Renomear sessão", isPresented: $renaming) {
             TextField("Nome", text: $renameText)
