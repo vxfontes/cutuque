@@ -145,7 +145,80 @@ final class NavigationState: ObservableObject {
         }
     }
     @Published var selection: DetailSelection?
-    @Published var paneMode: PaneMode = .chat
+    /// [12/08/2026] Modo do painel, GUARDADO POR ABA. Até a G6 isto era um
+    /// `@Published var paneMode: PaneMode` único — inofensivo enquanto só
+    /// existia UM `SessionDetailPane` montado por vez (`.id(selection)`
+    /// recriava a cada troca de sessão). A G6 passou a montar N painéis ao
+    /// mesmo tempo, um por aba, todos vivos e todos lendo/escrevendo o mesmo
+    /// `paneMode` — abrir uma aba de chat puro forçava `.chat` GLOBALMENTE, e
+    /// voltar pra uma aba ao vivo (sem chat) renderizava os três `if` de
+    /// `SessionDetailPane.body` em `false`: painel em branco (achado crítico
+    /// da revisão adversarial pós-G6). Ver `paneMode(de:)`/`definirPaneMode`.
+    @Published private var modosPorAba: [ChaveDeAba: PaneMode] = [:]
+    /// Modo de quem não tem aba em foco: iPhone (não usa `OpenTabs`) e
+    /// qualquer leitor que passe `nil` pra `paneMode(de:)`. Existia como o
+    /// valor inicial do antigo `@Published var paneMode`; agora é só o caso
+    /// sem chave do dicionário acima.
+    @Published private var modoSemAba: PaneMode = .chat
+    /// A aba que está na frente agora — escrito por `RootSplitView`, a partir
+    /// de `OpenTabs.selecionada`, num único `.onChange(of: tabsStore.tabs)`.
+    /// É o que faz `paneMode` (a propriedade de compatibilidade, abaixo)
+    /// continuar significando "o modo que a usuária está vendo": ⌘⇧T e o
+    /// item de menu equivalente em `CutuqueCommands` leem/escrevem `nav.paneMode`
+    /// sem saber de abas, e funcionam porque ele aponta pra ESTA aba.
+    @Published var abaEmFoco: ChaveDeAba?
+
+    /// O modo guardado para `chave` — `nil` (iPhone, ou nenhuma aba em foco)
+    /// devolve `modoSemAba`; uma aba sem valor guardado (nunca visitada, ou
+    /// acabou de nascer) devolve `.chat`, o mesmo padrão que o
+    /// `@Published var paneMode = .chat` antigo tinha antes de qualquer
+    /// escrita.
+    ///
+    /// Não valida contra a seleção da aba — o valor aqui pode ser
+    /// IMPOSSÍVEL pra ela (ex.: `.chat` guardado numa aba ao vivo, que não
+    /// tem chat). Quem valida é `SessionDetailPaneLogic.modoValido`, na
+    /// hora de renderizar; este método só lê o que está guardado, cru.
+    func paneMode(de chave: ChaveDeAba?) -> PaneMode {
+        guard let chave else { return modoSemAba }
+        return modosPorAba[chave] ?? .chat
+    }
+
+    /// Escreve o modo guardado de `chave` (ou de `modoSemAba`, se `nil`).
+    /// Cru, sem validar contra a seleção da aba — mesma observação de
+    /// `paneMode(de:)`.
+    func definirPaneMode(_ modo: PaneMode, de chave: ChaveDeAba?) {
+        guard let chave else {
+            modoSemAba = modo
+            return
+        }
+        modosPorAba[chave] = modo
+    }
+
+    /// Propriedade de COMPATIBILIDADE: o modo da aba em foco (`abaEmFoco`).
+    /// É o que mantém `CutuqueCommands` (⌘⇧T e o item de menu) e o iPhone
+    /// (sem abas, `abaEmFoco` fica sempre `nil`) compilando e funcionando
+    /// sem saber que o modo virou por-aba — os dois só conhecem
+    /// `nav.paneMode`, nunca `paneMode(de:)`.
+    ///
+    /// Não é mais `@Published`: é COMPUTADA sobre `modosPorAba`/`modoSemAba`,
+    /// que são os `@Published` de verdade. Consequência real: `$nav.paneMode`
+    /// deixou de existir. O único lugar que usava o binding era o `Picker` de
+    /// `SessionDetailPane` — ele troca pra um `Binding(get:set:)` manual que
+    /// lê o modo já validado (`SessionDetailPaneLogic.modoValido`) e escreve
+    /// cru na chave da própria aba (ver `SessionDetailPane.swift`).
+    var paneMode: PaneMode {
+        get { paneMode(de: abaEmFoco) }
+        set { definirPaneMode(newValue, de: abaEmFoco) }
+    }
+
+    /// Descarta os modos guardados de abas que não existem mais — sem isto
+    /// `modosPorAba` cresceria pra sempre a cada aba fechada. Chamado por
+    /// `RootSplitView` no mesmo `.onChange(of: tabsStore.tabs)` que atualiza
+    /// `abaEmFoco`, com o conjunto de chaves das abas que ainda existem.
+    func descartarModos(mantendo vivas: Set<ChaveDeAba>) {
+        modosPorAba = modosPorAba.filter { vivas.contains($0.key) }
+    }
+
     @Published var columnVisibility: NavigationSplitViewVisibility = .all
     @Published var archiveSelection: BoardTask?
     /// Host aberto na aba Máquinas. Diferente das outras seleções, esta tem um
