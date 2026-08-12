@@ -991,7 +991,17 @@ struct SessionDetailView: View {
             Text(text)
                 .font(.body)
                 .foregroundStyle(.white)
-                .textSelection(.enabled)
+                // [12/08/2026] O `.textSelection(.enabled)` que ficava aqui SAIU,
+                // e a razão é disputa de gesto, não estilo: toque longo é o
+                // gatilho das DUAS coisas, e o reconhecedor mais interno (a
+                // seleção nativa deste `Text`) ganha do `.contextMenu` do funil
+                // — então o menu "Copiar / Selecionar texto…" ficaria invisível
+                // justamente em cima das palavras, que é onde a usuária toca
+                // (achado `importante` da revisão da Task 3). Nada se perde: a
+                // folha imóvel do menu seleciona o mesmo texto e ainda copia
+                // tudo de uma vez. O bloco de CÓDIGO é o caso oposto e mantém a
+                // seleção nativa — ele tem botão de copiar visível, e ali
+                // escolher duas linhas no lugar é o que se quer.
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -1005,7 +1015,15 @@ struct SessionDetailView: View {
             AgentAvatar()
             MarkdownText(text: text)
                 .foregroundStyle(.primary)
-                .textSelection(.enabled)
+                // [12/08/2026] Mesma razão de `userBubble`, e aqui o custo de
+                // manter era ainda menor: este `.textSelection` valia para os
+                // `Text` de prosa do `MarkdownText` (parágrafo, título, lista,
+                // citação), onde a seleção nativa JÁ era quebrada — ela morre na
+                // fronteira entre dois `Text`, e o `MarkdownText` faz um por
+                // bloco. Era exatamente a queixa que abriu esta leva. Quem
+                // seleciona prosa agora é a folha imóvel, um `Text` só.
+                // `MarkdownText` só é usado aqui (conferido), então nenhuma outra
+                // tela perde seleção com isto.
                 .padding(.top, 3)
             Spacer(minLength: 24)
         }

@@ -101,16 +101,41 @@ struct MachineDetailView: View {
                 // arquivos não há tela para copiar.
                 if showsTerminal {
                     Menu {
+                        // O retrato para HABILITAR sai daqui de dentro, do
+                        // conteúdo do `Menu`, e não de um `.disabled` pendurado
+                        // no `Menu` inteiro. Não é estilo: o fluxo de bytes do
+                        // `ssh` NÃO passa por `@Published` (o `aoReceber`
+                        // alimenta a `TerminalView` direto), então o corpo desta
+                        // view não é reavaliado quando a tela enche — um
+                        // `.disabled` calculado lá fora travaria no valor de
+                        // quando o terminal ainda estava vazio e nunca mais
+                        // habilitaria.
+                        let retrato = textoParaCopiar()
                         Button {
-                            AreaDeTransferencia.copiar(textoParaCopiar())
+                            // Relê no TOQUE em vez de usar o `retrato` acima: é
+                            // o que a spec chama de "retrato no instante do
+                            // toque", e torna o comportamento correto mesmo se o
+                            // SwiftUI tiver construído este conteúdo antes da
+                            // hora. A guarda existe porque copiar vazio
+                            // SOBRESCREVERIA o que a usuária já tinha na área de
+                            // transferência — perder isso é pior que não fazer
+                            // nada (achado `importante` da revisão da Task 5,
+                            // 12/08/2026).
+                            let agora = textoParaCopiar()
+                            guard !agora.isEmpty else { return }
+                            AreaDeTransferencia.copiar(agora)
                         } label: {
                             Label("Copiar tela", systemImage: "doc.on.doc")
                         }
+                        .disabled(retrato.isEmpty)
                         Button {
-                            folhaDoTerminal = TextoIdentificavelDaMaquina(textoParaCopiar())
+                            let agora = textoParaCopiar()
+                            guard !agora.isEmpty else { return }
+                            folhaDoTerminal = TextoIdentificavelDaMaquina(agora)
                         } label: {
                             Label("Selecionar texto…", systemImage: "selection.pin.in.out")
                         }
+                        .disabled(retrato.isEmpty)
                     } label: {
                         Image(systemName: "doc.on.doc")
                     }
