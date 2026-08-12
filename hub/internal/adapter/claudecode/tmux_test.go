@@ -84,3 +84,25 @@ func TestValidKillSocket(t *testing.T) {
 		t.Error("socket com shell metachar devia ser rejeitado")
 	}
 }
+
+// O kind vem do script (D11) e precisa atravessar até o Discovered — é o que
+// permite o app mostrar o terminal vazio marcado em vez de escondê-lo.
+func TestParseTmuxJSONKind(t *testing.T) {
+	out := []byte(`[{"id":"/tmp/tmux-501/main\tpane1","cmd":"","kind":"shell","cwd":"/x","session":"s","window":"w","state":""}]`)
+	panes := parseTmuxJSON(out)
+	if len(panes) != 1 {
+		t.Fatalf("panes = %d, queria 1", len(panes))
+	}
+	if panes[0].Kind != "shell" {
+		t.Fatalf("Kind = %q, queria shell", panes[0].Kind)
+	}
+}
+
+// Resposta de um script antigo (sem kind) não pode virar erro nem string aleatória:
+// campo ausente é string vazia, e quem consome trata vazio como "agent".
+func TestTmuxPaneAsDiscoveredKind(t *testing.T) {
+	d := TmuxPaneAsDiscovered(TmuxPane{ID: "s\t%1", Cwd: "/x", Session: "sess", Kind: "shell"})
+	if d.Kind != "shell" {
+		t.Fatalf("Discovered.Kind = %q, queria shell", d.Kind)
+	}
+}
