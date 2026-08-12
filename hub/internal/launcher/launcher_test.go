@@ -1296,3 +1296,12 @@ func TestInterruptTmuxPanePauses(t *testing.T) {
 		t.Errorf("State = %q após pausar via tmux, quero StateRunning (sessão continua viva)", got.State)
 	}
 }
+
+// Máquina que não existe não pode virar erro genérico: o handler traduz
+// ErrUnknownMachine em 404 e qualquer outra coisa em 502.
+func TestTmuxNewSessionMaquinaDesconhecida(t *testing.T) {
+	l := &Launcher{}
+	if _, err := l.TmuxNewSession("naoexiste", "defender", "mike", "/x", "claude"); !errors.Is(err, ErrUnknownMachine) {
+		t.Fatalf("err = %v, queria ErrUnknownMachine", err)
+	}
+}

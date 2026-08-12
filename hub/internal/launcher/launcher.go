@@ -323,6 +323,27 @@ func (l *Launcher) TmuxList(machine string) ([]session.Discovered, error) {
 	return out, nil
 }
 
+// TmuxNewSession cria uma sessão tmux na máquina e devolve o alvo composto do pane
+// criado ("<socket>\t<pane>"), pronto para capture/send-keys. Grupo = servidor tmux
+// (-L), que é o mesmo identificador do escopo do board.
+func (l *Launcher) TmuxNewSession(machine, group, sess, cwd, agent string) (string, error) {
+	tgt, ok := l.anyTarget(machine)
+	if !ok {
+		return "", ErrUnknownMachine
+	}
+	tm, ok := tgt.(claudecode.Tmuxer)
+	if !ok {
+		return "", ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	target, err := tm.TmuxNewSession(ctx, group, sess, cwd, agent)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrDiscoverFailed, err)
+	}
+	return target, nil
+}
+
 // TmuxCapture devolve a tela atual do pane (espelho ao vivo).
 func (l *Launcher) TmuxCapture(machine, target string) (string, error) {
 	tgt, ok := l.anyTarget(machine)
