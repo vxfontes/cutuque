@@ -222,4 +222,66 @@ final class OpenTabsTests: XCTestCase {
         t.abrir(chave: b, titulo: "aux", conteudo: .pendente)
         XCTAssertEqual(t.abas.count, 2)
     }
+
+    // MARK: - G4: persistência e reconciliação
+
+    /// D2: as abas voltam ao reabrir o app, e uma aba cujo pane morreu vira
+    /// AVISO — nunca uma tentativa de recriar o pane. Recriar seria abrir sessão
+    /// de tmux sem a Vanessa pedir, no boot do app.
+    func testRoundTripDaPersistencia() {
+        var t = OpenTabs()
+        t.abrir(chave: a, titulo: "mike", conteudo: .pendente, estilo: .normal)
+        t.abrir(chave: .board, titulo: "Board", conteudo: .board, estilo: .normal)
+        t.fixar(a)
+
+        let dados = try! JSONEncoder().encode(t.paraPersistir)
+        let salvas = try! JSONDecoder().decode([AbaPersistida].self, from: dados)
+        let voltou = OpenTabs.restaurando(salvas)
+
+        XCTAssertEqual(voltou.abas.map(\.chave), [a, .board])
+        XCTAssertEqual(voltou.abas.map(\.titulo), ["mike", "Board"])
+        XCTAssertTrue(voltou.abas[0].fixa)
+        XCTAssertEqual(voltou.selecionada, a, "restaura escolhendo a primeira")
+        // Nada de conteúdo antes da reconciliação: o pane não é recriado no boot.
+        XCTAssertEqual(voltou.abas.map(\.conteudo), [.pendente, .pendente])
+        // E nada de passagem: aba restaurada é aba que a Vanessa quis guardar.
+        XCTAssertTrue(voltou.abas.allSatisfy { $0.estilo == .normal })
+    }
+
+    func testReconciliarResolveAsVivasEMarcaAsMortas() {
+        var t = OpenTabs.restaurando([
+            AbaPersistida(chave: a, titulo: "mike", fixa: false),
+            AbaPersistida(chave: b, titulo: "aux", fixa: false),
+        ])
+        t.reconciliar(vivas: [a: .board])   // `.board` aqui é só um conteúdo qualquer não-pendente
+        XCTAssertEqual(t.aba(a)?.conteudo, .board)
+        XCTAssertEqual(t.aba(b)?.conteudo, .morta, "existia, não existe mais → aviso")
+        XCTAssertEqual(t.abas.count, 2, "a aba morta FICA na barra; ela é o aviso")
+    }
+
+    /// Reconciliar de novo depois de a sessão voltar (hub reiniciou, ssh caiu e
+    /// voltou) tem de RESSUSCITAR a aba: `morta` é um estado da vez, não uma
+    /// sentença. Sem isto, um blip de rede deixa a barra cheia de avisos até a
+    /// Vanessa fechar cada um à mão.
+    func testAbaMortaVoltaAVidaSeOAlvoReaparecer() {
+        var t = OpenTabs.restaurando([AbaPersistida(chave: a, titulo: "mike", fixa: false)])
+        t.reconciliar(vivas: [:])
+        XCTAssertEqual(t.aba(a)?.conteudo, .morta)
+        t.reconciliar(vivas: [a: .board])
+        XCTAssertEqual(t.aba(a)?.conteudo, .board)
+    }
+
+    /// Board e Arquivo não dependem de nada vivo: reconciliar não pode matá-los.
+    func testDestinosQueNaoDependemDeTmuxNaoMorrem() {
+        var t = OpenTabs()
+        t.abrir(chave: .board, titulo: "Board", conteudo: .board, estilo: .normal)
+        t.reconciliar(vivas: [:])
+        XCTAssertEqual(t.aba(.board)?.conteudo, .board)
+    }
+
+    func testRestaurarNadaDaUmModeloVazio() {
+        let t = OpenTabs.restaurando([])
+        XCTAssertTrue(t.abas.isEmpty)
+        XCTAssertNil(t.selecionada)
+    }
 }

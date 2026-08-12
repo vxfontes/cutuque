@@ -54,6 +54,14 @@ enum EstiloDeAba {
     case passagem, normal
 }
 
+/// O que vai pro disco: chave, título e se é fixa. Conteúdo NÃO vai — é ele que
+/// envelhece, e recriá-lo do disco significaria abrir pane de tmux no boot.
+struct AbaPersistida: Codable, Equatable {
+    let chave: ChaveDeAba
+    let titulo: String
+    let fixa: Bool
+}
+
 struct AbaAberta: Identifiable, Equatable {
     let chave: ChaveDeAba
     var titulo: String
@@ -171,6 +179,52 @@ struct OpenTabs: Equatable {
             selecionar(primeira.chave)
         } else {
             selecionada = nil
+        }
+    }
+
+    // MARK: persistência e reconciliação (G4)
+
+    var paraPersistir: [AbaPersistida] {
+        abas.map { AbaPersistida(chave: $0.chave, titulo: $0.titulo, fixa: $0.fixa) }
+    }
+
+    /// Abas do disco nascem `pendente` e `normal`. A ordem de foco é a da barra
+    /// (a primeira é a mais "recente"), o que faz o teto de 6 da G2 dormir as da
+    /// direita até a Vanessa tocar nelas.
+    static func restaurando(_ salvas: [AbaPersistida]) -> OpenTabs {
+        var t = OpenTabs()
+        for (i, s) in salvas.enumerated() {
+            t.abas.append(AbaAberta(chave: s.chave, titulo: s.titulo, estilo: .normal,
+                                    fixa: s.fixa, conteudo: .pendente,
+                                    ordemDeFoco: salvas.count - i))
+        }
+        t.contadorDeFoco = salvas.count
+        t.selecionada = t.abas.first?.chave
+        return t
+    }
+
+    /// Casa as abas com o que está vivo agora. Quem não aparece vira `.morta` —
+    /// um aviso na barra, e nada mais: sem recriar pane, sem fechar sozinho.
+    /// Reversível de propósito (`morta` → viva de novo) porque hub reiniciado e
+    /// ssh que caiu e voltou são o caso comum, não o raro.
+    mutating func reconciliar(vivas: [ChaveDeAba: TabConteudo]) {
+        for i in abas.indices {
+            let chave = abas[i].chave
+            if let conteudo = vivas[chave] {
+                abas[i].conteudo = conteudo
+            } else if Self.dependeDeAlgoVivo(chave.tipo) {
+                abas[i].conteudo = .morta
+            }
+        }
+    }
+
+    /// Board e Arquivo são telas do hub, não panes: não morrem por ausência na
+    /// lista ao vivo. Máquina também não — o host existe no registro mesmo com
+    /// o ssh caído, e quem mostra "não conectei" é a própria tela da máquina.
+    private static func dependeDeAlgoVivo(_ tipo: TipoDeAba) -> Bool {
+        switch tipo {
+        case .live, .chat:              return true
+        case .board, .maquina, .arquivado: return false
         }
     }
 }
