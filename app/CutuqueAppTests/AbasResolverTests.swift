@@ -57,17 +57,14 @@ final class AbasResolverTests: XCTestCase {
             AbaPersistida(chave: .board, titulo: "Board", fixa: false),
             AbaPersistida(chave: .maquina("macmini"), titulo: "macmini", fixa: false),
         ])
-        // [12/08/2026] Nesta base `restaurando` ainda faz TODA aba nascer
-        // `.pendente` — inclusive Board, que só passa a nascer `.board` depois
-        // do merge da Task 2 (`conteudoInicial`, em OpenTabs.swift — arquivo de
-        // outra task, não mexo aqui). Até lá o Board entra em `tiposPendentes`
-        // também, e a asserção do plano (só `.maquina`) fica vermelha por ESSE
-        // motivo. `AbasResolucao.tiposPendentes` em si está correta (filtra por
-        // `.pendente`); quem está incompleta é a base que ela lê.
-        XCTExpectFailure("depende da Task 2: OpenTabs.conteudoInicial(.board) == .board") {
-            XCTAssertEqual(AbasResolucao.tiposPendentes(em: t.abas), [.maquina],
-                           "Board já nasce resolvido; só quem está .pendente entra")
-        }
+        // Esta asserção depende de `OpenTabs.conteudoInicial` fazer o Board
+        // nascer `.board` (Task 2). Enquanto as duas tasks corriam em paralelo
+        // ela viveu dentro de um `XCTExpectFailure`, removido no merge das duas
+        // (12/08/2026): sem o Board resolvido de saída, `tiposPendentes`
+        // devolveria `{.board, .maquina}` e o resolver iria ao hub buscar
+        // máquina por causa de uma aba que nunca precisou de busca.
+        XCTAssertEqual(AbasResolucao.tiposPendentes(em: t.abas), [.maquina],
+                       "Board já nasce resolvido; só quem está .pendente entra")
     }
 
     func testMaquinaPresenteResolveEAusenteMorre() async {
@@ -81,15 +78,13 @@ final class AbasResolverTests: XCTestCase {
         XCTAssertEqual(s.tabs.aba(.maquina("macmini"))?.conteudo,
                        .maquina(maquinaDeTeste(nome: "macmini")))
 
-        // [12/08/2026] `dependeDeAlgoVivo(.maquina)` ainda devolve `false`
-        // nesta base — quem o vira `true` é a Task 2 (OpenTabs.swift, arquivo
-        // de outra task). Até o merge, `reconciliar` nunca marca `.maquina`
-        // como `.morta` por ausência, então esta metade do teste fica vermelha
-        // só por isso. A metade de cima (presença resolve) já prova o
-        // `AbasResolver` funcionando.
-        XCTExpectFailure("depende da Task 2: dependeDeAlgoVivo(.maquina)") {
-            XCTAssertEqual(s.tabs.aba(.maquina("sumida"))?.conteudo, .morta)
-        }
+        // A metade de cima prova o resolver casando presença; esta prova a
+        // ausência matando — e ela só passa porque `dependeDeAlgoVivo(.maquina)`
+        // virou `true` na Task 2. Enquanto as duas corriam em paralelo esta
+        // linha viveu dentro de um `XCTExpectFailure`, removido no merge
+        // (12/08/2026). É o par que importa: sem a de cima, "morre" poderia ser
+        // um resolver que não resolve nada.
+        XCTAssertEqual(s.tabs.aba(.maquina("sumida"))?.conteudo, .morta)
     }
 
     func testCargaQueFalhaNaoMataAba() async {

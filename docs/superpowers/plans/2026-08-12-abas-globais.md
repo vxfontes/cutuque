@@ -17,7 +17,7 @@
 
 - **pt-BR em tudo**: código, testes, comentários e texto de tela.
 - **Nunca apague um comentário que documenta um bug ou uma decisão de arquitetura.** Se a sua mudança o tornar falso, **REESCREVA** com a razão nova e a data (12/08/2026).
-- **Runtime do watchOS está quebrado nesta máquina.** Teste SEMPRE por `app/CutuqueAppNoWatch.xcodeproj`, nunca por `app/CutuqueApp.xcodeproj`.
+- **Runtime do watchOS está quebrado nesta máquina.** Teste SEMPRE por `app/CutuqueAppNoWatch.xcodeproj`, nunca por `app/CutuqueApp.xcodeproj`. Atenção: só o **projeto** se chama `CutuqueAppNoWatch` — o **scheme** dentro dele é `CutuqueApp` (confirmado por `xcodebuild -list` em 12/08/2026). O comando certo é `-project CutuqueAppNoWatch.xcodeproj -scheme CutuqueApp`.
 - **Arquivo `.swift` novo ou renomeado** exige regenerar OS DOIS projetos, de dentro de `app/`: `xcodegen generate && xcodegen generate --spec project-notest-watch.yml`.
 - **`xcodebuild` sempre com `timeout: 600000`** e mirando o simulador **pelo UDID que a sua task recebe** — dois builds no mesmo simulador colidem ("Early unexpected exit… test runner exited before establishing connection").
 - **`git add` só com caminhos explícitos.** NUNCA `git add -A` / `git add .`. Nunca commite: `scripts/tmx.sh`, `app/Local.xcconfig`, `app/project-notest-watch.yml`, `app/CutuqueAppNoWatch.xcodeproj`.
@@ -262,7 +262,7 @@ final class SessionListRetratosTests: XCTestCase {
 - [ ] **Step 3: rode e veja falhar** (não compila: `SessionListViewModel` não tem `init(api:checarSaude:)`)
 
 ```bash
-cd app && xcodebuild test -project CutuqueAppNoWatch.xcodeproj -scheme CutuqueAppNoWatch \
+cd app && xcodebuild test -project CutuqueAppNoWatch.xcodeproj -scheme CutuqueApp \
   -destination 'platform=iOS Simulator,id=<UDID_DA_SUA_TASK>' \
   -only-testing:CutuqueAppTests/SessionListRetratosTests 2>&1 | tail -30
 ```
