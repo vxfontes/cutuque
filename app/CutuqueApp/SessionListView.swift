@@ -542,6 +542,12 @@ struct SessionListView: View {
                 // Criou → atualiza a lista e abre o espelho no pane novo, pelo
                 // MESMO caminho de abertura que as linhas da lista já usam
                 // (apply, não um caminho novo — a Task G1 teria de reconciliar).
+                // (12/08/2026 — achado 1 da revisão da Task 5: isto era FALSO
+                // entre a Task 5 e este conserto, porque a `List` da lista
+                // publicava a seleção pelo próprio binding, sem passar por
+                // `apply`; volta a ser verdade com o proxy `selecaoDaLista`,
+                // acima, que agora é quem garante que o toque na linha também
+                // chega no `apply`.)
                 Task { await model.refreshLive() }
                 abrirAoVivo(machine: maquina, target: alvo)
             }
@@ -649,10 +655,30 @@ struct SessionListView: View {
         }
     }
 
+    /// Proxy de `splitSelection` para a `List` embutida (iPad). NÃO pode ser
+    /// `splitSelection` cru (12/08/2026 — achado 1 da revisão da Task 5): com
+    /// a barra de abas global a ABA é a autoridade do que está aberto, e o
+    /// toque na linha tem de passar pelo MESMO funil (`apply`) que abre/foca a
+    /// aba. Antes deste proxy, a `List(selection:)` publicava a seleção pelo
+    /// PRÓPRIO binding — `apply(_:)` nunca rodava, e a coluna de detalhe (que
+    /// hoje é a barra de abas) ficava vazia com a linha realçada. O `guard let`
+    /// preserva o iPhone: lá `splitSelection` é `nil` e a `List` fica sem
+    /// seleção, como sempre foi.
+    private var selecaoDaLista: Binding<DetailSelection?>? {
+        guard let splitSelection else { return nil }
+        return Binding(
+            get: { splitSelection.wrappedValue },
+            set: { nova in
+                if let nova { apply(.selection(nova)) }
+                else { splitSelection.wrappedValue = nil }
+            }
+        )
+    }
+
     /// A lista em si, com título e toolbar. Nos dois modos é a mesma coisa; o
     /// que muda é ter ou não uma NavigationStack em volta.
     @ViewBuilder private var listCore: some View {
-        List(selection: splitSelection) {
+        List(selection: selecaoDaLista) {
             liveServerSections
             needsYouSection
             activeSection
@@ -758,10 +784,17 @@ struct SessionListView: View {
             Task { await model.refresh(); await model.refreshLive() }
         case .selectSession(let index):
             // ⌘1…⌘9 na ordem em que a lista aparece: precisa de você, ao
-            // vivo, depois as demais ativas.
+            // vivo, depois as demais ativas. Vai por `go(to:)` (12/08/2026 —
+            // achado 2 da revisão da Task 5): a escrita direta em
+            // `splitSelection` era o MESMO furo do toque na linha — nunca
+            // passava por `apply`, então o atalho realçava a seleção sem abrir
+            // aba. Efeito colateral desejado: no iPhone (`splitSelection` nil)
+            // o atalho passa a EMPILHAR o detalhe, onde antes não fazia nada —
+            // `go(to:)` delega a `SessionNavigationLogic.goTo`, que devolve
+            // `.push` fora do modo embutido.
             let ordered = needsYou + activeOthers
             if let session = ordered[safe: index] {
-                splitSelection?.wrappedValue = .session(session)
+                go(to: session)
             }
         case nil:
             break

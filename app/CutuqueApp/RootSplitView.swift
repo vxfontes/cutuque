@@ -143,20 +143,44 @@ struct RootSplitView: View {
         .onChange(of: router.pendingSessionID) { _, id in
             if id != nil { nav.destination = .sessions }
         }
-        // [12/08/2026] Mantém o `NavigationState` em dia com as abas — dois
-        // efeitos, um `.onChange`. `abaEmFoco` é o que faz `nav.paneMode` (a
-        // propriedade de compatibilidade) continuar apontando pro modo que a
-        // usuária está vendo agora, em vez de ficar preso na última aba que
-        // escreveu; o descarte é a limpeza de `modosPorAba` (ver
+        // [12/08/2026] Mantém o `NavigationState` em dia com as abas — TRÊS
+        // efeitos, um `.onChange` só (a terceira responsabilidade entrou no
+        // mesmo dia, achados 1-3 da revisão da Task 5, funil de seleção).
+        // `abaEmFoco` é o que faz `nav.paneMode` (a propriedade de
+        // compatibilidade) continuar apontando pro modo que a usuária está
+        // vendo agora, em vez de ficar preso na última aba que escreveu; o
+        // descarte é a limpeza de `modosPorAba` (ver
         // `NavigationState.descartarModos`) — sem ela o dicionário cresceria
         // pra sempre a cada aba fechada. `initial: true` porque a primeira
         // aba (restaurada do disco ou aberta na hora) também precisa entrar
         // em foco sem esperar uma troca. Um handler SÓ, não um por aba: as
-        // duas escritas dependem do conjunto INTEIRO de abas, não de uma
-        // aba isolada.
+        // TRÊS escritas dependem do conjunto INTEIRO de abas, não de uma aba
+        // isolada.
+        //
+        // A terceira: zera `nav.selection`/`machineSelection`/
+        // `archiveSelection` quando a aba que as originou foi fechada (achado
+        // 3 — ninguém fazia essa limpeza). Sem isto, fechar a aba pelo `✕`
+        // deixava a linha correspondente realçada na lista/sidebar (realce
+        // fantasma) e, em retrato, uma seleção de sessão órfã bloqueava
+        // `sessionListLivesInDetail`/`AbasNavegacao.listaMoraNoDetalhe` — o
+        // "lista | Nada aberto" relatado. `AbasNavegacao.selecoesOrfas` só
+        // aponta quem está órfão; escrevemos `nil` SÓ nesses campos (os `if`
+        // abaixo), pra não publicar as três `@Published` à toa a cada troca
+        // de aba — a maioria não tem nada pra limpar. Zerar
+        // `machineSelection`/`archiveSelection` aqui dispara os `.onChange`
+        // deles logo abaixo, mas o `guard let` dos dois barra o `nil` antes de
+        // qualquer `tabsStore.mutar` (conferido lendo o corpo dos dois) — não
+        // há laço, e nenhuma aba fechada é reaberta por este handler.
         .onChange(of: tabsStore.tabs, initial: true) { _, tabs in
             nav.abaEmFoco = tabs.selecionada
             nav.descartarModos(mantendo: Set(tabs.abas.map(\.chave)))
+
+            let orfas = AbasNavegacao.selecoesOrfas(
+                abas: tabs.abas.map(\.chave), sessao: nav.selection,
+                maquina: nav.machineSelection, arquivo: nav.archiveSelection)
+            if orfas.sessao { nav.selection = nil }
+            if orfas.maquina { nav.machineSelection = nil }
+            if orfas.arquivo { nav.archiveSelection = nil }
         }
         // [12/08/2026 — abas globais] Tocar no destino Board abre/foca a ABA do
         // Board. Sem `initial: true`: o destino inicial é sempre `.sessions`, e
@@ -262,11 +286,17 @@ struct RootSplitView: View {
     /// deixou de significar "não há nada aberto". Sem esta condição, abrir uma
     /// aba pelo Board e voltar pra Sessões em retrato esconderia a aba aberta
     /// atrás da lista.
+    ///
+    /// [12/08/2026 — funil de seleção, achado 1 da revisão da Task 5] A conta
+    /// virou `AbasNavegacao.listaMoraNoDetalhe` e `nav.selection` SAIU dela —
+    /// ver o doc-comment completo lá, que preserva o raciocínio acima e explica
+    /// por que checar `nav.selection` deixou de ser necessário (e era
+    /// justamente essa checagem redundante que produzia "lista | Nada aberto"
+    /// com uma seleção órfã de sessão fechada travando a condição).
     private var sessionListLivesInDetail: Bool {
-        nav.destination == .sessions
-            && nav.selection == nil
-            && tabsStore.tabs.selecionada == nil
-            && nav.columnVisibility == .doubleColumn
+        AbasNavegacao.listaMoraNoDetalhe(destino: nav.destination,
+                                        abaSelecionada: tabsStore.tabs.selecionada,
+                                        colunas: nav.columnVisibility)
     }
 
     @ViewBuilder private var contentColumn: some View {
