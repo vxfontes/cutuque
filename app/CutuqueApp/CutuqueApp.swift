@@ -18,6 +18,10 @@ struct CutuqueApp: App {
     // Board compartilhado: no iPad a coluna de filtros e o kanban são views
     // diferentes olhando o mesmo modelo.
     @StateObject private var board = BoardModel()
+    // Abas do iPad (G6): mesmo Group do router/nav/board, então cobre
+    // RootSplitView e RootTabView igualmente — no iPhone fica sem uso (as
+    // abas são um mecanismo do iPad, montado por cima da navegação de sempre).
+    @StateObject private var tabsStore = OpenTabsStore()
 
     var body: some Scene {
         WindowGroup {
@@ -36,6 +40,7 @@ struct CutuqueApp: App {
             .environmentObject(router)
             .environmentObject(nav)
             .environmentObject(board)
+            .environmentObject(tabsStore)
             .tint((AppAccent(rawValue: accentRaw) ?? .blue).color)
             .preferredColorScheme((AppColorScheme(rawValue: colorSchemeRaw) ?? .system).scheme)
             // Deep-link da Live Activity: cutuque://session/<id> abre a sessão.

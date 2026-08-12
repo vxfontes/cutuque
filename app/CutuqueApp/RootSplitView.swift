@@ -11,6 +11,9 @@ import SwiftUI
 struct RootSplitView: View {
     @EnvironmentObject private var router: Router
     @EnvironmentObject private var nav: NavigationState
+    // G6: as abas da coluna de detalhe (sessões ao vivo/chat). Mesma
+    // instância injetada em `CutuqueApp.swift`.
+    @EnvironmentObject private var tabsStore: OpenTabsStore
 
     /// Chave do que já teve a regra de layout aplicada, pra ela valer UMA vez
     /// por entrada em destino/seleção/orientação e não brigar com o ⤡ da
@@ -241,19 +244,20 @@ struct RootSplitView: View {
     @ViewBuilder private var detailColumn: some View {
         switch nav.destination {
         case .sessions:
-            if let selection = nav.selection {
-                // .id força a troca de sessão a destruir o painel anterior — é
-                // aí, e só aí, que o `restoreSize()` do terminal deve rodar.
-                SessionDetailPane(selection: selection).id(selection)
-            } else if sessionListLivesInDetail {
+            if sessionListLivesInDetail {
                 // Retrato, nada escolhido: a lista É o detalhe (ver
                 // `sessionListLivesInDetail`). Tocar numa sessão troca a
                 // visibilidade pra `.detailOnly` e o painel toma a tela — o
                 // "ao clicar, abre terminal tela cheia" do desenho.
                 SessionListView(splitSelection: $nav.selection)
             } else {
-                ContentUnavailableView("Escolha uma sessão", systemImage: "list.bullet.rectangle",
-                                       description: Text("A conversa e o terminal aparecem aqui."))
+                // Até 08/2026 este `.id(selection)` era o que devolvia a
+                // largura ao tmux, por desmontagem: trocar de sessão destruía
+                // o painel anterior. Com abas (G6), quem devolve é
+                // `TerminalPaneState.liberado` (ver `OpenTabs.estado(de:)`) —
+                // desmontar por troca de aba mataria a rolagem do espelho e a
+                // do chat, que é exatamente o que a decisão #19 proíbe.
+                sessionTabsDetail
             }
         case .board:
             // `embedded`: sem `NavigationStack` próprio aqui dentro — numa
@@ -290,6 +294,60 @@ struct RootSplitView: View {
                 ContentUnavailableView("Escolha um card", systemImage: "archivebox",
                                        description: Text("Os concluídos das semanas fechadas ficam aqui."))
             }
+        }
+    }
+
+    /// A coluna de detalhe de Sessões, dirigida pelas abas (G6): barra de abas
+    /// em cima (some quando não há nenhuma) e, embaixo, TODOS os painéis
+    /// abertos montados num `ZStack`, alternando por opacidade. Trocar de aba
+    /// não remonta nada — é o mesmo desenho que o `SessionDetailPane` já usa
+    /// entre chat, terminal e informações, um nível abaixo (decisão #19).
+    @ViewBuilder private var sessionTabsDetail: some View {
+        VStack(spacing: 0) {
+            if !tabsStore.tabs.abas.isEmpty {
+                TabBar(store: tabsStore)
+            }
+            ZStack {
+                ForEach(tabsStore.tabs.abas) { aba in
+                    let escolhida = tabsStore.tabs.selecionada == aba.chave
+                    painel(aba)
+                        .opacity(escolhida ? 1 : 0)
+                        .allowsHitTesting(escolhida)
+                        .accessibilityHidden(!escolhida)
+                }
+                if tabsStore.tabs.abas.isEmpty {
+                    ContentUnavailableView("Nada aberto", systemImage: "square.on.square",
+                                           description: Text("Toque numa sessão para abrir uma aba."))
+                }
+            }
+        }
+    }
+
+    /// O conteúdo de uma aba. `TabConteudo` é exaustivo por causa do modelo
+    /// (`OpenTabs.swift`, G1), mas hoje só `.sessao` nasce de verdade — nenhum
+    /// caminho ainda abre aba de Board/máquina/arquivo (isso ficou de fora
+    /// desta task por escopo: só `SessionListView` foi ligada ao `tabsStore`
+    /// aqui). Os outros casos existem prontos para quando essa ligação vier.
+    @ViewBuilder private func painel(_ aba: AbaAberta) -> some View {
+        switch aba.conteudo {
+        case .sessao(let selection):
+            SessionDetailPane(selection: selection,
+                              paneState: tabsStore.tabs.estado(de: aba.chave))
+        case .board:
+            BoardView(embedded: true)
+        case .maquina(let machine):
+            // Mesmo motivo do `.id(machine.name)` do case `.machines` acima:
+            // identidade pelo NOME, não pela struct inteira.
+            NavigationStack { MachineDetailView(machine: machine) }
+                .id(machine.name)
+        case .arquivado(let task):
+            ArchivedTaskPane(task: task)
+        case .pendente:
+            ProgressView()
+        case .morta:
+            // D2: aviso, nunca recriação. Fechar é decisão da Vanessa.
+            ContentUnavailableView("Sessão encerrada", systemImage: "exclamationmark.triangle",
+                                   description: Text("Essa sessão não está mais viva. A aba fica aqui até você fechá-la."))
         }
     }
 }
