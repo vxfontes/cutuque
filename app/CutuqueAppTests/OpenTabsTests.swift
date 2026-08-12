@@ -242,8 +242,11 @@ final class OpenTabsTests: XCTestCase {
         XCTAssertEqual(voltou.abas.map(\.titulo), ["mike", "Board"])
         XCTAssertTrue(voltou.abas[0].fixa)
         XCTAssertEqual(voltou.selecionada, a, "restaura escolhendo a primeira")
-        // Nada de conteúdo antes da reconciliação: o pane não é recriado no boot.
-        XCTAssertEqual(voltou.abas.map(\.conteudo), [.pendente, .pendente])
+        // Sessão (`.live`) não tem conteúdo antes da reconciliação: o pane não
+        // é recriado no boot. Board é a exceção [12/08/2026 — abas globais]:
+        // ele não depende de nada do hub, então já nasce `.board` em
+        // `conteudoInicial`, sem esperar reconciliação nenhuma.
+        XCTAssertEqual(voltou.abas.map(\.conteudo), [.pendente, .board])
         // E nada de passagem: aba restaurada é aba que a Vanessa quis guardar.
         XCTAssertTrue(voltou.abas.allSatisfy { $0.estilo == .normal })
     }
@@ -271,7 +274,11 @@ final class OpenTabsTests: XCTestCase {
         XCTAssertEqual(t.aba(a)?.conteudo, .board)
     }
 
-    /// Board e Arquivo não dependem de nada vivo: reconciliar não pode matá-los.
+    /// Board não depende de nada vivo: reconciliar não pode matá-lo. [Nota
+    /// 12/08/2026 — abas globais: Arquivo SAIU desta afirmação — ele passou a
+    /// depender do retrato do `AbasResolver`, ver
+    /// `testMaquinaAusenteMorreSoQuandoOTipoEstaSendoJulgado` e a família
+    /// `testJulgandoNaoAfetaBoardMasAgoraAfetaMaquinaEArquivado`.]
     func testDestinosQueNaoDependemDeTmuxNaoMorrem() {
         var t = OpenTabs()
         t.abrir(chave: .board, titulo: "Board", conteudo: .board, estilo: .normal)
@@ -352,10 +359,17 @@ final class OpenTabsTests: XCTestCase {
         XCTAssertEqual(t.aba(chatChave)?.conteudo, .morta)
     }
 
-    /// Board/Máquina/Arquivo continuam imunes com QUALQUER conjunto de tipos
-    /// julgados — não dependem de nada vivo, e `julgando` é uma condição A
-    /// MAIS pra matar, nunca uma exceção pra poupar.
-    func testJulgandoNaoAfetaAbasQueNaoDependemDeAlgoVivo() {
+    /// [Reescrito em 12/08/2026 — abas globais] Antes desta leva, Board,
+    /// Máquina e Arquivo eram TODOS imunes a `julgando`, porque nenhum deles
+    /// dependia de algo vivo. Isso mudou pela metade: Máquina e Arquivo agora
+    /// têm uma autoridade de verdade (o `AbasResolver`, Task 3) que pode
+    /// atestar ausência, então com os dois tipos julgados e `vivas` vazio eles
+    /// morrem — é o mesmo comportamento que
+    /// `testMaquinaAusenteMorreSoQuandoOTipoEstaSendoJulgado` prova em
+    /// detalhe. Só Board continua imune: ele nasce resolvido em
+    /// `conteudoInicial` e não existe autoridade que possa dizer que ele não
+    /// existe.
+    func testJulgandoNaoAfetaBoardMasAgoraAfetaMaquinaEArquivado() {
         let maquinaChave = ChaveDeAba.maquina("mike")
         let arquivadoChave = ChaveDeAba.arquivado("t1")
         var t = OpenTabs.restaurando([
@@ -364,9 +378,9 @@ final class OpenTabsTests: XCTestCase {
             AbaPersistida(chave: arquivadoChave, titulo: "t1", fixa: false),
         ])
         t.reconciliar(vivas: [:], julgando: [.board, .maquina, .arquivado, .live, .chat])
-        XCTAssertEqual(t.aba(.board)?.conteudo, .pendente)
-        XCTAssertEqual(t.aba(maquinaChave)?.conteudo, .pendente)
-        XCTAssertEqual(t.aba(arquivadoChave)?.conteudo, .pendente)
+        XCTAssertEqual(t.aba(.board)?.conteudo, .board, "nasce resolvido; nada o mata por ausência")
+        XCTAssertEqual(t.aba(maquinaChave)?.conteudo, .morta, "agora depende do retrato do AbasResolver")
+        XCTAssertEqual(t.aba(arquivadoChave)?.conteudo, .morta, "idem")
     }
 
     /// A substituição de conteúdo NÃO depende do julgamento: chave presente
@@ -377,5 +391,56 @@ final class OpenTabsTests: XCTestCase {
         var t = OpenTabs.restaurando([AbaPersistida(chave: liveChave, titulo: "term", fixa: false)])
         t.reconciliar(vivas: [liveChave: .board], julgando: [.chat])
         XCTAssertEqual(t.aba(liveChave)?.conteudo, .board, "presença adota sempre, independente do julgamento")
+    }
+
+    // MARK: - Task 2 (abas globais, 12/08/2026): símbolo por tipo, Board nasce
+    // resolvido, máquina/arquivo julgáveis.
+    //
+    // Antes desta task, `dependeDeAlgoVivo` devolvia `false` para `.board`,
+    // `.maquina` e `.arquivado`, e ninguém resolvia o conteúdo delas: uma aba
+    // restaurada do disco nascia `.pendente` e girava `ProgressView` pra
+    // sempre. Board se resolve sozinho (não depende de nada do hub); máquina
+    // e arquivo passam a ter uma autoridade (o `AbasResolver`, Task 3), e é a
+    // disciplina do `julgando` que impede a ausência de matá-las antes do
+    // retrato dessa autoridade chegar.
+
+    func testAbaDeBoardRestauradaNasceResolvida() {
+        let salvas = [AbaPersistida(chave: .board, titulo: "Board", fixa: false)]
+        let t = OpenTabs.restaurando(salvas)
+        XCTAssertEqual(t.abas.first?.conteudo, .board,
+                       "Board não depende de nada do hub — nascer .pendente giraria ProgressView pra sempre")
+    }
+
+    func testAbaDeMaquinaRestauradaNascePendente() {
+        let salvas = [AbaPersistida(chave: .maquina("macmini"), titulo: "macmini", fixa: false)]
+        let t = OpenTabs.restaurando(salvas)
+        XCTAssertEqual(t.abas.first?.conteudo, .pendente,
+                       "máquina precisa da Machine de verdade (tema, ícone) — quem resolve é o AbasResolver")
+    }
+
+    func testMaquinaAusenteMorreSoQuandoOTipoEstaSendoJulgado() {
+        var t = OpenTabs.restaurando([
+            AbaPersistida(chave: .maquina("macmini"), titulo: "macmini", fixa: false)
+        ])
+        // Retrato só do registry: a aba de máquina NÃO pode morrer por ausência.
+        t.reconciliar(vivas: [:], julgando: [.chat])
+        XCTAssertEqual(t.abas.first?.conteudo, .pendente)
+
+        // Retrato das máquinas, e ela não está lá: agora sim.
+        t.reconciliar(vivas: [:], julgando: [.maquina])
+        XCTAssertEqual(t.abas.first?.conteudo, .morta)
+    }
+
+    func testAbaDeBoardNuncaMorrePorAusencia() {
+        var t = OpenTabs.restaurando([AbaPersistida(chave: .board, titulo: "Board", fixa: false)])
+        t.reconciliar(vivas: [:])   // padrão: julga TODOS os tipos
+        XCTAssertEqual(t.abas.first?.conteudo, .board,
+                       "Board é tela do hub, não pane: não há autoridade que possa dizer que ele não existe")
+    }
+
+    func testTodoTipoTemSimbolo() {
+        for tipo in TipoDeAba.allCases {
+            XCTAssertFalse(tipo.simbolo.isEmpty)
+        }
     }
 }
