@@ -105,6 +105,9 @@ type Discovered struct {
 	// State só é preenchido para panes vivos do tmux (TmuxList): "running"|
 	// "waiting"|"idle", lido do próprio terminal. Vazio para descobertas de disco.
 	State string `json:"state,omitempty"`
+	// Kind separa pane de agente de pane de shell puro ("agent"|"shell"). Vazio
+	// em tudo que não vem do tmux — o app trata vazio como "agent".
+	Kind string `json:"kind,omitempty"`
 }
 
 // IsEphemeralCwd diz se um cwd é um diretório INTERNO de app / cache / probe —
