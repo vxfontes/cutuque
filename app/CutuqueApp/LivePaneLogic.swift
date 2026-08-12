@@ -10,23 +10,6 @@ enum LivePaneLogic {
         entries.filter { !($0.machine == machine && $0.paneTarget.hasPrefix(socket + "\t")) }
     }
 
-    /// Nomes de server que aparecem em MAIS DE UMA máquina. O cabeçalho da
-    /// seção é o basename do socket, então "interconexao" no macbook e
-    /// "interconexao" no macmini davam dois cabeçalhos idênticos.
-    static func serversAmbiguos(_ grupos: [(machine: String, server: String)]) -> Set<String> {
-        var maquinasPorServer: [String: Set<String>] = [:]
-        for g in grupos {
-            maquinasPorServer[g.server, default: []].insert(g.machine)
-        }
-        return Set(maquinasPorServer.filter { $0.value.count > 1 }.keys)
-    }
-
-    /// A máquina só entra no rótulo quando ela é o que desempata — acrescentar
-    /// sempre viraria ruído nas listas de uma máquina só, que é o caso comum.
-    static func rotulo(server: String, machine: String, ambiguo: Bool) -> String {
-        ambiguo ? "\(server) · \(machine)" : server
-    }
-
     /// Socket (parte antes do TAB) do alvo composto de pane "<socket>\t<pane>".
     /// Alvo sem TAB (servidor default, ex.: "%3") não tem socket — devolve "",
     /// não o texto inteiro. Ajuste de 12/08/2026: o `split` sem separador
