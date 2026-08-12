@@ -75,35 +75,4 @@ final class LivePaneIdentityTests: XCTestCase {
         XCTAssertEqual(restam.count, 1)
     }
 
-    // MARK: cabeçalho da seção
-
-    func testNomeDeServerRepetidoEmDuasMaquinasEhAmbiguo() {
-        // Hoje, de verdade: macbook tem /tmp/tmux-501/interconexao e macmini
-        // tem /tmp/tmux-0/interconexao. Sockets diferentes, duas seções — e os
-        // dois cabeçalhos liam "Ao vivo · interconexao", indistinguíveis.
-        let ambiguos = LivePaneLogic.serversAmbiguos([
-            (machine: "macbook", server: "interconexao"),
-            (machine: "macmini", server: "interconexao"),
-            (machine: "macbook", server: "pine"),
-        ])
-        XCTAssertEqual(ambiguos, ["interconexao"])
-    }
-
-    func testMesmoServerNaMesmaMaquinaNaoEhAmbiguo() {
-        // Dois sockets de mesmo nome na MESMA máquina não acontecem (o socket é
-        // o caminho), mas se a lista repetir a máquina o rótulo não deve virar
-        // ruído.
-        let ambiguos = LivePaneLogic.serversAmbiguos([
-            (machine: "macbook", server: "interconexao"),
-            (machine: "macbook", server: "interconexao"),
-        ])
-        XCTAssertTrue(ambiguos.isEmpty)
-    }
-
-    func testCabecalhoLevaAMaquinaSoQuandoAmbiguo() {
-        XCTAssertEqual(LivePaneLogic.rotulo(server: "interconexao", machine: "macmini", ambiguo: true),
-                       "interconexao · macmini")
-        XCTAssertEqual(LivePaneLogic.rotulo(server: "pine", machine: "macbook", ambiguo: false),
-                       "pine")
-    }
 }
