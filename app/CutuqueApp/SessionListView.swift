@@ -69,8 +69,11 @@ final class SessionListViewModel: ObservableObject {
     /// flag acima.
     private(set) var temRetratoDosVivos = false
 
-    private let api = APIClient()
-    private let health = HealthClient()
+    private let api: SessionListAPI
+    /// Injetável por costura de API (12/08/2026): sem isso, um teste sem hub
+    /// esperaria o timeout do `URLSession` inteiro em `refresh()`, que dispara
+    /// `async let statusResult = checarSaude()` de todo jeito.
+    private let checarSaude: () async -> HealthStatus
     private var liveTask: Task<Void, Never>?
     private var livePollTask: Task<Void, Never>?
     // Resiliência do poll de vivas: cacheia as máquinas (falha de fetch não zera
@@ -86,11 +89,21 @@ final class SessionListViewModel: ObservableObject {
     private let haptics = UINotificationFeedbackGenerator()
     private var lastHapticAt: Date?
 
+    /// `api`/`checarSaude` têm valor padrão (o cliente/checagem de verdade) —
+    /// só os testes passam dublês (`SessionListRetratosTests`), pra travar o
+    /// instante exato em que `temRetratoDoRegistro`/`temRetratoDosVivos` ligam
+    /// sem esperar o hub de verdade (12/08/2026, costura de API).
+    init(api: SessionListAPI = APIClient(),
+         checarSaude: @escaping () async -> HealthStatus = { await HealthClient().check() }) {
+        self.api = api
+        self.checarSaude = checarSaude
+    }
+
     // MARK: Carga inicial e pull-to-refresh
 
     /// Recarrega a lista via REST e checa a saúde do hub.
     func refresh() async {
-        async let statusResult = health.check()
+        async let statusResult = checarSaude()
         do {
             sessions = sortedByRecent(try await api.sessions())
             temRetratoDoRegistro = true
