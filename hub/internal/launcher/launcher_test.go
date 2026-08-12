@@ -1104,8 +1104,13 @@ func (f *tmuxFakeTarget) Start(_ context.Context, _, _, _, _, _, _ string) (*cla
 }
 
 func (f *tmuxFakeTarget) TmuxList(_ context.Context) ([]claudecode.TmuxPane, error) { return nil, nil }
-func (f *tmuxFakeTarget) TmuxCapture(_ context.Context, _ string) (string, error)    { return "", nil }
-func (f *tmuxFakeTarget) TmuxSend(_ context.Context, _, _ string) error             { return nil }
+
+func (f *tmuxFakeTarget) TmuxNewSession(_ context.Context, _, _, _, _ string) (string, error) {
+	return "", nil
+}
+
+func (f *tmuxFakeTarget) TmuxCapture(_ context.Context, _ string) (string, error) { return "", nil }
+func (f *tmuxFakeTarget) TmuxSend(_ context.Context, _, _ string) error           { return nil }
 
 func (f *tmuxFakeTarget) TmuxKey(_ context.Context, target, key string) error {
 	f.gotTarget = target

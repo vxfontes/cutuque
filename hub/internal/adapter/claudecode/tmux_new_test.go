@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -89,5 +90,20 @@ func TestParseNovaSessao(t *testing.T) {
 	}
 	if _, err := parseNovaSessao([]byte("/tmp/tmux-501/x\tpane1")); err == nil {
 		t.Fatal("pane fora do formato %N: queria erro")
+	}
+}
+
+// Guarda de contrato: os dois targets satisfazem o Tmuxer com o método novo. Sem
+// isto, só o handler quebraria — e bem mais tarde.
+func TestTargetsImplementamTmuxNewSession(t *testing.T) {
+	var _ Tmuxer = (*SSHTarget)(nil)
+	var _ Tmuxer = (*LocalTarget)(nil)
+}
+
+// Nome inválido nem chega a virar comando: falha antes de qualquer I/O.
+func TestTmuxNewSessionValidaAntesDeExecutar(t *testing.T) {
+	var alvo LocalTarget
+	if _, err := alvo.TmuxNewSession(context.Background(), "grupo:ruim", "s", "/x", "claude"); err == nil {
+		t.Fatal("queria erro de validação")
 	}
 }

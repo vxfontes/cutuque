@@ -1,7 +1,9 @@
 package claudecode
 
 import (
+	"context"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"strings"
 )
@@ -94,4 +96,33 @@ func parseNovaSessao(out []byte) (string, error) {
 		return "", err
 	}
 	return target, nil
+}
+
+// TmuxNewSession cria (ou anexa, pelo -A) uma sessão no servidor do grupo e devolve
+// o alvo composto do pane. O grupo é o socket: `tmux -L <grupo>` cria o servidor na
+// hora, sem registro nenhum — é por isso que grupo novo não tem cerimônia (D13).
+func (t *SSHTarget) TmuxNewSession(ctx context.Context, group, session, cwd, agent string) (string, error) {
+	spec, err := validarNovaSessao(group, session, cwd, agent)
+	if err != nil {
+		return "", err
+	}
+	out, err := t.runSSHTmux(ctx, spec.sshInner())
+	if err != nil {
+		return "", err
+	}
+	return parseNovaSessao(out)
+}
+
+func (t *LocalTarget) TmuxNewSession(ctx context.Context, group, session, cwd, agent string) (string, error) {
+	spec, err := validarNovaSessao(group, session, cwd, agent)
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.CommandContext(ctx, "tmux", spec.localArgs()...)
+	cmd.Env = childEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return parseNovaSessao(out)
 }
