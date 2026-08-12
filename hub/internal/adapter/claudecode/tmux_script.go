@@ -20,12 +20,30 @@ package claudecode
 // 'running' para sempre. Não afrouxe — há teste para isso.
 const tmuxStateFuncs = `import re
 work_re=re.compile(r'\((?:\d+m )?\d+s')
+# Marcadores por agente, calibrados por captura de tela em 12/08/2026
+# (claude 2.1.228 · codex 0.147.0 · opencode 1.18.16). Agente novo = linha nova.
+# 'timer' liga a regra do work_re (parêntese + Ns), que é o sinal mais forte de
+# "trabalhando agora" nas TUIs que mostram spinner com cronômetro.
+MARKERS={
+ 'claude':{'timer':True,
+           'running':['esc to interrupt','agent to finish','agents to finish'],
+           'waiting':['do you want to proceed','do you want to make this edit']},
+ 'codex':{'timer':True,
+          'running':['esc to interrupt'],
+          'waiting':[]},
+ 'opencode':{'timer':False,
+             'running':['esc interrupt'],
+             'waiting':[]},
+}
 def classify(txt,agent):
+    m=MARKERS.get(agent)
+    if not m: return ''
     low=txt.lower()
-    if work_re.search(txt) or 'esc to interrupt' in low or 'agent to finish' in low or 'agents to finish' in low:
-        return 'running'
-    if 'do you want to proceed' in low or 'do you want to make this edit' in low:
-        return 'waiting'
+    if m['timer'] and work_re.search(txt): return 'running'
+    for s in m['running']:
+        if s in low: return 'running'
+    for s in m['waiting']:
+        if s in low: return 'waiting'
     return 'idle'
 `
 
