@@ -131,4 +131,46 @@ struct OpenTabs: Equatable {
         if chave == selecionada { return .ativo }
         return vivas.contains(chave) ? .suspenso : .liberado
     }
+
+    // MARK: fixar, fechar, fechar outras, fechar todas (G3)
+
+    mutating func fixar(_ chave: ChaveDeAba) {
+        guard let i = abas.firstIndex(where: { $0.chave == chave }) else { return }
+        abas[i].fixa = true
+        abas[i].estilo = .normal
+    }
+
+    mutating func desafixar(_ chave: ChaveDeAba) {
+        guard let i = abas.firstIndex(where: { $0.chave == chave }) else { return }
+        abas[i].fixa = false
+    }
+
+    mutating func fechar(_ chave: ChaveDeAba) {
+        guard let i = abas.firstIndex(where: { $0.chave == chave }) else { return }
+        let eraAEscolhida = selecionada == chave
+        abas.remove(at: i)
+        guard eraAEscolhida else { return }
+        // Vizinha da esquerda; sem esquerda, a da direita; sem nenhuma, nada
+        // escolhido (painel vazio é estado legítimo).
+        let vizinha = i > 0 ? abas[i - 1] : (i < abas.count ? abas[i] : nil)
+        if let vizinha {
+            selecionar(vizinha.chave)
+        } else {
+            selecionada = nil
+        }
+    }
+
+    mutating func fecharOutras(_ chave: ChaveDeAba) {
+        abas.removeAll { $0.chave != chave && !$0.fixa }
+        if abas.contains(where: { $0.chave == chave }) { selecionar(chave) }
+    }
+
+    mutating func fecharTodas() {
+        abas.removeAll { !$0.fixa }
+        if let primeira = abas.first {
+            selecionar(primeira.chave)
+        } else {
+            selecionada = nil
+        }
+    }
 }

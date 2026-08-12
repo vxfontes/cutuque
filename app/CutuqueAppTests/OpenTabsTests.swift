@@ -129,4 +129,97 @@ final class OpenTabsTests: XCTestCase {
         let t = OpenTabs()
         XCTAssertEqual(t.estado(de: a), .liberado)
     }
+
+    // MARK: - G3: fixar, fechar, fechar outras, fechar todas
+
+    /// Fixar protege de fechar, NÃO de dormir. São eixos diferentes de propósito:
+    /// dormir é custo de tmux (largura + poll), fixar é intenção de navegação.
+    /// Quem "melhorar" isto acordando as fixas fura o teto de 6.
+    func testFixarNaoImpedeDeDormir() {
+        var t = OpenTabs()
+        let chaves = (1...7).map { ChaveDeAba(tipo: .live, machine: "macbook", alvo: "/s\t%\($0)") }
+        for c in chaves { t.abrir(chave: c, titulo: c.alvo, conteudo: .pendente, estilo: .normal) }
+        t.fixar(chaves[0])
+        XCTAssertEqual(t.estado(de: chaves[0]), .liberado)
+    }
+
+    func testFecharEscolheAVizinhaDaEsquerda() {
+        var t = OpenTabs()
+        let c = (1...3).map { ChaveDeAba(tipo: .live, machine: "m", alvo: "/s\t%\($0)") }
+        for k in c { t.abrir(chave: k, titulo: k.alvo, conteudo: .pendente, estilo: .normal) }
+        t.selecionar(c[1])
+        t.fechar(c[1])
+        XCTAssertEqual(t.abas.map(\.chave), [c[0], c[2]])
+        XCTAssertEqual(t.selecionada, c[0], "a vizinha da esquerda; sem esquerda, a da direita")
+    }
+
+    func testFecharAPrimeiraEscolheADireita() {
+        var t = OpenTabs()
+        let c = (1...2).map { ChaveDeAba(tipo: .live, machine: "m", alvo: "/s\t%\($0)") }
+        for k in c { t.abrir(chave: k, titulo: k.alvo, conteudo: .pendente, estilo: .normal) }
+        t.selecionar(c[0])
+        t.fechar(c[0])
+        XCTAssertEqual(t.selecionada, c[1])
+    }
+
+    func testFecharUmaQueNaoEstaEmFocoNaoMudaOFoco() {
+        var t = OpenTabs()
+        let c = (1...2).map { ChaveDeAba(tipo: .live, machine: "m", alvo: "/s\t%\($0)") }
+        for k in c { t.abrir(chave: k, titulo: k.alvo, conteudo: .pendente, estilo: .normal) }
+        t.selecionar(c[1])
+        t.fechar(c[0])
+        XCTAssertEqual(t.selecionada, c[1])
+    }
+
+    /// D2: fechar a última é permitido e deixa o painel vazio — o estado sem
+    /// nenhuma aba é legítimo, não um caso de erro. Quem "consertar" isso
+    /// recusando o fechamento tira da Vanessa a única forma de zerar a tela.
+    func testFecharAUltimaDeixaNadaSelecionado() {
+        var t = OpenTabs()
+        t.abrir(chave: a, titulo: "mike", conteudo: .pendente, estilo: .normal)
+        t.fechar(a)
+        XCTAssertTrue(t.abas.isEmpty)
+        XCTAssertNil(t.selecionada)
+    }
+
+    func testFecharOutrasPoupaAFixaEAPropria() {
+        var t = OpenTabs()
+        let c = (1...4).map { ChaveDeAba(tipo: .live, machine: "m", alvo: "/s\t%\($0)") }
+        for k in c { t.abrir(chave: k, titulo: k.alvo, conteudo: .pendente, estilo: .normal) }
+        t.fixar(c[0])
+        t.fecharOutras(c[2])
+        XCTAssertEqual(Set(t.abas.map(\.chave)), Set([c[0], c[2]]))
+        XCTAssertEqual(t.selecionada, c[2])
+    }
+
+    func testFecharTodasPoupaAsFixasEEscolheAPrimeiraQueSobrou() {
+        var t = OpenTabs()
+        let c = (1...3).map { ChaveDeAba(tipo: .live, machine: "m", alvo: "/s\t%\($0)") }
+        for k in c { t.abrir(chave: k, titulo: k.alvo, conteudo: .pendente, estilo: .normal) }
+        t.fixar(c[1])
+        t.fecharTodas()
+        XCTAssertEqual(t.abas.map(\.chave), [c[1]])
+        XCTAssertEqual(t.selecionada, c[1])
+    }
+
+    func testFecharTodasSemNenhumaFixaZeraTudo() {
+        var t = OpenTabs()
+        t.abrir(chave: a, titulo: "mike", conteudo: .pendente, estilo: .normal)
+        t.fecharTodas()
+        XCTAssertTrue(t.abas.isEmpty)
+        XCTAssertNil(t.selecionada)
+    }
+
+    /// Fixar uma aba de passagem também a promove: senão a próxima coisa aberta
+    /// substituiria a aba que a Vanessa acabou de mandar ficar.
+    func testFixarPromoveAAbaDePassagem() {
+        var t = OpenTabs()
+        t.abrir(chave: a, titulo: "mike", conteudo: .pendente)
+        t.fixar(a)
+        XCTAssertEqual(t.abas[0].estilo, .normal)
+        XCTAssertTrue(t.abas[0].fixa)
+
+        t.abrir(chave: b, titulo: "aux", conteudo: .pendente)
+        XCTAssertEqual(t.abas.count, 2)
+    }
 }
