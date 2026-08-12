@@ -51,6 +51,24 @@ final class SessionListViewModel: ObservableObject {
     /// então "brotar" sessões.
     @Published var didInitialLoad = false
 
+    /// Retrato COMPLETO do registry já chegou pelo menos uma vez — REST
+    /// completo em `refresh()` ou snapshot completo do WebSocket. Upsert/
+    /// remoção de UMA sessão (`upsert`, `sessionRemoved`) NÃO liga isto: não é
+    /// retrato completo, é uma sessão só. Uma vez true, nunca volta a false
+    /// (12/08/2026 — ver `reconciliarAbas` na `SessionListView`: substitui a
+    /// guarda antiga de "as duas listas vieram vazias", que era proxy furado
+    /// pra "ainda não carreguei nada" — achados críticos #A e #B da revisão
+    /// adversarial).
+    private(set) var temRetratoDoRegistro = false
+
+    /// Retrato COMPLETO dos panes ao vivo já chegou pelo menos uma vez —
+    /// ligado só no ponto em que `refreshLive()` de fato atribui
+    /// `liveSessions`, depois dos dois `return` antecipados que NÃO são
+    /// retrato (sem máquina pra consultar; hiccup de SSH com sessões antigas
+    /// cacheadas). Uma vez true, nunca volta a false. Mesma data/motivo do
+    /// flag acima.
+    private(set) var temRetratoDosVivos = false
+
     private let api = APIClient()
     private let health = HealthClient()
     private var liveTask: Task<Void, Never>?
@@ -75,6 +93,7 @@ final class SessionListViewModel: ObservableObject {
         async let statusResult = health.check()
         do {
             sessions = sortedByRecent(try await api.sessions())
+            temRetratoDoRegistro = true
         } catch {
             // Falha na REST não derruba a UI; o indicador de saúde reflete o estado do hub.
         }
@@ -100,6 +119,7 @@ final class SessionListViewModel: ObservableObject {
                     withAnimation(.snappy) {
                         self.sessions = self.sortedByRecent(all)
                     }
+                    self.temRetratoDoRegistro = true
                 case .sessionUpdated(let session):
                     // Upsert: substitui a existente ou insere a nova.
                     self.upsert(session)
@@ -167,6 +187,11 @@ final class SessionListViewModel: ObservableObject {
         } else {
             emptyLiveStreak = 0
         }
+
+        // Retrato completo dos vivos: só chega até aqui depois dos dois `return`
+        // acima (sem máquina pra consultar; hiccup de SSH com cache antigo), então
+        // os dois casos que NÃO são retrato já saíram antes desta linha.
+        temRetratoDosVivos = true
 
         // Só re-anima quando o CONJUNTO de panes muda; mudança só de estado (cor)
         // aplica sem animar a lista inteira → menos piscada.
@@ -810,17 +835,35 @@ struct SessionListView: View {
     /// sem remontar nada.
     private func reconciliarAbas(with entries: [LiveEntry]) {
         guard isEmbedded else { return }
-        // Guarda de 1ª carga (12/08/2026): antes do 1º `refresh()` (REST) e do
-        // 1º poll de vivas chegarem, as duas listas estão vazias. Reconciliar
-        // aqui destruiria uma aba viva RESTAURADA DO DISCO (que nasce
-        // `.pendente`, ver D2 em OpenTabs.swift) por AUSÊNCIA — mas ausência
-        // antes de qualquer carga é "ainda não sei", não "morreu". Isto não é
-        // sobre um hiccup de rede: `model.sessions` só é escrito dentro do
-        // `try await` de `refresh()`, então uma falha de rede não zera a
-        // lista — esta guarda cobre só a largada a frio.
-        guard !(entries.isEmpty && model.sessions.isEmpty) else { return }
+        // Quais tipos de aba o app JÁ TEM RETRATO pra julgar agora (12/08/2026
+        // — substitui a guarda antiga de "as duas listas vieram vazias", que
+        // era proxy furado pra "ainda não carreguei nada" — críticos #A e #B
+        // da revisão adversarial). A guarda antiga deixava passar a
+        // reconciliação assim que SÓ o REST completava (sessions não vazio) e
+        // o poll de vivas ainda não tinha rodado, matando toda aba `.live`
+        // restaurada do disco — inclusive um terminal tmux DE VERDADE, vivo
+        // no hub (#A); e num hub usado só com terminais tmux avulsos, sem
+        // sessão nenhuma de registry, as duas listas ficam legitimamente
+        // vazias em regime estacionário, e por esse proxy a reconciliação
+        // desligaria PARA SEMPRE (#B). Os flags reais do model (ligados só
+        // quando um retrato COMPLETO da fonte correspondente chega) resolvem
+        // os dois: cada fonte só julga o tipo de aba que ela alimenta, e só
+        // depois de ter respondido pelo menos uma vez.
+        var tipos: Set<TipoDeAba> = []
+        if model.temRetratoDoRegistro { tipos.insert(.chat) }
+        if model.temRetratoDosVivos { tipos.insert(.live) }
+        guard !tipos.isEmpty else { return }
+
         let vivasPorChave = SessionNavigationLogic.vivasPorChave(live: entries, sessions: model.sessions)
-        tabsStore.mutar { $0.reconciliar(vivas: vivasPorChave) }
+        // Calcula numa CÓPIA e só grava se algo realmente mudou: os dois
+        // `onChange` (sessions/liveSessions) chamam isto a cada atualização,
+        // mas a reconciliação normalmente não altera nenhuma aba — sem este
+        // guard, `mutar` escreveria no UserDefaults a cada poll de ~15s pra
+        // nada (achado menor da revisão adversarial, 12/08/2026).
+        var candidato = tabsStore.tabs
+        candidato.reconciliar(vivas: vivasPorChave, julgando: tipos)
+        guard candidato != tabsStore.tabs else { return }
+        tabsStore.mutar { $0 = candidato }
     }
 
     // MARK: Subviews
