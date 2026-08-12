@@ -74,12 +74,22 @@ struct MarkdownText: View {
     private func codeCard(lang: String, code: String) -> some View {
         let isDiff = Self.looksLikeDiff(lang: lang, code: code)
         VStack(alignment: .leading, spacing: 0) {
-            if !lang.isEmpty || isDiff {
-                Text(isDiff ? "diff" : lang.lowercased())
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 10).padding(.top, 6)
+            // [12/08/2026] A barra passa a existir sempre que há bloco de
+            // código; o que é opcional é o RÓTULO da linguagem. Antes a barra
+            // inteira dependia de `lang` estar preenchido, e era justamente o
+            // bloco cercado sem linguagem — o mais comum na saída do agente —
+            // que ficava sem lugar para o botão de copiar.
+            HStack(spacing: 6) {
+                if !lang.isEmpty || isDiff {
+                    Text(isDiff ? "diff" : lang.lowercased())
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                BotaoDeCopiar(texto: code)
+                    .font(.caption)
             }
+            .padding(.horizontal, 10).padding(.top, 6)
             ScrollView(.horizontal, showsIndicators: false) {
                 if isDiff {
                     diffBody(code)
