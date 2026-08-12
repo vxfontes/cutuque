@@ -30,6 +30,9 @@ struct PTYTerminalView: UIViewRepresentable {
     /// usuária pediu tema por MÁQUINA aqui, não migração do espelho antigo.
     var themeID: String
     var fontSize: CGFloat
+    /// Ponte de leitura para a toolbar copiar o que está na tela. Opcional
+    /// porque quem só desenha o terminal não precisa dela.
+    var texto: TerminalTexto? = nil
 
     func makeUIView(context: Context) -> TerminalView {
         let view = TerminalView(frame: .zero, font: UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular))
@@ -46,12 +49,14 @@ struct PTYTerminalView: UIViewRepresentable {
             view?.feed(byteArray: bytes)
         }
         context.coordinator.session = session
+        texto?.view = view
         return view
     }
 
     func updateUIView(_ view: TerminalView, context: Context) {
         context.coordinator.session = session
         context.coordinator.isActive = isActive
+        context.coordinator.texto = texto
 
         if view.font.pointSize != fontSize {
             view.font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
@@ -83,6 +88,9 @@ struct PTYTerminalView: UIViewRepresentable {
         // Corta o cano antes de a view sumir: um `feed` numa view em
         // desmontagem não tem para onde desenhar.
         coordinator.session?.aoReceber = { _ in }
+        // A ponte é `weak`, mas zerar aqui é explícito: ninguém lê uma view em
+        // desmontagem.
+        coordinator.texto?.view = nil
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -116,6 +124,10 @@ struct PTYTerminalView: UIViewRepresentable {
         /// guardar aqui é a única forma de saber se o tema mudou. `nil` = nada
         /// instalado ainda (não `""`, que é um tema de verdade, o Padrão).
         @MainActor var temaAplicado: String?
+        /// A mesma ponte recebida pela struct, guardada aqui pelo mesmo motivo
+        /// do `temaAplicado`: a struct é recriada a cada atualização, o
+        /// coordinator não.
+        @MainActor var texto: TerminalTexto?
 
         /// O emulador mediu quantas células cabem. É a ÚNICA fonte do tamanho:
         /// quem desenha é quem sabe.
@@ -158,5 +170,58 @@ struct PTYTerminalView: UIViewRepresentable {
             else { return }
             MainActor.assumeIsolated { UIApplication.shared.open(url) }
         }
+    }
+}
+
+/// Quais linhas do buffer estão na tela. Separada da ponte porque é a única
+/// parte disto que se testa sem um `TerminalView` de verdade — e é onde o erro
+/// de 1 mora. Sem clamp de propósito: quem apara `base` ao tamanho real do
+/// buffer é o `Terminal.getSelectedLines` do SwiftTerm, e `Buffer.lines` é
+/// internal (o app não tem como contar as linhas).
+enum JanelaVisivel {
+    static func linhas(yDisp: Int, rows: Int) -> (topo: Int, base: Int)? {
+        guard rows > 0 else { return nil }
+        return (topo: yDisp, base: yDisp + rows - 1)
+    }
+}
+
+/// Deixa o SwiftUI LER o terminal sem virar dono dele.
+///
+/// Existe porque no iOS o caminho de copiar do próprio SwiftTerm não chega na
+/// usuária: `allowMouseReporting` nasce `true` e os guardas de mouse-reporting
+/// desviam o gesto para o programa que roda dentro (`iOSTerminalView.swift:800,
+/// 851, 876, 972`), e o menu usa `UIMenuController`, depreciado desde o iOS 16
+/// (`iOSTerminalView.swift:629`). Em vez de mexer nesses dois — mouse dentro do
+/// ssh é útil, e brigar com o menu do sistema é areia demais — o app lê o texto
+/// por fora e oferece copiar na SUA toolbar.
+///
+/// `weak` não é detalhe: a ponte não pode manter o `TerminalView` vivo depois do
+/// `dismantleUIView`. Com a aba montada para sempre (decisão #19), uma
+/// referência forte aqui seria vazamento por aba aberta.
+@MainActor
+final class TerminalTexto {
+    weak var view: TerminalView?
+
+    /// A tela visível como texto. Só a tela — sem scrollback, por decisão da
+    /// usuária (não mexe no hub).
+    func telaVisivel() -> String {
+        guard let view else { return "" }
+        let terminal = view.getTerminal()
+        guard let janela = JanelaVisivel.linhas(yDisp: terminal.buffer.yDisp,
+                                               rows: terminal.rows) else { return "" }
+        // `cols` e não `cols - 1`: o endCol do SwiftTerm é EXCLUSIVO e já apara
+        // à direita (BufferLine.swift:502-511). Com `cols - 1` a última coluna
+        // de uma linha cheia sumiria — é o erro que o `selectAll` da própria
+        // lib comete.
+        return terminal.getText(start: Position(col: 0, row: janela.topo),
+                                end: Position(col: terminal.cols, row: janela.base))
+    }
+
+    /// O que a usuária selecionou dentro do SwiftTerm, quando ela conseguiu.
+    /// Às vezes o gesto passa; quando passa, respeitar é melhor que ignorar.
+    func selecionado() -> String? {
+        guard let view, view.selection.active else { return nil }
+        let texto = view.selection.getSelectedText()
+        return texto.isEmpty ? nil : texto
     }
 }

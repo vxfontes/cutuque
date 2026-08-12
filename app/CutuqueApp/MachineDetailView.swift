@@ -41,6 +41,11 @@ struct MachineDetailView: View {
     private struct SheetInfo: Identifiable { let id = "info" }
     @State private var sheetInfo: SheetInfo?
 
+    /// Ponte de leitura do terminal. `@State` e não `@StateObject`: não é
+    /// observável, é só um jeito de a toolbar alcançar o `TerminalView`.
+    @State private var textoDoTerminal = TerminalTexto()
+    @State private var folhaDoTerminal: TextoIdentificavelDaMaquina?
+
     /// Tema É por máquina agora (pedido da usuária) — não mais preferência
     /// global. `""`/ausente cai no Padrão dentro do próprio `TerminalPalette`.
     private var paleta: TerminalPalette { TerminalPalette.byID(tema) }
@@ -92,6 +97,27 @@ struct MachineDetailView: View {
             ToolbarItem(placement: .navigationBarLeading) { identidadeENavigationBarLeading }
             ToolbarItem(placement: .principal) { seletor }
             ToolbarItem(placement: .navigationBarTrailing) {
+                // Só quando o painel do terminal está à frente — no painel de
+                // arquivos não há tela para copiar.
+                if showsTerminal {
+                    Menu {
+                        Button {
+                            AreaDeTransferencia.copiar(textoParaCopiar())
+                        } label: {
+                            Label("Copiar tela", systemImage: "doc.on.doc")
+                        }
+                        Button {
+                            folhaDoTerminal = TextoIdentificavelDaMaquina(textoParaCopiar())
+                        } label: {
+                            Label("Selecionar texto…", systemImage: "selection.pin.in.out")
+                        }
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                    }
+                    .accessibilityLabel("Copiar conteúdo da tela")
+                }
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
                 Button { sheetInfo = SheetInfo() } label: {
                     Image(systemName: "paintpalette")
                 }
@@ -105,6 +131,10 @@ struct MachineDetailView: View {
                 // `@State tema`).
                 NotificationCenter.default.post(name: .maquinasMudaram, object: nil)
             }
+        }
+        .sheet(item: $folhaDoTerminal) { pedida in
+            FolhaDeTexto(titulo: "Tela de \(machine.name)", texto: pedida.texto,
+                         monoespacado: true)
         }
         // [Reescrito em 12/08/2026 — abas globais] Empilhar uma subpasta chama
         // o `onDisappear` DESTA view — isso continua valendo, e é o que faz o
@@ -175,7 +205,8 @@ struct MachineDetailView: View {
             paleta.backgroundColor.ignoresSafeArea(edges: .bottom)
 
             PTYTerminalView(session: session, isActive: terminalAtivo,
-                            themeID: tema, fontSize: fontPt)
+                            themeID: tema, fontSize: fontPt,
+                            texto: textoDoTerminal)
                 // O teclado do sistema sobe por cima; sem isto ele cobriria as
                 // últimas linhas em vez de empurrá-las.
                 .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -223,4 +254,19 @@ struct MachineDetailView: View {
         session.abre()
         reconectando = false
     }
+
+    /// O retrato do que copiar, NO INSTANTE do toque: a seleção da usuária se
+    /// ela conseguiu fazer uma, senão a tela visível.
+    private func textoParaCopiar() -> String {
+        TextoParaCopiar.doTerminal(selecionado: textoDoTerminal.selecionado(),
+                                   tela: textoDoTerminal.telaVisivel())
+    }
+}
+
+/// Embrulho para `.sheet(item:)` com um texto solto — `String` não é
+/// `Identifiable`, e o que a folha precisa é o RETRATO, não o binding.
+private struct TextoIdentificavelDaMaquina: Identifiable {
+    let id = UUID()
+    let texto: String
+    init(_ texto: String) { self.texto = texto }
 }
