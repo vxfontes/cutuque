@@ -238,6 +238,25 @@ struct TerminalMirrorView: View {
         TerminalResizeKey.chave(cols: grid?.cols, rows: grid?.rows, estado: paneState)
     }
 
+    /// A tela do espelho como texto colável, NO INSTANTE da leitura.
+    ///
+    /// É por isso que copiar funciona aqui: `model.screen` é `@Published` e
+    /// chega do WebSocket a cada atualização de tela, então a seleção nativa
+    /// morre a cada quadro (e o auto-scroll animado do `.onChange` interrompe o
+    /// gesto). Uma `String` copiada agora não muda mais, aconteça o que
+    /// acontecer atrás dela.
+    private var telaColavel: String {
+        TextoParaCopiar.aparado(Ansi.plain(model.screen))
+    }
+
+    /// Retrato congelado pedido pela usuária.
+    ///
+    /// Guarda o embrulho, e NÃO uma `String?` mapeada no `body`: `.map` no
+    /// binding criaria um `id` novo a cada avaliação do `body` — e como o
+    /// `model.screen` republica sem parar, o `.sheet(item:)` acharia que o item
+    /// mudou a cada quadro e ficaria reapresentando a folha em laço.
+    @State private var folhaDaTela: TextoIdentificavel?
+
     init(machine: String, target: String, title: String, paneState: TerminalPaneState = .ativo,
          ownsNavigationTitle: Bool = true) {
         self.machine = machine
@@ -315,6 +334,7 @@ struct TerminalMirrorView: View {
         .toolbar {
             if paneState == .ativo {
                 ToolbarItem(placement: .topBarTrailing) { themeMenu }
+                ToolbarItem(placement: .topBarTrailing) { menuDeCopiar }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(role: .destructive) {
                         confirmingKill = true
@@ -361,6 +381,9 @@ struct TerminalMirrorView: View {
             isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } }),
             presenting: model.errorMessage
         ) { _ in Button("OK", role: .cancel) {} } message: { Text($0) }
+        .sheet(item: $folhaDaTela) { pedida in
+            FolhaDeTexto(titulo: "Tela do terminal", texto: pedida.texto, monoespacado: true)
+        }
     }
 
     // MARK: Toolbar
@@ -373,6 +396,29 @@ struct TerminalMirrorView: View {
         } label: {
             Image(systemName: "paintpalette")
         }
+    }
+
+    /// Copiar a tela do espelho: a coisa inteira em um toque, ou a folha
+    /// congelada para selecionar um trecho. Item PRÓPRIO na toolbar (ícone
+    /// `doc.on.doc`) — dentro do `themeMenu` (ícone de paleta) a usuária não
+    /// acharia.
+    private var menuDeCopiar: some View {
+        Menu {
+            Button {
+                AreaDeTransferencia.copiar(telaColavel)
+            } label: {
+                Label("Copiar tela", systemImage: "doc.on.doc")
+            }
+            Button {
+                folhaDaTela = TextoIdentificavel(telaColavel)
+            } label: {
+                Label("Selecionar texto…", systemImage: "selection.pin.in.out")
+            }
+        } label: {
+            Image(systemName: "doc.on.doc")
+        }
+        .disabled(telaColavel.isEmpty)
+        .accessibilityLabel("Copiar conteúdo da tela")
     }
 
     // MARK: Terminal
@@ -676,4 +722,12 @@ struct LiveInfoList: View {
             }
         }
     }
+}
+
+/// Embrulho para `.sheet(item:)` com um texto solto. Existe porque `String` não
+/// é `Identifiable` e porque o que a folha precisa é o RETRATO, não o binding.
+private struct TextoIdentificavel: Identifiable {
+    let id = UUID()
+    let texto: String
+    init(_ texto: String) { self.texto = texto }
 }
