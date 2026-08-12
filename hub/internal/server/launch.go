@@ -45,6 +45,7 @@ type Launcher interface {
 	TmuxResize(machine, target string, cols, rows int) error
 	TmuxKill(machine, target string) error
 	TmuxKillServer(machine, socket string) error
+	TmuxNewSession(machine, group, sess, cwd, agent string) (string, error)
 }
 
 // tmuxKeyRequest é o corpo de POST /machines/{machine}/tmux/key.
@@ -168,6 +169,41 @@ func TmuxKillServerHandler(lch Launcher) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadGateway, "tmux_failed")
 		default:
 			writeOK(w)
+		}
+	}
+}
+
+// tmuxNewSessionRequest é o corpo de POST /machines/{machine}/tmux/new. group é o
+// servidor tmux (-L) e também o escopo do board; agent é um de
+// claude|codex|opencode|terminal ("terminal" = shell puro, D8).
+type tmuxNewSessionRequest struct {
+	Group   string `json:"group"`
+	Session string `json:"session"`
+	Cwd     string `json:"cwd"`
+	Agent   string `json:"agent"`
+}
+
+// TmuxNewSessionHandler cria uma sessão tmux na máquina e devolve o alvo do pane.
+// POST {"group","session","cwd","agent"} → 200 {"target"} | 400 | 404 | 502.
+// Sessão que já existe NÃO é erro: o -A anexa e o app abre a aba nela.
+func TmuxNewSessionHandler(lch Launcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		machine := r.PathValue("machine")
+		r.Body = http.MaxBytesReader(w, r.Body, maxLaunchBody)
+		var req tmuxNewSessionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil ||
+			req.Group == "" || req.Session == "" || req.Cwd == "" || req.Agent == "" {
+			writeJSONError(w, http.StatusBadRequest, "bad_request")
+			return
+		}
+		target, err := lch.TmuxNewSession(machine, req.Group, req.Session, req.Cwd, req.Agent)
+		switch {
+		case errors.Is(err, launcher.ErrUnknownMachine):
+			writeJSONError(w, http.StatusNotFound, "unknown_machine")
+		case err != nil:
+			writeJSONError(w, http.StatusBadGateway, "tmux_failed")
+		default:
+			writeJSONResp(w, http.StatusOK, map[string]string{"target": target})
 		}
 	}
 }
