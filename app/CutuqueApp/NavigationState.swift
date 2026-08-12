@@ -222,20 +222,19 @@ final class NavigationState: ObservableObject {
     /// O ⤡ (e o ⌘⌃F): alterna entre tela cheia e o estado "aberto" do destino
     /// corrente.
     ///
-    /// O estado aberto NÃO é `.all` em todo destino:
+    /// O estado aberto NÃO é `.all` em nenhum destino que tenha painel de
+    /// detalhe:
     ///
     /// - no **Board** é `.doubleColumn`. Ali a lista de destinos vive na coluna
     ///   do MEIO (ver `RootSplitView.contentColumn`), então `.all` mostraria a
     ///   sidebar e a lista lado a lado: a mesma lista duas vezes, e o board
     ///   espremido numa terceira coluna.
-    /// - em **Sessões em retrato** também é `.doubleColumn`. Três colunas na
-    ///   largura de um iPad em pé deixariam o terminal com um filete, e é
-    ///   justamente o oposto do que o ⤡ existe pra fazer. Duas colunas ali são
-    ///   "sessões | terminal", com a sidebar atrás do ☰.
-    ///
-    /// A orientação vem de `lastIsPortrait`, gravada por `applyLayoutRule` —
-    /// esta função não recebe geometria porque quem a chama (o ⤡ do painel, o
-    /// atalho ⌘⌃F na cena `Commands`) não tem nenhuma pra dar.
+    /// - em **Sessões e Máquinas** também é `.doubleColumn`, em QUALQUER
+    ///   orientação (D4, 12/08/2026 — antes só valia em retrato; ver
+    ///   `expandedVisibility`). Três colunas deixariam o terminal com um
+    ///   filete e é justamente o oposto do que o ⤡ existe pra fazer. Duas
+    ///   colunas ali são "sessões/máquinas | painel", com a sidebar unificada
+    ///   atrás do ☰.
     func toggleColumns() {
         guard columnVisibility == .detailOnly else {
             columnVisibility = .detailOnly
@@ -250,11 +249,14 @@ final class NavigationState: ObservableObject {
         case .board:
             return .doubleColumn
         case .sessions, .machines:
-            // Máquinas segue as Sessões: em retrato, "aberto" são duas colunas
-            // (lista de hosts | painéis) com a sidebar atrás do ☰. Três num
-            // iPad em pé devolveriam o terminal-filete que o ⤡ existe pra
-            // desfazer.
-            return lastIsPortrait ? .doubleColumn : .all
+            // D4 (12/08/2026): "aberto" é SEMPRE duas colunas aqui, em
+            // qualquer orientação — não depende mais de `lastIsPortrait`.
+            // Antes, paisagem devolvia `.all` (três colunas) e a coluna do
+            // meio comia a largura que o terminal/painel de máquina
+            // precisava; virou dispensável quando a barra de abas passou a
+            // dar a navegação dentro do detalhe, então a sidebar unificada
+            // fica sempre atrás do ☰ e "aberto" é "lista | painel".
+            return .doubleColumn
         case .archive:
             return .all
         }
@@ -273,10 +275,14 @@ final class NavigationState: ObservableObject {
     }
 
     /// Última orientação vista por `applyLayoutRule` — a única memória de
-    /// geometria desta classe, e existe só pro `toggleColumns()` saber o que é
-    /// "aberto" aqui (ver `expandedVisibility`). Não é `@Published`: ninguém
-    /// desenha a partir dela, e publicá-la faria toda rotação invalidar a
-    /// árvore inteira à toa.
+    /// geometria desta classe. Não é `@Published`: ninguém desenha a partir
+    /// dela, e publicá-la faria toda rotação invalidar a árvore inteira à toa.
+    ///
+    /// D4 (12/08/2026): desde que `expandedVisibility` parou de olhar
+    /// orientação nas Sessões/Máquinas, este campo ficou sem nenhum leitor —
+    /// só é escrito. Mantido aqui (não removido) porque não é o assunto desta
+    /// task e apagar campo de estado não é decisão de uma task que só devia
+    /// mudar uma função; sinalizado como candidato a remoção numa limpeza.
     ///
     /// Começa em `false` (paisagem) e é escrita antes de qualquer toque na tela
     /// — `RootSplitView` mede com `initial: true`, então a primeira medição
