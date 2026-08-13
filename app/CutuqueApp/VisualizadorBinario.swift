@@ -48,6 +48,19 @@ struct VisualizadorBinario: View {
     }
 
     @State private var estado: Estado
+    /// A Task dos botões "Baixar assim mesmo" e "Tentar de novo" — únicos
+    /// disparos de `baixar()` que NÃO nascem dentro do `.task(id: abaAtiva)`.
+    /// 12/08/2026 (achado grave nº2 da revisão adversarial da Task B): sem
+    /// isto, esses dois botões criavam `Task { await baixar() }` solta, sem
+    /// vínculo nenhum com o ciclo de vida da aba — trocar de aba não
+    /// cancelava o download, só resetava `estado`. Um arquivo de 500 MB
+    /// baixado pelo botão terminava em segundo plano, fora de foco, e o
+    /// `body` reagia à mudança de `@State` montando o `QuickLookView` atrás
+    /// da aba errada — exatamente o "vídeo tocando invisível" que a decisão
+    /// #19 existe para evitar, só que reintroduzido para os arquivos GRANDES
+    /// (os que mais importam). Guardar a Task aqui permite `desmontar()`
+    /// cancelá-la de verdade.
+    @State private var tarefaManual: Task<Void, Never>?
     private let api = APIClient()
 
     init(machine: String, entry: FileEntry, content: FileContent, abaAtiva: Bool,
@@ -105,7 +118,11 @@ struct VisualizadorBinario: View {
             Text("\(content.unreadableReason ?? "") (\(entry.sizeLabel)) — acima do teto de baixar sozinho.")
         } actions: {
             Button("Baixar assim mesmo (\(entry.sizeLabel))") {
-                Task { await baixar() }
+                // `tarefaManual`, não `Task { }` solta — ver o comentário do
+                // `@State` acima (achado nº2). `desmontar()` precisa conseguir
+                // cancelar isto quando a aba sai de foco.
+                tarefaManual?.cancel()
+                tarefaManual = Task { await baixar() }
             }
         }
     }
@@ -130,7 +147,12 @@ struct VisualizadorBinario: View {
         } description: {
             Text(mensagem)
         } actions: {
-            Button("Tentar de novo") { Task { await baixar() } }
+            Button("Tentar de novo") {
+                // Mesmo motivo do botão "Baixar assim mesmo": precisa ser
+                // cancelável por `desmontar()`, não uma Task solta.
+                tarefaManual?.cancel()
+                tarefaManual = Task { await baixar() }
+            }
         }
     }
 
@@ -153,11 +175,25 @@ struct VisualizadorBinario: View {
                 return
             }
             estado = .pronto(url)
-        } catch is CancellationError {
+        } catch {
             // A aba perdeu o foco (ou a tela saiu) no meio do download — não é
             // falha do usuário, então fica em silêncio; `desmontar()` (chamado
-            // pelo `.task(id:)` que cancelou isto) já cuida do estado.
-        } catch {
+            // pelo `.task(id:)` que cancelou isto, ou pelo `.cancel()` de
+            // `tarefaManual`) já cuida do estado.
+            //
+            // 12/08/2026 (achado grave nº1 da revisão adversarial da Task B):
+            // isto ERA `catch is CancellationError`, que nunca casava. Por
+            // baixo `api.downloadFile` é `URLSession.shared.data(for:)`, e a
+            // URLSession devolve cancelamento como `URLError` com
+            // `code == .cancelled` — NÃO como `Swift.CancellationError`. Sem
+            // este guarda, o cancelamento caía no `catch` genérico abaixo e
+            // virava `estado = .falhou(...)`, sobrescrevendo o reset que
+            // `desmontar()` acabara de fazer; ao voltar pra aba, a tela ficava
+            // travada em "Não deu para baixar" porque `iniciarSeNecessario()`
+            // só age em cima de `.baixando`. `FileBrowserView.load()` já tinha
+            // batido nesta mesma pedra e criado `ErroDeCarga.ehCancelamento` —
+            // reusa em vez de reinventar (e errar de novo) a mesma checagem.
+            guard !Task.isCancelled, !ErroDeCarga.ehCancelamento(error) else { return }
             estado = .falhou(error.localizedDescription)
         }
     }
@@ -166,6 +202,14 @@ struct VisualizadorBinario: View {
     /// o arquivo do tmp. É o que a decisão #19 pede: sem isto, trocar de aba
     /// deixaria um vídeo tocando atrás, invisível e audível.
     private func desmontar() {
+        // 12/08/2026 (achado grave nº2): sem isto, um download disparado por
+        // "Baixar assim mesmo" ou "Tentar de novo" continuava rodando em
+        // segundo plano mesmo com a aba fora de foco — a Task do botão não
+        // era filha do `.task(id: abaAtiva)`, então nada aqui a alcançava.
+        // Cancelar explicitamente é o que faz `desmontar()` valer para os TRÊS
+        // pontos de disparo de `baixar()`, não só o automático.
+        tarefaManual?.cancel()
+        tarefaManual = nil
         if case .pronto(let url) = estado {
             apagar(url)
         }
