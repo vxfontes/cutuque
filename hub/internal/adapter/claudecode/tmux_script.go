@@ -96,7 +96,11 @@ def norm(x):
     return x[len('/private'):] if x.startswith('/private/') else x
 def pane_state(sock,pane,agent):
     # Lê a tela visível do pane e delega a classificação para classify (parte pura).
-    return classify(run('tmux','-S',sock,'capture-pane','-t',pane,'-p'),agent)
+    # O -u acompanha o do lado Go (ver tmuxUTF8 em tmux.go): aqui ele sobrava,
+    # porque o Python exporta LC_CTYPE=C.UTF-8 aos filhos (PEP 538) e o TAB do -F
+    # sobrevivia por causa disso. Depender desse acidente foi o que escondeu o bug
+    # de 13/08/2026 por um dia inteiro — a varredura funcionava, a criação não.
+    return classify(run('tmux','-u','-S',sock,'capture-pane','-t',pane,'-p'),agent)
 uid=os.getuid()
 socks=set()
 for d in ('/private/tmp/tmux-%d'%uid,'/tmp/tmux-%d'%uid,os.path.join(os.environ.get('TMPDIR','/tmp').rstrip('/'),'tmux-%d'%uid)):
@@ -105,7 +109,7 @@ for d in ('/private/tmp/tmux-%d'%uid,'/tmp/tmux-%d'%uid,os.path.join(os.environ.
 fmt='#{pane_id}\t#{pane_pid}\t#{pane_current_path}\t#{session_name}\t#{window_name}'
 out=[]
 for sock in sorted(socks):
-    for line in run('tmux','-S',sock,'list-panes','-a','-F',fmt).splitlines():
+    for line in run('tmux','-u','-S',sock,'list-panes','-a','-F',fmt).splitlines():
         f=line.split('\t')
         if len(f)<5: continue
         try: pid=int(f[1])

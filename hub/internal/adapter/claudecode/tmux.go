@@ -98,20 +98,40 @@ func parseTarget(target string) (socket, pane string, err error) {
 	return socket, pane, nil
 }
 
+// tmuxUTF8 entra em TODO comando tmux do hub, e não é zelo: quando o CLIENTE
+// tmux não anuncia UTF-8, o servidor passa a saída de comandos como
+// `new-session -P -F` e `list-panes -F` por utf8_sanitize, que troca cada byte
+// não-imprimível por "_" — inclusive o TAB. E o TAB é justamente o separador do
+// alvo composto do hub ("<socket>\t<pane>"): sem ele, o parse não acha o
+// separador. Foi esse o bug de 13/08/2026 ("não deu para criar em macbook…"),
+// em que a sessão era criada e a criação falhava DEPOIS, ao ler o alvo de volta.
+//
+// O caminho que dispara isso é o normal em produção, não um caso de borda: ssh
+// não-interativo não recebe LANG/LC_* e o container do hub também não os tem, e
+// a allowlist do ChildEnv só copia o que existe. Reproduzido nas DUAS máquinas
+// (macbook por ssh, macmini local) — não era específico de nenhuma.
+//
+// A varredura escapava por acidente e por isso a lista ao vivo funcionava: ela
+// roda via `python3 -`, e o Python exporta LC_CTYPE=C.UTF-8 aos processos
+// filhos (PEP 538). O `-u` no próprio comando tira o hub dessa sorte. Já o
+// espelho (`capture-pane -p`) nunca foi afetado: aquela saída não passa pelo
+// caminho que sanitiza.
+const tmuxUTF8 = "-u"
+
 // tmuxBase é o prefixo do comando tmux com o servidor certo (-S <socket>).
 func tmuxBase(socket string) string {
 	if socket == "" {
-		return "tmux"
+		return "tmux " + tmuxUTF8
 	}
-	return "tmux -S " + singleQuote(socket)
+	return "tmux " + tmuxUTF8 + " -S " + singleQuote(socket)
 }
 
 // tmuxLocalArgs monta os args do tmux local com -S <socket> quando houver.
 func tmuxLocalArgs(socket string, rest ...string) []string {
 	if socket == "" {
-		return rest
+		return append([]string{tmuxUTF8}, rest...)
 	}
-	return append([]string{"-S", socket}, rest...)
+	return append([]string{tmuxUTF8, "-S", socket}, rest...)
 }
 
 // tmuxScrollback é quantas linhas de histórico são capturadas (scrollback do

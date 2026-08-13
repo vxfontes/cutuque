@@ -63,8 +63,9 @@ func TestLocalArgsESshInner(t *testing.T) {
 	args := spec.localArgs()
 	junto := strings.Join(args, " ")
 	// -A anexa se a sessão já existir (não é erro: a spec diz que o app abre a aba
-	// nela). -d não anexa o terminal do hub. -P -F devolve socket e pane.
-	for _, s := range []string{"-L defender", "new-session -A -d", "-s mike", "-c /Users/vanessa/x", "codex --sandbox danger-full-access"} {
+	// nela). -d não anexa o terminal do hub. -P -F devolve socket e pane. O -u vem
+	// antes de tudo e é o que faz o TAB desse -F voltar inteiro (ver tmuxUTF8).
+	for _, s := range []string{"-u -L defender", "new-session -A -d", "-s mike", "-c /Users/vanessa/x", "codex --sandbox danger-full-access"} {
 		if !strings.Contains(junto, s) {
 			t.Fatalf("localArgs sem %q: %v", s, args)
 		}

@@ -60,8 +60,9 @@ func validarNovaSessao(group, session, cwd, agent string) (tmuxNewSpec, error) {
 
 // localArgs monta os args do tmux local. -A anexa se a sessão já existir (a spec
 // trata "já existe" como sucesso, não erro) e -d evita anexar o terminal do hub.
+// O -u (tmuxUTF8) é o que preserva o TAB do -F na volta — ver o comentário dele.
 func (n tmuxNewSpec) localArgs() []string {
-	args := []string{"-L", n.Group, "new-session", "-A", "-d", "-s", n.Session,
+	args := []string{tmuxUTF8, "-L", n.Group, "new-session", "-A", "-d", "-s", n.Session,
 		"-c", n.Cwd, "-P", "-F", tmuxNewFormat}
 	if n.Command != "" {
 		args = append(args, n.Command)
@@ -70,7 +71,7 @@ func (n tmuxNewSpec) localArgs() []string {
 }
 
 func (n tmuxNewSpec) sshInner() string {
-	inner := "tmux -L " + singleQuote(n.Group) + " new-session -A -d -s " + singleQuote(n.Session) +
+	inner := "tmux " + tmuxUTF8 + " -L " + singleQuote(n.Group) + " new-session -A -d -s " + singleQuote(n.Session) +
 		" -c " + singleQuote(n.Cwd) + " -P -F " + singleQuote(tmuxNewFormat)
 	if n.Command != "" {
 		inner += " " + singleQuote(n.Command)
