@@ -1,38 +1,61 @@
 import XCTest
 @testable import CutuqueApp
 
-/// O modelo de abas do iPad. Três regras que a Vanessa travou (D1, D2):
-/// aba de passagem é SUBSTITUÍDA ao tocar noutra coisa (modelo VS Code);
-/// abrir um alvo que já está aberto FOCA a aba existente; nunca há duas abas
+/// O modelo de abas do iPad. Duas regras que a Vanessa travou (D1, D2), a
+/// segunda delas REVOGADA em 13/08/2026: abrir NUNCA substitui aba nenhuma —
+/// modelo de NAVEGADOR, cada abertura fica ao lado da anterior, e só fixar
+/// continua protegendo de fechamento em massa (ver
+/// `testAbrirDuasSessoesMantemAsDuasAbas` e `testFixarSegueProtegendoDeFecharOutras`).
+/// Abrir um alvo que já está aberto FOCA a aba existente; nunca há duas abas
 /// para o mesmo alvo.
 final class OpenTabsTests: XCTestCase {
 
     private let a = ChaveDeAba(tipo: .live, machine: "macbook", alvo: "/s\t%1")
     private let b = ChaveDeAba(tipo: .live, machine: "macbook", alvo: "/s\t%2")
 
-    func testAbaDePassagemEhSubstituidaPelaProxima() {
+    /// [Reescrito em 13/08/2026] Este teste afirmava o contrário: a aba de
+    /// passagem (modelo VS Code) era substituída pela próxima abertura. A
+    /// Vanessa pediu modelo de NAVEGADOR — "ao invés de funcionar como um
+    /// navegador que vai abrindo uma ao lado da outra, so se fixar funciona" —,
+    /// e `EstiloDeAba` foi removido inteiro.
+    func testAbrirDuasSessoesMantemAsDuasAbas() {
         var t = OpenTabs()
-        t.abrir(chave: a, titulo: "mike", conteudo: .pendente)          // passagem
-        t.abrir(chave: b, titulo: "aux", conteudo: .pendente)           // passagem
-        XCTAssertEqual(t.abas.map(\.chave), [b], "a de passagem some no lugar da nova")
-        XCTAssertEqual(t.selecionada, b)
+        t.abrir(chave: a, titulo: "mike", conteudo: .pendente)
+        t.abrir(chave: b, titulo: "aux", conteudo: .pendente)
+        XCTAssertEqual(t.abas.map(\.chave), [a, b])
+        XCTAssertEqual(t.selecionada, b, "a recém-aberta fica em foco")
     }
 
+    /// Fixar deixou de ser o único jeito de acumular aba; segue sendo o que
+    /// protege de "fechar outras" e o que garante vaga entre as vivas (teto de 6).
+    func testFixarSegueProtegendoDeFecharOutras() {
+        var t = OpenTabs()
+        t.abrir(chave: a, titulo: "mike", conteudo: .pendente)
+        t.fixar(a)
+        t.abrir(chave: b, titulo: "aux", conteudo: .pendente)
+        t.fecharOutras(b)
+        XCTAssertEqual(Set(t.abas.map(\.chave)), Set([a, b]))
+    }
+
+    /// [Mantido em 13/08/2026 sem o argumento `estilo:`, que deixou de existir —
+    /// era o único jeito de pedir o comportamento que agora é o único.] Continua
+    /// redundante de propósito com `testAbrirDuasSessoesMantemAsDuasAbas`: prova
+    /// que o cenário de duas abas abertas em sequência não depende de nomes.
     func testAbaNormalNaoEhSubstituida() {
         var t = OpenTabs()
-        t.abrir(chave: a, titulo: "mike", conteudo: .pendente, estilo: .normal)
+        t.abrir(chave: a, titulo: "mike", conteudo: .pendente)
         t.abrir(chave: b, titulo: "aux", conteudo: .pendente)
         XCTAssertEqual(t.abas.map(\.chave), [a, b])
     }
 
-    /// Reabrir promove: é o equivalente do duplo clique do VS Code, e é o gesto
-    /// que a Vanessa vai usar sem pensar quando quiser guardar a aba.
-    func testReabrirUmaAbaDePassagemAPromoveENaoDuplica() {
+    /// Reabrir um alvo já aberto foca a aba existente e nunca duplica — é o
+    /// gesto que a Vanessa usa sem pensar ao tocar de novo num destino da
+    /// sidebar que já tem aba na barra.
+    func testReabrirUmaAbaJaAbertaFocaENaoDuplica() {
         var t = OpenTabs()
         t.abrir(chave: a, titulo: "mike", conteudo: .pendente)
         t.abrir(chave: a, titulo: "mike", conteudo: .pendente)
         XCTAssertEqual(t.abas.count, 1)
-        XCTAssertEqual(t.abas[0].estilo, .normal)
         XCTAssertEqual(t.selecionada, a)
     }
 
@@ -40,22 +63,22 @@ final class OpenTabsTests: XCTestCase {
     /// uma aba restaurada e já reconciliada a jogaria de volta pro limbo.
     func testAbrirDeNovoPreservaOConteudoJaResolvido() {
         var t = OpenTabs()
-        t.abrir(chave: a, titulo: "mike", conteudo: .board, estilo: .normal)
+        t.abrir(chave: a, titulo: "mike", conteudo: .board)
         t.abrir(chave: a, titulo: "mike", conteudo: .pendente)
         XCTAssertEqual(t.abas[0].conteudo, .board)
     }
 
     func testTituloEhAtualizadoQuandoAAbaJaExiste() {
         var t = OpenTabs()
-        t.abrir(chave: a, titulo: "mike", conteudo: .pendente, estilo: .normal)
+        t.abrir(chave: a, titulo: "mike", conteudo: .pendente)
         t.abrir(chave: a, titulo: "mike renomeada", conteudo: .pendente)
         XCTAssertEqual(t.abas[0].titulo, "mike renomeada")
     }
 
     func testSelecionarSobeAOrdemDeFoco() {
         var t = OpenTabs()
-        t.abrir(chave: a, titulo: "mike", conteudo: .pendente, estilo: .normal)
-        t.abrir(chave: b, titulo: "aux", conteudo: .pendente, estilo: .normal)
+        t.abrir(chave: a, titulo: "mike", conteudo: .pendente)
+        t.abrir(chave: b, titulo: "aux", conteudo: .pendente)
         t.selecionar(a)
         XCTAssertEqual(t.selecionada, a)
         XCTAssertGreaterThan(t.abas[0].ordemDeFoco, t.abas[1].ordemDeFoco)
@@ -63,7 +86,7 @@ final class OpenTabsTests: XCTestCase {
 
     func testSelecionarChaveInexistenteNaoMudaNada() {
         var t = OpenTabs()
-        t.abrir(chave: a, titulo: "mike", conteudo: .pendente, estilo: .normal)
+        t.abrir(chave: a, titulo: "mike", conteudo: .pendente)
         let antes = t
         t.selecionar(b)
         XCTAssertEqual(t, antes)
@@ -72,8 +95,8 @@ final class OpenTabsTests: XCTestCase {
     /// Uma aba por destino singular: Board aberto duas vezes é uma aba.
     func testDestinosSingularesNaoDuplicam() {
         var t = OpenTabs()
-        t.abrir(chave: .board, titulo: "Board", conteudo: .board, estilo: .normal)
-        t.abrir(chave: .board, titulo: "Board", conteudo: .board, estilo: .normal)
+        t.abrir(chave: .board, titulo: "Board", conteudo: .board)
+        t.abrir(chave: .board, titulo: "Board", conteudo: .board)
         XCTAssertEqual(t.abas.count, 1)
     }
 
@@ -96,7 +119,7 @@ final class OpenTabsTests: XCTestCase {
     func testSeisVivasEOSetimoDorme() {
         var t = OpenTabs()
         let chaves = (1...7).map { ChaveDeAba(tipo: .live, machine: "macbook", alvo: "/s\t%\($0)") }
-        for c in chaves { t.abrir(chave: c, titulo: c.alvo, conteudo: .pendente, estilo: .normal) }
+        for c in chaves { t.abrir(chave: c, titulo: c.alvo, conteudo: .pendente) }
 
         XCTAssertEqual(t.selecionada, chaves[6])
         XCTAssertEqual(t.estado(de: chaves[6]), .ativo)
@@ -111,7 +134,7 @@ final class OpenTabsTests: XCTestCase {
     func testFocarAcordaEEmpurraOMenosUsadoParaDormir() {
         var t = OpenTabs()
         let chaves = (1...7).map { ChaveDeAba(tipo: .live, machine: "macbook", alvo: "/s\t%\($0)") }
-        for c in chaves { t.abrir(chave: c, titulo: c.alvo, conteudo: .pendente, estilo: .normal) }
+        for c in chaves { t.abrir(chave: c, titulo: c.alvo, conteudo: .pendente) }
         XCTAssertEqual(t.estado(de: chaves[0]), .liberado)
 
         t.selecionar(chaves[0])
@@ -138,7 +161,7 @@ final class OpenTabsTests: XCTestCase {
     func testFixarNaoImpedeDeDormir() {
         var t = OpenTabs()
         let chaves = (1...7).map { ChaveDeAba(tipo: .live, machine: "macbook", alvo: "/s\t%\($0)") }
-        for c in chaves { t.abrir(chave: c, titulo: c.alvo, conteudo: .pendente, estilo: .normal) }
+        for c in chaves { t.abrir(chave: c, titulo: c.alvo, conteudo: .pendente) }
         t.fixar(chaves[0])
         XCTAssertEqual(t.estado(de: chaves[0]), .liberado)
     }
@@ -146,7 +169,7 @@ final class OpenTabsTests: XCTestCase {
     func testFecharEscolheAVizinhaDaEsquerda() {
         var t = OpenTabs()
         let c = (1...3).map { ChaveDeAba(tipo: .live, machine: "m", alvo: "/s\t%\($0)") }
-        for k in c { t.abrir(chave: k, titulo: k.alvo, conteudo: .pendente, estilo: .normal) }
+        for k in c { t.abrir(chave: k, titulo: k.alvo, conteudo: .pendente) }
         t.selecionar(c[1])
         t.fechar(c[1])
         XCTAssertEqual(t.abas.map(\.chave), [c[0], c[2]])
@@ -156,7 +179,7 @@ final class OpenTabsTests: XCTestCase {
     func testFecharAPrimeiraEscolheADireita() {
         var t = OpenTabs()
         let c = (1...2).map { ChaveDeAba(tipo: .live, machine: "m", alvo: "/s\t%\($0)") }
-        for k in c { t.abrir(chave: k, titulo: k.alvo, conteudo: .pendente, estilo: .normal) }
+        for k in c { t.abrir(chave: k, titulo: k.alvo, conteudo: .pendente) }
         t.selecionar(c[0])
         t.fechar(c[0])
         XCTAssertEqual(t.selecionada, c[1])
@@ -165,7 +188,7 @@ final class OpenTabsTests: XCTestCase {
     func testFecharUmaQueNaoEstaEmFocoNaoMudaOFoco() {
         var t = OpenTabs()
         let c = (1...2).map { ChaveDeAba(tipo: .live, machine: "m", alvo: "/s\t%\($0)") }
-        for k in c { t.abrir(chave: k, titulo: k.alvo, conteudo: .pendente, estilo: .normal) }
+        for k in c { t.abrir(chave: k, titulo: k.alvo, conteudo: .pendente) }
         t.selecionar(c[1])
         t.fechar(c[0])
         XCTAssertEqual(t.selecionada, c[1])
@@ -176,7 +199,7 @@ final class OpenTabsTests: XCTestCase {
     /// recusando o fechamento tira da Vanessa a única forma de zerar a tela.
     func testFecharAUltimaDeixaNadaSelecionado() {
         var t = OpenTabs()
-        t.abrir(chave: a, titulo: "mike", conteudo: .pendente, estilo: .normal)
+        t.abrir(chave: a, titulo: "mike", conteudo: .pendente)
         t.fechar(a)
         XCTAssertTrue(t.abas.isEmpty)
         XCTAssertNil(t.selecionada)
@@ -185,7 +208,7 @@ final class OpenTabsTests: XCTestCase {
     func testFecharOutrasPoupaAFixaEAPropria() {
         var t = OpenTabs()
         let c = (1...4).map { ChaveDeAba(tipo: .live, machine: "m", alvo: "/s\t%\($0)") }
-        for k in c { t.abrir(chave: k, titulo: k.alvo, conteudo: .pendente, estilo: .normal) }
+        for k in c { t.abrir(chave: k, titulo: k.alvo, conteudo: .pendente) }
         t.fixar(c[0])
         t.fecharOutras(c[2])
         XCTAssertEqual(Set(t.abas.map(\.chave)), Set([c[0], c[2]]))
@@ -195,7 +218,7 @@ final class OpenTabsTests: XCTestCase {
     func testFecharTodasPoupaAsFixasEEscolheAPrimeiraQueSobrou() {
         var t = OpenTabs()
         let c = (1...3).map { ChaveDeAba(tipo: .live, machine: "m", alvo: "/s\t%\($0)") }
-        for k in c { t.abrir(chave: k, titulo: k.alvo, conteudo: .pendente, estilo: .normal) }
+        for k in c { t.abrir(chave: k, titulo: k.alvo, conteudo: .pendente) }
         t.fixar(c[1])
         t.fecharTodas()
         XCTAssertEqual(t.abas.map(\.chave), [c[1]])
@@ -204,19 +227,21 @@ final class OpenTabsTests: XCTestCase {
 
     func testFecharTodasSemNenhumaFixaZeraTudo() {
         var t = OpenTabs()
-        t.abrir(chave: a, titulo: "mike", conteudo: .pendente, estilo: .normal)
+        t.abrir(chave: a, titulo: "mike", conteudo: .pendente)
         t.fecharTodas()
         XCTAssertTrue(t.abas.isEmpty)
         XCTAssertNil(t.selecionada)
     }
 
-    /// Fixar uma aba de passagem também a promove: senão a próxima coisa aberta
-    /// substituiria a aba que a Vanessa acabou de mandar ficar.
-    func testFixarPromoveAAbaDePassagem() {
+    /// [Reescrito em 13/08/2026] Chamava-se `testFixarPromoveAAbaDePassagem` e
+    /// verificava `t.abas[0].estilo == .normal` — com `EstiloDeAba` removido não
+    /// existe mais "promover" (abrir nunca substitui nada, fixado ou não). O que
+    /// sobra de valor real, fixar não interfere em abrir outra aba, continua
+    /// coberto aqui.
+    func testFixarMantemAFixaAoAbrirOutraAba() {
         var t = OpenTabs()
         t.abrir(chave: a, titulo: "mike", conteudo: .pendente)
         t.fixar(a)
-        XCTAssertEqual(t.abas[0].estilo, .normal)
         XCTAssertTrue(t.abas[0].fixa)
 
         t.abrir(chave: b, titulo: "aux", conteudo: .pendente)
@@ -230,8 +255,8 @@ final class OpenTabsTests: XCTestCase {
     /// de tmux sem a Vanessa pedir, no boot do app.
     func testRoundTripDaPersistencia() {
         var t = OpenTabs()
-        t.abrir(chave: a, titulo: "mike", conteudo: .pendente, estilo: .normal)
-        t.abrir(chave: .board, titulo: "Board", conteudo: .board, estilo: .normal)
+        t.abrir(chave: a, titulo: "mike", conteudo: .pendente)
+        t.abrir(chave: .board, titulo: "Board", conteudo: .board)
         t.fixar(a)
 
         let dados = try! JSONEncoder().encode(t.paraPersistir)
@@ -247,8 +272,6 @@ final class OpenTabsTests: XCTestCase {
         // ele não depende de nada do hub, então já nasce `.board` em
         // `conteudoInicial`, sem esperar reconciliação nenhuma.
         XCTAssertEqual(voltou.abas.map(\.conteudo), [.pendente, .board])
-        // E nada de passagem: aba restaurada é aba que a Vanessa quis guardar.
-        XCTAssertTrue(voltou.abas.allSatisfy { $0.estilo == .normal })
     }
 
     func testReconciliarResolveAsVivasEMarcaAsMortas() {
@@ -281,7 +304,7 @@ final class OpenTabsTests: XCTestCase {
     /// `testJulgandoNaoAfetaBoardMasAgoraAfetaMaquinaEArquivado`.]
     func testDestinosQueNaoDependemDeTmuxNaoMorrem() {
         var t = OpenTabs()
-        t.abrir(chave: .board, titulo: "Board", conteudo: .board, estilo: .normal)
+        t.abrir(chave: .board, titulo: "Board", conteudo: .board)
         t.reconciliar(vivas: [:])
         XCTAssertEqual(t.aba(.board)?.conteudo, .board)
     }

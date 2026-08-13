@@ -150,14 +150,54 @@ struct SessionDetailPane: View {
         // Único leitor de `LiveChatTitleKey` — só o `SessionDetailView`
         // escreve nela, sem concorrência a resolver.
         .onPreferenceChange(LiveChatTitleKey.self) { liveChatTitle = $0 }
+        // [13/08/2026] Este painel NÃO desenha mais seletor nem ⤡: quem
+        // desenha os dois agora é a `ChromeDaAba`, uma faixa fora dos
+        // painéis, UMA vez, para a aba em foco. Antes o seletor morava aqui
+        // como `ToolbarItem(placement: .principal)` e o ⤡ como
+        // `.topBarTrailing` — com N painéis montados ao mesmo tempo (decisão
+        // #19, é o que preserva o `ssh`/o espelho do tmux ao trocar de aba),
+        // N desses `ToolbarItem` disputavam a MESMA navigation bar e o
+        // SwiftUI escondia quase todos: a causa raiz de "não ta aparecendo o
+        // terminal / info embaixo da aba em terminais live e tal". O painel
+        // agora só DECLARA o que tem (`.task` abaixo) e traduz de volta a
+        // escolha da chrome (`.onChange` abaixo) — nunca mais desenha nada.
+        //
+        // O ✕ de fechar o terminal CONTINUA aqui (é ação do painel, não da
+        // chrome), mas ganhou a guarda que faltava: `paneState == .ativo` é
+        // "esta ABA está em foco" (ver o comentário de `paneState`, no topo
+        // do arquivo). Sem ela, duas abas ao vivo em modo terminal
+        // publicariam dois ✕ no mesmo `.topBarTrailing` — a mesma disputa de
+        // N-painéis-uma-toolbar, só que neste placement em vez do
+        // `.principal`. Achado do diagnóstico desta leva (13/08/2026), nunca
+        // chegou a ser reportado pela Vanessa porque o ✕ "errado" ainda
+        // fechava ALGUM terminal — só não necessariamente o da aba tocada.
         .toolbar {
-            if !selectorSegments.isEmpty {
-                ToolbarItem(placement: .principal) { selector(segments: selectorSegments) }
-            }
-            if liveEntry != nil, showsTerminal {
+            if liveEntry != nil, showsTerminal, paneState == .ativo {
                 ToolbarItem(placement: .topBarTrailing) { closeTerminalButton }
             }
-            ToolbarItem(placement: .topBarTrailing) { expandButton }
+        }
+        // Declara o que esta aba tem, e mantém a declaração em dia quando a
+        // sessão ganha terminal ou entrada ao vivo. `.task(id:)` só reroda
+        // quando `assinaturaDosSegmentos` MUDA — sem o `id`, rodaria a cada
+        // recomposição e cada uma delas chamaria `nav.definirSegmentos`
+        // (idempotente, mas ainda um `@Published` a mais sendo lido/escrito
+        // à toa a cada render).
+        .task(id: assinaturaDosSegmentos) {
+            nav.definirSegmentos(
+                SessionDetailPaneLogic.segmentosDeChrome(
+                    hasChat: session != nil, hasTerminal: terminal != nil, hasInfo: liveEntry != nil),
+                de: chave)
+            nav.escolher(modo.rawValue, de: chave)   // reflete o modo já guardado
+        }
+        // A chrome escreveu (toque no seletor): aplica no guardado desta
+        // aba. Uma direção só — o painel nunca escreve em `nav.escolha`
+        // diretamente, só lê. `PaneMode(rawValue:)` falha silenciosamente
+        // (`guard let`) se algum dia os ids divergirem do `rawValue`; ver o
+        // comentário de `segmentosDeChrome` sobre por que isso não deveria
+        // acontecer.
+        .onChange(of: nav.escolha(de: chave)) { _, novo in
+            guard let novo, let modo = PaneMode(rawValue: novo) else { return }
+            nav.definirPaneMode(modo, de: chave)
         }
         .onAppear {
             // Onde este painel abre: seleção sem chat não pode mostrar chat, e
@@ -179,38 +219,16 @@ struct SessionDetailPane: View {
         }
     }
 
-    /// As abas do seletor do topo, na ordem. Decisão pura (testável sem
-    /// hosting de View) em `SessionDetailPaneLogic.selectorSegments`.
-    private var selectorSegments: [(label: String, mode: PaneMode)] {
-        SessionDetailPaneLogic.selectorSegments(
-            hasChat: session != nil, hasTerminal: terminal != nil,
-            hasInfo: liveEntry != nil
-        )
-    }
-
-    /// [12/08/2026] Binding manual — `$nav.paneMode` deixou de existir
-    /// (`paneMode` virou computada, ver `NavigationState`). Não é cosmético:
-    /// o GET devolve `modo` (já validado por `modoValido`), nunca o valor
-    /// guardado cru. Se devolvesse o cru, um modo IMPOSSÍVEL pra esta seleção
-    /// deixaria o `Picker` sem nenhum segmento marcado — exatamente o aviso
-    /// do comentário de `selectorSegments`/`modoValido` sobre as duas
-    /// concordarem por construção. O SET escreve cru na chave desta aba: é a
-    /// escolha explícita da usuária, não precisa passar por validação.
-    private var paneModeBinding: Binding<PaneMode> {
-        Binding(
-            get: { modo },
-            set: { nav.definirPaneMode($0, de: chave) }
-        )
-    }
-
-    private func selector(segments: [(label: String, mode: PaneMode)]) -> some View {
-        Picker("Painel", selection: paneModeBinding) {
-            ForEach(segments, id: \.mode) { segment in
-                Text(segment.label).tag(segment.mode)
-            }
-        }
-        .pickerStyle(.segmented)
-        .frame(maxWidth: 220)
+    /// [13/08/2026] Assinatura de "o que esta aba tem", usada como `id` do
+    /// `.task` que publica os segmentos na chrome — string, não uma tupla ou
+    /// struct própria, porque `.task(id:)` só precisa comparar por
+    /// `Equatable` e três `Bool` concatenados já bastam pra isso. Muda
+    /// exatamente quando `session`/`terminal`/`liveEntry` mudam de nil-ou-não
+    /// (sessão ganha pane tmux, entrada ao vivo aparece), nunca por causa de
+    /// campos que mudam VALOR sem mudar de nil-ou-não — não precisa mais que
+    /// isso para decidir se os segmentos declarados ficaram desatualizados.
+    private var assinaturaDosSegmentos: String {
+        "\(session != nil)-\(terminal != nil)-\(liveEntry != nil)"
     }
 
     /// O ✕ que a usuária pediu: no iPad o terminal ao vivo não tinha saída
@@ -231,28 +249,28 @@ struct SessionDetailPane: View {
         }
         .accessibilityLabel("Fechar o terminal")
     }
-
-    private var expandButton: some View {
-        let expanded = nav.columnVisibility == .detailOnly
-        return Button {
-            withAnimation(.columnToggle) { nav.toggleColumns() }
-        } label: {
-            Image(systemName: expanded
-                  ? "arrow.down.right.and.arrow.up.left"
-                  : "arrow.up.left.and.arrow.down.right")
-        }
-        .keyboardShortcut("f", modifiers: [.command, .control])
-        .accessibilityLabel(expanded ? "Recolher para três colunas" : "Expandir o painel")
-    }
 }
 
 extension Animation {
     /// Curva de toda chamada a `nav.toggleColumns()`. `⌘⌃F` tem duas
-    /// superfícies legítimas — este botão e o item de menu equivalente em
-    /// `CutuqueCommands` — e as duas precisam da MESMA curva: como o mesmo
-    /// atalho de teclado só pode ter um handler resolvido pelo sistema, se
-    /// cada superfície animasse diferente o colapso ora animava, ora saltava,
-    /// dependendo de qual delas o iPadOS escolhesse. Fonte única aqui em vez
-    /// de duplicar o literal `.easeInOut(duration: 0.2)` nos dois arquivos.
+    /// superfícies legítimas — o botão de tela cheia da `ChromeDaAba` e o item
+    /// de menu equivalente em `CutuqueCommands` — e as duas precisam da MESMA
+    /// curva: como o mesmo atalho de teclado só pode ter um handler resolvido
+    /// pelo sistema, se cada superfície animasse diferente o colapso ora
+    /// animava, ora saltava, dependendo de qual delas o iPadOS escolhesse.
+    /// Fonte única aqui em vez de duplicar o literal `.easeInOut(duration:
+    /// 0.2)` nos arquivos que consomem.
+    ///
+    /// [13/08/2026] Este tipo já foi o terceiro: até esta leva, `SessionDetailPane`
+    /// TAMBÉM tinha um botão de tela cheia próprio (`expandButton`,
+    /// `ToolbarItem(.topBarTrailing)`) com o MESMO `keyboardShortcut("f",
+    /// modifiers: [.command, .control])`. Com N painéis montados (decisão
+    /// #19), isso era um SEGUNDO registro do mesmo atalho global — atalho
+    /// duplicado em N views é sorteio de qual delas o SwiftUI escolhe para
+    /// responder. O botão saiu daqui: a `ChromeDaAba` (fora dos painéis,
+    /// desenhada uma única vez) é agora a ÚNICA dona do ⌘⌃F por botão; a
+    /// extensão fica neste arquivo por não ter um lar mais natural depois da
+    /// remoção, e porque `CutuqueCommands` e `ChromeDaAba` já dependiam dela
+    /// daqui.
     static var columnToggle: Animation { .easeInOut(duration: 0.2) }
 }

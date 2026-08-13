@@ -85,6 +85,27 @@ enum MachinePane: String, CaseIterable {
     }
 }
 
+/// Um botão do seletor que a `ChromeDaAba` desenha embaixo da barra de abas.
+///
+/// [13/08/2026] O seletor de painel morava em `ToolbarItem(placement: .principal)`
+/// DENTRO de cada painel. Pela decisão #19 os painéis do iPad ficam montados
+/// para sempre (alterna-se opacidade num `ZStack`, para não derrubar o `ssh`/o
+/// espelho do tmux) — então N painéis contribuíam itens para a MESMA navigation
+/// bar, e o SwiftUI escondia quase todos: "não ta aparecendo o terminal / info
+/// embaixo da aba em terminais live e tal".
+///
+/// A saída é inverter o fluxo: o painel não DESENHA seletor nenhum, ele
+/// **declara** quais segmentos tem (`NavigationState.definirSegmentos`); a
+/// chrome — uma só, fora dos painéis — desenha os da aba em foco e escreve a
+/// escolha de volta. `id` é o `rawValue` do enum de painel de quem declarou
+/// (`PaneMode`/`MachinePane`), que é como o painel traduz a escolha de volta
+/// pro seu próprio estado.
+struct SegmentoDeChrome: Identifiable, Equatable, Hashable {
+    let id: String
+    let titulo: String
+    let simbolo: String
+}
+
 /// Ações disparadas por atalho de teclado que precisam do contexto de uma view
 /// (a lista de sessões, o board) para acontecer. Quem consome zera com
 /// `consume()`.
@@ -181,12 +202,31 @@ final class NavigationState: ObservableObject {
     /// Escreve o modo guardado de `chave` (ou de `modoSemAba`, se `nil`).
     /// Cru, sem validar contra a seleção da aba — mesma observação de
     /// `paneMode(de:)`.
+    ///
+    /// [13/08/2026] Também mantém a escolha da chrome em sincronia, e é aqui
+    /// (não em cada painel) de propósito. `escolhaPorAba` é um cache paralelo:
+    /// qualquer escritor de modo que não passe pelo Picker da `ChromeDaAba` o
+    /// deixaria órfão, e o sintoma é o seletor da faixa MENTINDO sobre o
+    /// conteúdo — destacando "Chat" com o Terminal na tela. Existem dois
+    /// escritores desses: o ✕ de fechar o terminal (`SessionDetailPane` grava
+    /// `.info` direto) e o ⌘⇧T do menu (`CutuqueCommands`, pela propriedade
+    /// `paneMode` abaixo). Consertar no único ponto por onde os dois passam faz
+    /// a invariante valer por construção, em vez de depender de cada painel
+    /// lembrar de um `.onChange` a mais. Vale a convenção que a chrome já usa:
+    /// o `id` do segmento de uma aba de sessão É o `rawValue` do `PaneMode`
+    /// (ver `SessionDetailPaneLogic.segmentosDeChrome`).
+    ///
+    /// O guarda de igualdade não é enfeite: pela decisão #19 os N painéis ficam
+    /// montados, então cada `objectWillChange` daqui recompõe todos eles.
     func definirPaneMode(_ modo: PaneMode, de chave: ChaveDeAba?) {
         guard let chave else {
+            guard modoSemAba != modo else { return }
             modoSemAba = modo
             return
         }
+        guard modosPorAba[chave] != modo else { return }
         modosPorAba[chave] = modo
+        escolher(modo.rawValue, de: chave)
     }
 
     /// Propriedade de COMPATIBILIDADE: o modo da aba em foco (`abaEmFoco`).
@@ -197,10 +237,14 @@ final class NavigationState: ObservableObject {
     ///
     /// Não é mais `@Published`: é COMPUTADA sobre `modosPorAba`/`modoSemAba`,
     /// que são os `@Published` de verdade. Consequência real: `$nav.paneMode`
-    /// deixou de existir. O único lugar que usava o binding era o `Picker` de
-    /// `SessionDetailPane` — ele troca pra um `Binding(get:set:)` manual que
-    /// lê o modo já validado (`SessionDetailPaneLogic.modoValido`) e escreve
-    /// cru na chave da própria aba (ver `SessionDetailPane.swift`).
+    /// deixou de existir. O único lugar que usava o binding era o `Picker` do
+    /// seletor de painel — que, na época, morava dentro de `SessionDetailPane`.
+    /// [Atualizado em 13/08/2026] O `Picker` mudou de casa: saiu do painel e foi
+    /// pra `ChromeDaAba`, uma barra só para todas as abas, porque N painéis
+    /// montados (decisão #19) contribuindo pra MESMA navigation bar faziam o
+    /// SwiftUI esconder quase todos ("não ta aparecendo o terminal / info
+    /// embaixo da aba"). O `Binding(get:set:)` manual continua existindo, agora
+    /// em `ChromeDaAba.escolhaBinding`, e o painel só LÊ `nav.escolha(de:)`.
     var paneMode: PaneMode {
         get { paneMode(de: abaEmFoco) }
         set { definirPaneMode(newValue, de: abaEmFoco) }
@@ -212,6 +256,80 @@ final class NavigationState: ObservableObject {
     /// `abaEmFoco`, com o conjunto de chaves das abas que ainda existem.
     func descartarModos(mantendo vivas: Set<ChaveDeAba>) {
         modosPorAba = modosPorAba.filter { vivas.contains($0.key) }
+    }
+
+    // MARK: - Registro da chrome da aba
+
+    /// Os segmentos que o conteúdo de cada aba DECLAROU ter (ver
+    /// `SegmentoDeChrome`). Quem escreve é o painel, quem lê é a `ChromeDaAba` —
+    /// nunca o contrário.
+    ///
+    /// É dado puro, de propósito. As duas alternativas óbvias não servem:
+    /// `PreferenceKey` sobe pela árvore e COMBINA os N painéis montados, que é
+    /// exatamente o defeito da toolbar que isto vem consertar; e guardar
+    /// closures dos painéis aqui criaria ciclo de retenção
+    /// (`NavigationState` → closure → view → `nav`).
+    @Published private var segmentosPorAba: [ChaveDeAba: [SegmentoDeChrome]] = [:]
+    /// O `id` do segmento escolhido em cada aba. Separado de `modosPorAba` de
+    /// propósito: aqui é `String` crua (a chrome não conhece `PaneMode` nem
+    /// `MachinePane`), e traduzir de volta pro enum é trabalho do painel.
+    @Published private var escolhaPorAba: [ChaveDeAba: String] = [:]
+
+    /// Declara os segmentos de `chave`. Idempotente: escrever valor IGUAL não
+    /// publica mudança.
+    ///
+    /// O guarda de igualdade não é otimização, é correção. Os painéis chamam
+    /// isto de `.task`/`.onChange`, que rodam a cada recomposição — publicar um
+    /// valor igual dentro de uma atualização de view é laço de atualização
+    /// ("Publishing changes from within view updates").
+    func definirSegmentos(_ segmentos: [SegmentoDeChrome], de chave: ChaveDeAba) {
+        guard segmentosPorAba[chave] != segmentos else { return }
+        segmentosPorAba[chave] = segmentos
+    }
+
+    /// Os segmentos declarados por `chave` — vazio para `nil` (iPhone, que não
+    /// usa abas nem chrome) e para aba que ainda não declarou nada. Mesmo
+    /// contrato de `paneMode(de:)`: nunca inventa valor de outra aba.
+    func segmentos(de chave: ChaveDeAba?) -> [SegmentoDeChrome] {
+        guard let chave else { return [] }
+        return segmentosPorAba[chave] ?? []
+    }
+
+    /// Escreve a escolha da aba. Idempotente, pela mesma razão de
+    /// `definirSegmentos`.
+    ///
+    /// Não valida `id` contra os segmentos declarados: a chrome escreve sempre
+    /// um `id` que ela própria acabou de desenhar, e o painel já valida o modo
+    /// na hora de renderizar (`SessionDetailPaneLogic.modoValido`).
+    func escolher(_ id: String, de chave: ChaveDeAba) {
+        guard escolhaPorAba[chave] != id else { return }
+        escolhaPorAba[chave] = id
+    }
+
+    /// A escolha guardada de `chave`, ou `nil` se a aba nunca escolheu nada —
+    /// aí quem decide o padrão é o painel, que é o único que sabe qual dos seus
+    /// segmentos faz sentido abrir primeiro (`entryPaneMode`).
+    func escolha(de chave: ChaveDeAba?) -> String? {
+        guard let chave else { return nil }
+        return escolhaPorAba[chave]
+    }
+
+    /// Esquece o chrome de UMA aba — usado quando o conteúdo dela muda de
+    /// natureza, não só quando ela fecha.
+    func limparChrome(de chave: ChaveDeAba) {
+        guard segmentosPorAba[chave] != nil || escolhaPorAba[chave] != nil else { return }
+        segmentosPorAba[chave] = nil
+        escolhaPorAba[chave] = nil
+    }
+
+    /// Descarta o chrome de abas que não existem mais — mesmo motivo e mesmo
+    /// ponto de chamada de `descartarModos(mantendo:)`, no
+    /// `.onChange(of: tabsStore.tabs)` do `RootSplitView`.
+    func descartarChrome(mantendo vivas: Set<ChaveDeAba>) {
+        let segmentosVivos = segmentosPorAba.filter { vivas.contains($0.key) }
+        if segmentosVivos.count != segmentosPorAba.count { segmentosPorAba = segmentosVivos }
+        let escolhasVivas = escolhaPorAba.filter { vivas.contains($0.key) }
+        if escolhasVivas.count != escolhaPorAba.count { escolhaPorAba = escolhasVivas }
     }
 
     @Published var columnVisibility: NavigationSplitViewVisibility = .all

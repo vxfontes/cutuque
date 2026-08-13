@@ -67,6 +67,50 @@ enum AppAccent: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - A cor de destaque como valor de ambiente
+
+private struct ChaveDaCorDeDestaque: EnvironmentKey {
+    /// Igual ao `AppAccent` padrão dos ajustes: quem lê fora do app (preview,
+    /// teste de view) recebe o mesmo azul que a usuária vê na instalação nova.
+    static let defaultValue: Color = AppAccent.blue.color
+}
+
+extension EnvironmentValues {
+    /// A cor escolhida em Ajustes → Tema, para quem PINTA com ela.
+    ///
+    /// [13/08/2026] Existe porque `Color.accentColor` **ignora** `.tint(_:)`:
+    /// ele resolve do catálogo de assets (`AccentColor.colorset`, que este app
+    /// nem tem) ou do azul do sistema — nunca do `tint` do ambiente. Era a causa
+    /// de "mesmo eu trocando a cor, alguns lugares fica com cor padrao": os
+    /// controles nativos seguiam o `.tint`, e todo `Color.accentColor` escrito à
+    /// mão ficava azul.
+    ///
+    /// Regra: controle nativo herda `.tint` sozinho e não precisa disto; código
+    /// que passa uma `Color` explícita (`foregroundStyle`, `fill`, `stroke`,
+    /// borda) lê daqui. Cor com SIGNIFICADO — vermelho de erro, verde de ok,
+    /// laranja de aviso, paleta de sintaxe — não é destaque e continua literal.
+    var corDeDestaque: Color {
+        get { self[ChaveDaCorDeDestaque.self] }
+        set { self[ChaveDaCorDeDestaque.self] = newValue }
+    }
+}
+
+/// Aplica a cor de destaque pelos DOIS caminhos de uma vez: `.tint` (controles
+/// nativos) e `\.corDeDestaque` (código que pinta com `Color` explícita).
+///
+/// É um modifier, e não duas linhas soltas na raiz, para que os dois nunca saiam
+/// de sincronia — o sintoma disso é o app com metade da interface na cor nova e
+/// metade no azul.
+struct CorDeDestaqueDoApp: ViewModifier {
+    let cor: Color
+
+    func body(content: Content) -> some View {
+        content
+            .tint(cor)
+            .environment(\.corDeDestaque, cor)
+    }
+}
+
 // Chaves de @AppStorage compartilhadas entre a raiz do app (aplica) e os ajustes
 // (edita). @AppStorage é observado pelas Views automaticamente — mudou no ajuste,
 // a raiz re-aplica esquema/tint na hora.

@@ -96,6 +96,11 @@ struct HistoryView: View {
 /// Renderiza os eventos de uma sessão passada em ordem cronológica.
 struct HistoryTimelineView: View {
     let session: Session
+    /// [13/08/2026] O rótulo "Você" era `.blue` cravado (`chunkColor`) — um dos
+    /// "alguns lugares fica com cor padrao". Aqui o azul distingue QUEM falou
+    /// (você) do agente (`.primary`) e das ferramentas (`.secondary`): é papel
+    /// de destaque, não semântica de estado. Ver `AppTheme.swift`.
+    @Environment(\.corDeDestaque) private var corDeDestaque
     @State private var events: [HistoryEvent] = []
     @State private var loading = true
     private let api = APIClient()
@@ -170,7 +175,7 @@ struct HistoryTimelineView: View {
     }
     private func chunkColor(_ k: String) -> Color {
         switch k {
-        case "user": return .blue
+        case "user": return corDeDestaque
         case "assistant": return .primary
         default: return .secondary
         }

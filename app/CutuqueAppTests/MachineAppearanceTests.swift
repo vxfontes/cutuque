@@ -239,4 +239,75 @@ final class MachineAppearanceTests: XCTestCase {
         XCTAssertEqual(falso.recebidos, [a, b])
         XCTAssertEqual(escritor.confirmada, b)
     }
+
+    /// [13/08/2026] A releitura do hub (`MachineInfoSheet.resemear`) tem de
+    /// arrumar TAMBÉM o desfazer: a sheet nasce com o `@State` congelado de
+    /// `MachineDetailView` (decisão #19 — o painel nunca desmonta), e sem adotar
+    /// o valor lido, uma falha de PUT depois dela voltaria para esse palpite
+    /// velho em vez de para o que o hub tem.
+    @MainActor
+    func testAdotarComoConfirmadaMudaOAlvoDoDesfazer() async {
+        let falso = EnvioFalso()
+        falso.erroNoPrimeiro = ErroDeTeste()
+        let escritor = EscritorDeAparencia(confirmada: AparenciaDaMaquina(tema: "", icone: ""),
+                                           enviar: { try await falso.enviar($0) })
+
+        let doHub = AparenciaDaMaquina(tema: "dracula", icone: "server")
+        escritor.adotarComoConfirmada(doHub)
+        XCTAssertEqual(escritor.confirmada, doHub)
+
+        let corrida = Task { await escritor.aplicar(AparenciaDaMaquina(tema: "nord", icone: "server")) }
+        await falso.esperarPrimeiro()
+        falso.soltar()
+        guard case .falhou = await corrida.value else {
+            return XCTFail("o envio devia falhar neste teste")
+        }
+        XCTAssertEqual(escritor.confirmada, doHub,
+                       "desfazer volta pro que o HUB tem, não pro palpite com que a sheet nasceu")
+    }
+
+    /// E a leitura não pode passar na frente de um envio em voo — ele é mais
+    /// novo que ela. Foi ela que abriu a tela; o toque veio depois.
+    @MainActor
+    func testAdotarComoConfirmadaNaoAtropelaEnvioEmVoo() async {
+        let falso = EnvioFalso()
+        let escritor = EscritorDeAparencia(confirmada: AparenciaDaMaquina(tema: "", icone: ""),
+                                           enviar: { try await falso.enviar($0) })
+
+        let toque = AparenciaDaMaquina(tema: "nord", icone: "cloud")
+        let corrida = Task { await escritor.aplicar(toque) }
+        await falso.esperarPrimeiro()
+        escritor.adotarComoConfirmada(AparenciaDaMaquina(tema: "dracula", icone: "server"))
+        falso.soltar()
+
+        guard case .gravou = await corrida.value else { return XCTFail("o envio devia gravar") }
+        XCTAssertEqual(escritor.confirmada, toque, "a leitura velha não pode virar o confirmado")
+    }
+
+    // MARK: - Segmentos da chrome (13/08/2026 — abas de navegador e chrome única)
+
+    /// Ids de `MachinePane`, não de `PaneMode`: as duas abas (sessão e máquina)
+    /// usam a MESMA `ChromeDaAba`, e o registro em `NavigationState` é por
+    /// CHAVE DE ABA — "terminal" numa não é "terminal" na outra. A ponte de
+    /// cada painel converte com o SEU enum (aqui, `MachinePane(rawValue:)`).
+    @MainActor
+    func testChromeDaMaquinaUsaOsIdsDeMachinePane() {
+        let nav = NavigationState()
+        let chave = ChaveDeAba.maquina("macmini")
+        nav.definirSegmentos(MachineDetailView.segmentosDeChrome(), de: chave)
+        XCTAssertEqual(nav.segmentos(de: chave).map(\.id),
+                       [MachinePane.terminal.rawValue, MachinePane.files.rawValue])
+        XCTAssertEqual(nav.segmentos(de: chave).map(\.titulo), ["Terminal", "Arquivos"])
+    }
+
+    /// A lista é `MachinePane.allCases`, então crescer o enum (um terceiro
+    /// painel, um dia) cresce a chrome sozinho — sem lembrar de tocar aqui
+    /// também. Este teste falha primeiro se algum dia isso divergir.
+    func testSegmentosSeguemTodosOsCasosDoMachinePane() {
+        let s = MachineDetailView.segmentosDeChrome()
+        XCTAssertEqual(s.count, MachinePane.allCases.count)
+        for pane in MachinePane.allCases {
+            XCTAssertTrue(s.contains { $0.id == pane.rawValue && $0.simbolo == pane.symbol })
+        }
+    }
 }

@@ -18,6 +18,10 @@ struct MachineDetailView: View {
     let paneState: TerminalPaneState
 
     @StateObject private var session: PTYSession
+    /// A `ChromeDaAba` (Onda 0, 13/08/2026): lê aqui os segmentos que este
+    /// painel declara e escreve aqui a escolha que ele faz na faixa. Ver
+    /// `chaveDaAba` e o `.task`/`.onChange` no fim do `body`.
+    @EnvironmentObject private var nav: NavigationState
     /// Painel aberto, lembrado POR HOST: a máquina onde se edita arquivo e a
     /// máquina onde se roda comando não são a mesma.
     @AppStorage private var paneRaw: String
@@ -54,6 +58,31 @@ struct MachineDetailView: View {
 
     private var pane: MachinePane { MachinePane(rawValue: paneRaw) ?? .terminal }
     private var showsTerminal: Bool { pane == .terminal }
+
+    /// Identidade desta aba no registro da chrome (`NavigationState`) — MESMA
+    /// forma que `RootSplitView` usa pra abrir a aba de máquina
+    /// (`.onChange(of: nav.machineSelection)` chama `.abrir(chave: .maquina(machine.name), …)`,
+    /// e é essa mesma chave que chega em `painel(_:)` como `aba.chave`). Dá
+    /// pra calcular aqui, sem receber nada de fora, porque `machine.name` é a
+    /// ÚNICA coisa que compõe essa chave (ver `ChaveDeAba.maquina(_:)`) — e
+    /// esta view já recebe `machine`. [13/08/2026] Se um dia a chave de
+    /// máquina ganhar outro campo, esta igualdade quebra silenciosamente (a
+    /// chrome fica vazia, sem crash); `testChromeDaMaquinaUsaOsIdsDeMachinePane`
+    /// não pega essa divergência porque testa só a FORMA dos segmentos, não a
+    /// chave — quem pegaria é um teste de integração que este projeto não tem
+    /// (não há UI test aqui).
+    private var chaveDaAba: ChaveDeAba { .maquina(machine.name) }
+
+    /// Os dois painéis desta aba, para a `ChromeDaAba`. `static` e sem
+    /// depender de `self`: o que existe (Terminal, Arquivos) não muda com a
+    /// máquina, só a persistência de qual está escolhido — dá pra testar sem
+    /// hospedar a view. Ids são o `rawValue` de `MachinePane` de propósito: é
+    /// o que a ponte em `.onChange(of: nav.escolha(de:))`, abaixo, usa pra
+    /// traduzir a escolha da chrome de volta pro enum — se um dia divergirem,
+    /// tocar no seletor não muda painel nenhum, silenciosamente.
+    static func segmentosDeChrome() -> [SegmentoDeChrome] {
+        MachinePane.allCases.map { SegmentoDeChrome(id: $0.rawValue, titulo: $0.label, simbolo: $0.symbol) }
+    }
 
     /// O que o terminal deve estar fazendo agora — ver `MachineTerminalLifecycle`.
     private var acao: AcaoDoTerminalDaMaquina {
@@ -100,7 +129,6 @@ struct MachineDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) { identidadeENavigationBarLeading }
-            ToolbarItem(placement: .principal) { seletor }
             ToolbarItem(placement: .navigationBarTrailing) {
                 // Só quando o painel do terminal está à frente — no painel de
                 // arquivos não há tela para copiar.
@@ -164,6 +192,13 @@ struct MachineDetailView: View {
                 }
             }
             ToolbarItem(placement: .navigationBarTrailing) {
+                // [13/08/2026] O seletor terminal/arquivos saiu daqui pra
+                // `ChromeDaAba` (ver `chaveDaAba` e o `.task`/`.onChange`
+                // abaixo). Este botão de Informações FICOU: é ele que leva ao
+                // ícone e ao tema da máquina, e era um dos itens que o
+                // SwiftUI escondia quando N painéis montados (decisão #19)
+                // disputavam esta mesma toolbar — "a parte de personalizar a
+                // maquina não deixa escolher as coisas do hub".
                 Button { sheetInfo = SheetInfo() } label: {
                     Image(systemName: "paintpalette")
                 }
@@ -213,6 +248,26 @@ struct MachineDetailView: View {
                 session.disconnect()
             }
         }
+        // Declara os dois painéis desta aba na chrome e reflete a escolha JÁ
+        // guardada (o `@AppStorage paneRaw`) — sem `id:`/condição, roda uma
+        // vez por montagem, não a cada recomposição (`definirSegmentos` e
+        // `escolher` são idempotentes, mas isto aqui não conta com isso pra
+        // esconder um laço: `segmentosDeChrome()` não muda e `paneRaw` só
+        // muda pela mão da usuária, então uma escrita por montagem basta).
+        .task {
+            nav.definirSegmentos(Self.segmentosDeChrome(), de: chaveDaAba)
+            nav.escolher(paneRaw, de: chaveDaAba)
+        }
+        // A chrome escreveu: aplica no `@AppStorage` desta máquina — uma
+        // direção só (a chrome nunca lê `paneRaw` direto, só o que este
+        // `onChange` ecoa pro registro). Guarda contra um `id` que não é
+        // `MachinePane` de verdade: hoje a chrome só escreve o que ela mesma
+        // desenhou a partir de `segmentosDeChrome()`, mas o registro é
+        // `String` cru — a tradução pro enum é trabalho deste painel.
+        .onChange(of: nav.escolha(de: chaveDaAba)) { _, novo in
+            guard let novo, MachinePane(rawValue: novo) != nil else { return }
+            paneRaw = novo
+        }
     }
 
     /// Ícone pelo SO detectado + usuário da identidade, quando há — pista de
@@ -232,17 +287,6 @@ struct MachineDetailView: View {
             Image(systemName: simbolo)
                 .foregroundStyle(.secondary)
         }
-    }
-
-    private var seletor: some View {
-        Picker("Painel", selection: Binding(get: { pane }, set: { paneRaw = $0.rawValue })) {
-            ForEach(MachinePane.allCases, id: \.self) { p in
-                Label(p.label, systemImage: p.symbol).tag(p)
-            }
-        }
-        .pickerStyle(.segmented)
-        .labelStyle(.titleOnly)
-        .frame(maxWidth: 220)
     }
 
     @ViewBuilder

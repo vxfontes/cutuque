@@ -173,7 +173,20 @@ struct RootSplitView: View {
         // há laço, e nenhuma aba fechada é reaberta por este handler.
         .onChange(of: tabsStore.tabs, initial: true) { _, tabs in
             nav.abaEmFoco = tabs.selecionada
-            nav.descartarModos(mantendo: Set(tabs.abas.map(\.chave)))
+            let vivas = Set(tabs.abas.map(\.chave))
+            nav.descartarModos(mantendo: vivas)
+            // [13/08/2026] O registro da chrome (segmentos declarados +
+            // escolha) cresce pelo mesmo motivo e limpa no mesmo lugar. Sem
+            // isto, reabrir uma aba fechada acharia segmento velho de conteúdo
+            // que já não existe.
+            nav.descartarChrome(mantendo: vivas)
+            // E a aba que segue ABERTA mas cujo conteúdo virou `.morta` ou
+            // `.pendente` também perde a chrome: a linha acima só varre chave
+            // que saiu do array, e `reconciliar` troca o conteúdo mantendo a
+            // chave. Ver `TabConteudo.declaraChrome`.
+            for aba in tabs.abas where !aba.conteudo.declaraChrome {
+                nav.limparChrome(de: aba.chave)
+            }
 
             let orfas = AbasNavegacao.selecoesOrfas(
                 abas: tabs.abas.map(\.chave), sessao: nav.selection,
@@ -191,9 +204,12 @@ struct RootSplitView: View {
                 $0.abrir(chave: .board, titulo: "Board", conteudo: .board)
             }
         }
-        // Escolher um host na lista abre/foca a aba dele. `estilo: .passagem`
-        // (padrão) é o modelo do VS Code: a próxima coisa aberta substitui esta
-        // se ela não tiver sido fixada.
+        // Escolher um host na lista abre/foca a aba dele.
+        // [Reescrito em 13/08/2026] Dizia que a aba nascia `estilo: .passagem`
+        // e que a próxima abertura a substituiria se ela não fosse fixada.
+        // Falso desde a revogação do modelo VS Code: `EstiloDeAba` foi removido
+        // e abrir nunca substitui (ver `OpenTabs.abrir`). Máquinas acumulam na
+        // barra como qualquer outra aba, e quem segura o custo é `maxVivas`.
         .onChange(of: nav.machineSelection) { _, machine in
             guard let machine else { return }
             tabsStore.mutar {
@@ -377,6 +393,12 @@ struct RootSplitView: View {
         VStack(spacing: 0) {
             if !tabsStore.tabs.abas.isEmpty {
                 TabBar(store: tabsStore)
+                // Uma chrome só, FORA dos painéis: com N painéis montados
+                // (decisão #19) um seletor por painel virava N contribuições
+                // pra mesma navigation bar e o SwiftUI escondia quase todas
+                // (ver `ChromeDaAba`). Fica aqui, e não dentro do `ZStack`,
+                // justamente para existir uma única instância.
+                ChromeDaAba(chave: tabsStore.tabs.selecionada)
             }
             ZStack {
                 ForEach(tabsStore.tabs.abas) { aba in
@@ -406,7 +428,10 @@ struct RootSplitView: View {
                               paneState: tabsStore.tabs.estado(de: aba.chave),
                               chave: aba.chave)
         case .board:
-            BoardView(embedded: true)
+            // `emFoco` pelo mesmo motivo do `paneState` dos outros dois casos:
+            // o painel fica montado escondido e não pode emprestar toolbar.
+            BoardView(embedded: true,
+                      emFoco: tabsStore.tabs.estado(de: aba.chave) == .ativo)
         case .maquina(let machine):
             // Mesmo motivo do antigo `.id(machine.name)` do case `.machines`:
             // identidade pelo NOME, não pela struct inteira (tema/ícone

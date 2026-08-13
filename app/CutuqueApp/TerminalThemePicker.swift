@@ -11,6 +11,11 @@ import SwiftUI
 struct TerminalThemePicker: View {
     @Binding var selection: String
 
+    // [13/08/2026] `Color.accentColor` não lê o `.tint()` da raiz (ver
+    // `AppTheme.swift`) — era por isso que o checkmark e a borda do tema
+    // escolhido ficavam sempre azuis, mesmo trocando a cor em Ajustes.
+    @Environment(\.corDeDestaque) private var destaque
+
     /// `.adaptive` reflow sozinho: 1-2 colunas no iPhone, 3+ no iPad, sem
     /// breakpoint escrito à mão. `maximum` evita um cartão esticado até a
     /// borda numa tela larga com poucos temas por linha.
@@ -43,7 +48,7 @@ struct TerminalThemePicker: View {
                     Spacer(minLength: 4)
                     if selecionado {
                         Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(Color.accentColor)
+                            .foregroundStyle(destaque)
                     }
                 }
             }
@@ -51,7 +56,7 @@ struct TerminalThemePicker: View {
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(selecionado ? Color.accentColor : Color.clear, lineWidth: 2)
+                    .strokeBorder(selecionado ? destaque : Color.clear, lineWidth: 2)
             )
         }
         .buttonStyle(.plain)

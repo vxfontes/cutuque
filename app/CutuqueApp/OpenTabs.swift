@@ -59,13 +59,22 @@ enum TabConteudo: Equatable {
     case arquivado(BoardTask)
     case pendente
     case morta
-}
 
-/// `passagem` é a aba de preview do VS Code: existe no máximo uma, e a próxima
-/// coisa aberta toma o lugar dela. `fixa` é ortogonal (G3) — protege de "fechar
-/// outras"/"fechar todas".
-enum EstiloDeAba {
-    case passagem, normal
+    /// Se este conteúdo tem painel próprio para DECLARAR segmentos de chrome.
+    ///
+    /// [13/08/2026] `.morta` desenha só o aviso (`abaMorta`) e `.pendente` só um
+    /// spinner: nenhum dos dois tem painel para declarar nada. Existe porque
+    /// `reconciliar` troca o conteúdo MANTENDO a chave (hub reiniciado, `ssh`
+    /// que caiu e voltou — reversível de propósito), e aí
+    /// `descartarChrome(mantendo:)`, que só varre chave que SAIU do array, não
+    /// pegava: o Picker continuava desenhado por cima de "Máquina fora do
+    /// registro", clicável e sem ninguém escutando. Achado da revisão da F4.
+    var declaraChrome: Bool {
+        switch self {
+        case .sessao, .board, .maquina, .arquivado: return true
+        case .pendente, .morta: return false
+        }
+    }
 }
 
 /// O que vai pro disco: chave, título e se é fixa. Conteúdo NÃO vai — é ele que
@@ -79,7 +88,6 @@ struct AbaPersistida: Codable, Equatable {
 struct AbaAberta: Identifiable, Equatable {
     let chave: ChaveDeAba
     var titulo: String
-    var estilo: EstiloDeAba
     var fixa: Bool
     var conteudo: TabConteudo
     /// Contador monotônico de foco, não relógio: dá MRU testável sem injetar
@@ -96,26 +104,26 @@ struct OpenTabs: Equatable {
 
     // MARK: abrir e selecionar
 
-    mutating func abrir(chave: ChaveDeAba, titulo: String, conteudo: TabConteudo,
-                        estilo: EstiloDeAba = .passagem) {
+    /// [13/08/2026] Modelo de navegador: abrir NUNCA substitui aba nenhuma. Antes
+    /// existia a "aba de passagem" (preview do VS Code), única, que a próxima
+    /// abertura tomava — decisão minha de 12/08, revogada pela Vanessa: "ao invés de
+    /// funcionar como um navegador que vai abrindo uma ao lado da outra, so se fixar
+    /// funciona". O teto de `maxVivas` continua sendo o que segura o custo: abas
+    /// acumulam na barra e as menos recentes DORMEM (ver `vivas`).
+    mutating func abrir(chave: ChaveDeAba, titulo: String, conteudo: TabConteudo) {
         contadorDeFoco += 1
 
         if let i = abas.firstIndex(where: { $0.chave == chave }) {
-            // Já aberta: foca, atualiza o título e PROMOVE. Nunca duplica, e
-            // nunca rebaixa um conteúdo resolvido de volta a `pendente`.
+            // Já aberta: foca e atualiza o título. Nunca duplica, e nunca
+            // rebaixa um conteúdo resolvido de volta a `pendente`.
             abas[i].titulo = titulo
-            abas[i].estilo = .normal
             abas[i].ordemDeFoco = contadorDeFoco
             if conteudo != .pendente { abas[i].conteudo = conteudo }
             selecionada = chave
             return
         }
 
-        if estilo == .passagem, let i = abas.firstIndex(where: { $0.estilo == .passagem && !$0.fixa }) {
-            abas.remove(at: i)
-        }
-
-        abas.append(AbaAberta(chave: chave, titulo: titulo, estilo: estilo,
+        abas.append(AbaAberta(chave: chave, titulo: titulo,
                               fixa: false, conteudo: conteudo, ordemDeFoco: contadorDeFoco))
         selecionada = chave
     }
@@ -159,7 +167,6 @@ struct OpenTabs: Equatable {
     mutating func fixar(_ chave: ChaveDeAba) {
         guard let i = abas.firstIndex(where: { $0.chave == chave }) else { return }
         abas[i].fixa = true
-        abas[i].estilo = .normal
     }
 
     mutating func desafixar(_ chave: ChaveDeAba) {
@@ -202,14 +209,17 @@ struct OpenTabs: Equatable {
         abas.map { AbaPersistida(chave: $0.chave, titulo: $0.titulo, fixa: $0.fixa) }
     }
 
-    /// Abas do disco nascem `normal`, com o conteúdo que já podem mostrar sem
+    /// [Reescrito em 13/08/2026] Dizia "abas do disco nascem `normal`" — e
+    /// `EstiloDeAba.normal` não existe mais: com o modelo de navegador nenhuma
+    /// aba é de passagem, então não há estilo pra nascer com. O que continua
+    /// verdade é o resto: nascem com o conteúdo que já podem mostrar sem
     /// perguntar a ninguém (ver `conteudoInicial`). A ordem de foco é a da
     /// barra (a primeira é a mais "recente"), o que faz o teto de 6 da G2
     /// dormir as da direita até a Vanessa tocar nelas.
     static func restaurando(_ salvas: [AbaPersistida]) -> OpenTabs {
         var t = OpenTabs()
         for (i, s) in salvas.enumerated() {
-            t.abas.append(AbaAberta(chave: s.chave, titulo: s.titulo, estilo: .normal,
+            t.abas.append(AbaAberta(chave: s.chave, titulo: s.titulo,
                                     fixa: s.fixa, conteudo: Self.conteudoInicial(s.chave),
                                     ordemDeFoco: salvas.count - i))
         }

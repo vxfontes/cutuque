@@ -42,6 +42,59 @@ struct NewMachineView: View {
         }
     }
 
+    /// O que mandar para `PUT /machines/{n}/appearance` ao salvar a edição, ou
+    /// `nil` se nada mudou (não gastar pedido nem sobrescrever com igual).
+    struct Aparencia: Equatable {
+        let tema: String
+        let icone: String
+
+        static func decidir(temaAtual: String, iconeAtual: String,
+                            temaEscolhido: String, iconeEscolhido: String) -> Aparencia? {
+            guard temaEscolhido != temaAtual || iconeEscolhido != iconeAtual else { return nil }
+            return Aparencia(tema: temaEscolhido, icone: iconeEscolhido)
+        }
+
+        /// A mesma regra, mas alimentada pela máquina que o HUB acabou de
+        /// devolver — e sabendo quais dos dois campos a usuária realmente
+        /// tocou.
+        ///
+        /// [13/08/2026] Sem isto, tema escolhido em outro lugar (a sheet
+        /// Informações, o Command Center, outro aparelho) era APAGADO calado ao
+        /// salvar uma edição. A sheet semeia `tema`/`icone` do `Machine` que a
+        /// lista tem em memória, e essa lista só recarrega por `.task`, pull ou
+        /// a notificação `.maquinasMudaram`: ela pode estar velha. Com o
+        /// snapshot velho a seção mostrava **Padrão** marcado mentindo sobre o
+        /// que estava salvo — e como o `PUT /appearance` substitui os DOIS
+        /// campos de uma vez, mexer só no ícone levava `theme: ""` junto e
+        /// derrubava o tema de verdade.
+        ///
+        /// Daí a regra: campo INTOCADO devolve o valor do próprio hub, nunca o
+        /// que a sheet semeou. Só o que ela mexeu é opinião dela; o resto é
+        /// round-trip do que já estava lá. Comparar contra `""` velho não
+        /// resolveria — coincidência de valores iguais escondia o mesmo
+        /// apagamento por outro caminho.
+        static func decidir(hub: Machine,
+                            temaEscolhido: String, iconeEscolhido: String,
+                            temaTocado: Bool, iconeTocado: Bool) -> Aparencia? {
+            let temaDoHub = hub.theme ?? ""
+            let iconeDoHub = hub.icon ?? ""
+            return decidir(
+                temaAtual: temaDoHub, iconeAtual: iconeDoHub,
+                temaEscolhido: temaTocado ? temaEscolhido : temaDoHub,
+                iconeEscolhido: iconeTocado ? iconeEscolhido : iconeDoHub
+            )
+        }
+
+        /// Com que valor um campo de aparência deve FICAR quando a leitura
+        /// fresca do hub chega depois da sheet já ter aberto (ver
+        /// `resemearAparencia`): o do hub se a usuária ainda não mexeu, a
+        /// escolha dela se mexeu. Re-semear por cima do que ela acabou de
+        /// escolher seria desfazer o toque dela na frente dos olhos dela.
+        static func semear(escolhaAtual: String, semeadoDe: String, doHub: String) -> String {
+            escolhaAtual == semeadoDe ? doHub : escolhaAtual
+        }
+    }
+
     let modo: Modo
     /// Avisa a lista para recarregar quando algo mudou de verdade.
     let onChanged: () -> Void
@@ -54,6 +107,7 @@ struct NewMachineView: View {
         _host = State(initialValue: existente.host ?? "")
         _porta = State(initialValue: String(existente.port == 0 ? 22 : existente.port))
         _tema = State(initialValue: existente.theme ?? "")
+        _icone = State(initialValue: existente.icon ?? "")
         if modo.editando {
             // Editando, os campos nascem ABERTOS — travar aqui seria travar
             // exatamente o que a usuária veio mudar. E `mexeuNoHub` fica falso:
@@ -80,6 +134,31 @@ struct NewMachineView: View {
     @State private var host = ""
     @State private var porta = "22"
     @State private var tema = ""
+    /// `""` = automático. Só existe estado próprio porque, ao editar, o ícone
+    /// vai junto do tema no MESMO `PUT /appearance` — ver `secaoAparencia`.
+    @State private var icone = ""
+    /// [13/08/2026] Quais dos dois campos de aparência a USUÁRIA mexeu nesta
+    /// sheet. `""` é ambíguo por natureza aqui — pode ser "quero o padrão" ou
+    /// "esta tela nunca soube o valor de verdade" —, e o `PUT /appearance`
+    /// substitui os dois campos juntos, então o campo intocado tem de devolver
+    /// o valor do hub em vez de um palpite. Ver `Aparencia.decidir(hub:…)`.
+    @State private var temaTocado = false
+    @State private var iconeTocado = false
+    /// Aparência que o `PATCH` já confirmou mas o `PUT /appearance` não
+    /// conseguiu gravar, com o motivo.
+    ///
+    /// [13/08/2026] São duas escritas sem transação. Quando a segunda falha o
+    /// endereço JÁ foi salvo e os campos já travaram — e o ✓ passava a repetir o
+    /// scan de SSH (o fluxo do TOFU, que não tem nada a ver), deixando tema e
+    /// ícone perdidos sem jeito de reenviar sem fechar e reabrir a sheet.
+    /// Guardar aqui é o que dá ao "Tentar de novo" o que repetir e ao rodapé o
+    /// que dizer.
+    @State private var aparenciaPendente: AparenciaPendente?
+
+    struct AparenciaPendente {
+        let alvo: Aparencia
+        let motivo: String
+    }
 
     // Identidade escolhida (objeto cheio, não só o nome — precisa de
     // `hasPassword` na hora de decidir se o install-key pede senha).
@@ -126,11 +205,18 @@ struct NewMachineView: View {
             Form {
                 secaoHost
                 secaoIdentidade
-                // Editando, aparência não vem: tema e ícone são do
-                // `PUT /appearance` (onde vazio é escolha, não "mantém"), e o
-                // PATCH desta tela não tem como expressar "volta ao padrão".
-                // Quem cuida disso é a sheet Informações, dentro da máquina.
-                if !modo.editando { secaoTema }
+                // [13/08/2026] Editando, aparência agora vem — pedido da
+                // Vanessa ("a parte de personalizar a maquina não deixa
+                // escolher as coisas do hub tipo icone, tema e tal"), e ela
+                // pediu nos DOIS lugares (aqui e na sheet Informações). O
+                // `PATCH` continua mandando `theme: ""` (= mantém) porque
+                // continua não sabendo expressar "volta ao padrão": quem leva
+                // aparência é o `PUT /appearance`, chamado no salvar (ver
+                // `salvarEdicao`). Cadastrando, segue só o tema pelo POST —
+                // máquina que ainda não existe não tem `/appearance` para
+                // chamar (era a assimetria que o comentário antigo
+                // registrava, e continua valendo pro cadastro).
+                if modo.editando { secaoAparencia } else { secaoTema }
 
                 if fase == .pedindoSenha { secaoSenha }
 
@@ -298,7 +384,11 @@ struct NewMachineView: View {
             Text("Credenciais")
         } footer: {
             if modo.editando {
-                Text("Trocar de identidade instala a chave da nova no destino. Tema e ícone ficam em Informações, dentro da máquina.")
+                // [13/08/2026] Perdeu o "tema e ícone ficam em Informações":
+                // desde que `secaoAparencia` existe, as duas aparecem AQUI
+                // também (a sheet Informações continua tendo — são os dois
+                // lugares que a Vanessa pediu, não um só).
+                Text("Trocar de identidade instala a chave da nova no destino.")
             }
         }
         .disabled(camposTravados)
@@ -312,6 +402,55 @@ struct NewMachineView: View {
             Text("Tema do terminal")
         }
         .disabled(camposTravados)
+    }
+
+    /// Ícone + tema ao EDITAR — item 4 do apontamento dela. Usa o MESMO
+    /// `SeletorDeIconeDeMaquina` e `TerminalThemePicker` que a sheet
+    /// Informações já usa: duplicar a grade à mão aqui divergiria da sheet na
+    /// primeira mexida em qualquer uma das duas.
+    ///
+    /// Ao contrário de `secaoTema` (só cadastro), esta seção não escreve nada
+    /// sozinha — só junta `tema`/`icone` no `@State`. Quem manda ao hub é
+    /// `salvarEdicao`, e só se `Aparencia.decidir` disser que mudou algo.
+    @ViewBuilder private var secaoAparencia: some View {
+        Section {
+            SeletorDeIconeDeMaquina(so: modo.machine?.os, escolhido: icone, habilitado: !camposTravados) {
+                icone = $0
+                iconeTocado = true
+            }
+        } header: {
+            Text("Ícone")
+        } footer: {
+            Text("Automático usa o sistema detectado.")
+        }
+        Section {
+            // Binding-proxy só para marcar o toque: `""` não distingue "quero o
+            // padrão" de "esta tela nunca soube o valor" — ver `temaTocado`.
+            TerminalThemePicker(selection: Binding(
+                get: { tema },
+                set: { tema = $0; temaTocado = true }
+            ))
+            .frame(minHeight: 220) // o picker é um ScrollView sem altura própria
+        } header: {
+            Text("Tema do terminal")
+        } footer: {
+            Text("Vale só para esta máquina, e o terminal aberto muda de cor na hora.")
+        }
+        .disabled(camposTravados)
+        if let pendente = aparenciaPendente {
+            Section {
+                Button("Tentar de novo") {
+                    Task { await gravarAparencia(pendente.alvo, em: nome) }
+                }
+                .disabled(trabalhando)
+            } header: {
+                Text("Tema e ícone não foram salvos")
+            } footer: {
+                // Diz QUAL das duas escritas falhou: sem isso o erro genérico
+                // parecia dizer que a edição inteira se perdeu.
+                Text("O endereço foi salvo. A aparência não: \(pendente.motivo)")
+            }
+        }
     }
 
     @ViewBuilder private var secaoSenha: some View {
@@ -405,6 +544,9 @@ struct NewMachineView: View {
         if modo.editando {
             // Editando não dispara nada sozinho: a usuária ainda vai mexer nos
             // campos, e um scan aqui pediria confirmação do endereço ANTIGO.
+            // Menos a aparência, que é leitura: relê para os pickers não
+            // mentirem sobre o que está salvo.
+            await resemearAparencia(de: existente)
             trabalhando = false
             return
         }
@@ -426,6 +568,49 @@ struct NewMachineView: View {
             // Nada a disparar: este é o único ramo que não delega pro
             // `executando`, então é ele que solta a trava tomada acima.
             trabalhando = false
+        }
+    }
+
+    /// Relê tema e ícone do hub e re-semeia os pickers.
+    ///
+    /// [13/08/2026] Os `@State` nascem do `Machine` que a LISTA tem em memória,
+    /// e essa lista só recarrega por `.task`, pull ou `.maquinasMudaram` — pode
+    /// estar velha. Com ela velha a seção mostrava **Padrão** marcado com o hub
+    /// tendo, digamos, "dracula": mentira sobre o que está salvo, e no iPad é
+    /// fácil de acontecer sem espera nenhuma (lista e detalhe ficam montados
+    /// juntos, e a sheet Informações grava por PUT imediato na coluna ao lado).
+    ///
+    /// Falhar aqui é inofensivo, e é de propósito não travar nada por causa
+    /// disso: quem impede o apagamento é `Aparencia.decidir(hub:…)`, que
+    /// compara contra o retorno do PATCH e devolve o valor do hub em campo
+    /// intocado. Esta releitura serve à HONESTIDADE da tela, não à segurança do
+    /// dado.
+    ///
+    /// `listMachines()` é o único endpoint que carrega aparência — não existe
+    /// GET de uma máquina só.
+    private func resemearAparencia(de existente: Machine) async {
+        guard let todas = try? await api.listMachines(),
+              let fresca = todas.first(where: { $0.name == existente.name }) else { return }
+        tema = Aparencia.semear(escolhaAtual: tema,
+                                semeadoDe: existente.theme ?? "", doHub: fresca.theme ?? "")
+        icone = Aparencia.semear(escolhaAtual: icone,
+                                 semeadoDe: existente.icon ?? "", doHub: fresca.icon ?? "")
+    }
+
+    /// Grava tema+ícone e, se falhar, GUARDA o que faltou em vez de propagar.
+    ///
+    /// [13/08/2026] Propagar sequestrava o resto de `salvarEdicao`: um PUT de
+    /// aparência que morre na rede impedia o TOFU de recomeçar quando o
+    /// endereço mudou — a máquina fica `needsTrust` no hub e o app nunca entra
+    /// na confirmação, o pior dos dois mundos. Endereço e confiança não podem
+    /// depender de uma escrita cosmética.
+    private func gravarAparencia(_ alvo: Aparencia, em maquina: String) async {
+        do {
+            _ = try await api.setAppearance(name: maquina, theme: alvo.tema, icon: alvo.icone)
+            mexeuNoHub = true
+            aparenciaPendente = nil
+        } catch {
+            aparenciaPendente = AparenciaPendente(alvo: alvo, motivo: error.localizedDescription)
         }
     }
 
@@ -490,12 +675,31 @@ struct NewMachineView: View {
             // rebaixar a porta de ninguém (o ✓ já exige uma válida).
             port: Self.portaValida(porta) ?? atual.port,
             identity: novaIdentidade,
-            // Vazio = mantém. Tema aqui seria o único jeito de esta tela mexer
-            // em aparência, e ela não deve: quem faz isso é o PUT /appearance.
+            // [13/08/2026] Vazio = mantém, e isso continua valendo: o PATCH
+            // nunca soube expressar "volta ao padrão" (e não tem campo de
+            // ícone nenhum). O que mudou é que esta tela AGORA manda
+            // aparência de verdade — só que pelo PUT /appearance logo abaixo,
+            // que sabe dizer isso.
             theme: ""
         )
         mexeuNoHub = true
         camposTravados = true
+        // Depois dos campos, a aparência — nessa ordem, e só quando
+        // `Aparencia.decidir` (abaixo) diz que tema ou ícone realmente
+        // mudaram: não vale a pena gastar um PUT nem sobrescrever com o
+        // mesmo valor que já estava lá.
+        //
+        // [13/08/2026] A comparação é contra `atualizada`, o retorno do PATCH, e
+        // NÃO contra o `atual` capturado quando a sheet abriu. O hub devolve ali
+        // o tema e o ícone correntes (`machine.go`: `next.Theme = cur.Theme`,
+        // `next.Icon = cur.Icon`), enquanto `atual` é o snapshot da lista, que
+        // pode estar velho. Ver `Aparencia.decidir(hub:…)` para por que campo
+        // intocado devolve o valor do hub.
+        if let alvo = Aparencia.decidir(hub: atualizada,
+                                        temaEscolhido: tema, iconeEscolhido: icone,
+                                        temaTocado: temaTocado, iconeTocado: iconeTocado) {
+            await gravarAparencia(alvo, em: atual.name)
+        }
         if atualizada.needsTrust {
             let fp = try await api.scanMachine(name: atual.name)
             fingerprintConhecido = fp
@@ -662,6 +866,10 @@ private struct IdentitySheet: View {
     let onEscolhida: (Identity) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    // [13/08/2026] `Color.accentColor` ignora o `.tint()` da raiz (resolve do
+    // catálogo de assets, que este app nem tem) — era por isso que o ✓ desta
+    // lista ficava azul mesmo com outro tema escolhido em Ajustes.
+    @Environment(\.corDeDestaque) private var corDeDestaque
     private let api = APIClient()
 
     @State private var identidades: [Identity] = []
@@ -719,7 +927,7 @@ private struct IdentitySheet: View {
             }
             Spacer()
             if candidata.id == identidadeAtual?.id {
-                Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                Image(systemName: "checkmark").foregroundStyle(corDeDestaque)
             }
         }
     }

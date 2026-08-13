@@ -62,11 +62,18 @@ final class SessionListViewModel: ObservableObject {
     private(set) var temRetratoDoRegistro = false
 
     /// Retrato COMPLETO dos panes ao vivo já chegou pelo menos uma vez —
-    /// ligado só no ponto em que `refreshLive()` de fato atribui
-    /// `liveSessions`, depois dos dois `return` antecipados que NÃO são
-    /// retrato (sem máquina pra consultar; hiccup de SSH com sessões antigas
-    /// cacheadas). Uma vez true, nunca volta a false. Mesma data/motivo do
+    /// ligado ao fim de uma passada inteira de `refreshLive()` (todas as
+    /// máquinas de `/targets` responderam, mesmo que alguma tenha vindo vazia
+    /// ou de cache). Uma vez true, nunca volta a false. Mesma data/motivo do
     /// flag acima.
+    ///
+    /// [13/08/2026] Só o `return` de "sem máquina pra consultar" continua
+    /// impedindo a linha abaixo de rodar — o outro caso antigo ("hiccup de
+    /// SSH com sessões antigas cacheadas") não é mais um `return` cedo da
+    /// função inteira: virou uma decisão POR MÁQUINA dentro de
+    /// `MergedorDeVivas` (ver o comentário de `cachedMachines`), então a
+    /// passada como um todo sempre termina e liga o flag — só a fusão daquela
+    /// máquina específica é que preserva o valor antigo em vez de zerar.
     private(set) var temRetratoDosVivos = false
 
     private let api: SessionListAPI
@@ -77,13 +84,33 @@ final class SessionListViewModel: ObservableObject {
     private var liveTask: Task<Void, Never>?
     private var livePollTask: Task<Void, Never>?
     // Resiliência do poll de vivas: cacheia as máquinas (falha de fetch não zera
-    // o "Ao vivo") e exige 2 leituras vazias seguidas antes de limpar (evita o
-    // "some e volta" de um hiccup transitório).
+    // o "Ao vivo").
+    //
+    // [13/08/2026] A regra "exige 2 leituras vazias seguidas antes de limpar"
+    // (evita o "some e volta" de um hiccup transitório de SSH) CONTINUA
+    // existindo, mas deixou de ser um contador GLOBAL — virou POR MÁQUINA,
+    // dentro de `MergedorDeVivas`. Era global e um único contador (`windows`
+    // desligado sempre devolvendo 0 panes incrementava o MESMO contador que o
+    // `macbook`, e ao completar as 2 leituras vazias dele apagava as vivas do
+    // `macbook`, que respondia normal) — a causa raiz da "zica de loading"
+    // (card 0c63a052ebb1cabc): sem separar por máquina, qualquer máquina
+    // lenta ou fora do ar contaminava o estado de todas as outras.
     private var cachedMachines: [String] = []
-    private var emptyLiveStreak = 0
+    private var mergedor = MergedorDeVivas(ordem: [])
     /// Máquinas conhecidas pelo último poll de "ao vivo" — o formulário de novo
     /// terminal usa esta lista pronta em vez de buscar `targets()` de novo.
     var machineNames: [String] { cachedMachines }
+    /// Máquinas que ainda não responderam NESTA passada de `refreshLive` — a
+    /// linha "Procurando sessões em …" da seção Ao vivo (13/08/2026). Só a
+    /// primeira passada do polling liga isto (`mostrandoCarga: true`): nas
+    /// passadas de fundo (a cada 15 s) a lista já está carregada e reexibir a
+    /// linha de carregando seria ruído, não sinal.
+    @Published var maquinasPendentes: Set<String> = []
+    /// Passada de "ao vivo" em voo, se houver — ver a guarda de reentrância em
+    /// `refreshLive(mostrandoCarga:)`. `@MainActor` serializa só o trecho
+    /// síncrono entre `await`s: sem esta referência, dois `Task` diferentes
+    /// entram na mesma passada e corrompem o contador de vazios do `mergedor`.
+    private var passadaDeVivas: Task<Void, Never>?
 
     // Haptics locais: "gostinho do cutucão" antes do push da Fase 4.
     private let haptics = UINotificationFeedbackGenerator()
@@ -161,12 +188,19 @@ final class SessionListViewModel: ObservableObject {
 
     /// Começa a pollar as sessões vivas de todas as máquinas a cada ~15s.
     /// Idempotente. Uma passada roda já no início (sem esperar o 1º sleep).
+    ///
+    /// [13/08/2026] Só a PRIMEIRA passada liga `mostrandoCarga` — é ela que
+    /// mostra "Procurando sessões em …" enquanto a máquina mais lenta não
+    /// respondeu; nas passadas seguintes a lista já carregou uma vez e a linha
+    /// reaparecendo a cada 15s seria ruído.
     func startLivePolling() {
         guard livePollTask == nil else { return }
         livePollTask = Task { [weak self] in
+            var primeiraPassada = true
             while !Task.isCancelled {
                 guard let self else { return }
-                await self.refreshLive()
+                await self.refreshLive(mostrandoCarga: primeiraPassada)
+                primeiraPassada = false
                 try? await Task.sleep(for: .seconds(15))
             }
         }
@@ -179,40 +213,85 @@ final class SessionListViewModel: ObservableObject {
 
     /// Uma passada de descoberta de vivas: para cada máquina, lista os panes do
     /// tmux rodando claude (as sessões controláveis ao vivo — send-keys/mirror).
-    func refreshLive() async {
+    ///
+    /// [13/08/2026] Paralelo e incremental — ver `MergedorDeVivas` para a
+    /// medição que motivou a mudança (11,28 s sequencial contra o hub de
+    /// produção, dos quais 10,016 s eram só o `windows` desligado). Antes:
+    /// `for machine in machines { await … }` num laço sequencial, com uma
+    /// ÚNICA atribuição de `liveSessions` no fim — as 7 panes do `macbook`
+    /// (1 s) ficavam prontas e invisíveis, esperando o `windows` (10 s de
+    /// `ConnectTimeout`). Agora cada máquina que responde já funde e já
+    /// pinta, sem esperar as demais.
+    ///
+    /// `mostrandoCarga` liga `maquinasPendentes` (a linha "Procurando sessões
+    /// em …" da lista) — quem decide QUANDO ligar é o chamador (a primeira
+    /// passada do polling, e o pull-to-refresh); aqui só publica e limpa.
+    ///
+    /// [13/08/2026] REENTRÂNCIA: quem chega no meio de uma passada ESPERA a que
+    /// está rodando em vez de abrir uma segunda. São quatro chamadores
+    /// independentes (o laço do polling, o pull-to-refresh, o callback de criar
+    /// terminal e o app intent `.reload`) e todos compartilham o mesmo
+    /// `mergedor` e o mesmo `maquinasPendentes`. Duas passadas cruzadas
+    /// produziriam duas leituras vazias da mesma máquina em SEGUNDOS — e o
+    /// debounce de `MergedorDeVivas` ("2 vazios seguidos") existe justamente
+    /// para exigir duas passadas de ~15s antes de acreditar que a máquina
+    /// esvaziou. Sem esta guarda, um hiccup de rede + um pull-to-refresh (o
+    /// hábito da usuária: "sempre preciso puxar pra baixo") marcavam uma aba
+    /// VIVA como "Sessão encerrada". Esperar também deixa o spinner do
+    /// `.refreshable` terminar junto com a passada de verdade.
+    func refreshLive(mostrandoCarga: Bool = false) async {
+        if let emVoo = passadaDeVivas {
+            // Não mexe em `maquinasPendentes` aqui: a passada em voo já removeu
+            // as máquinas que responderam, e repopular o conjunto deixaria
+            // essas máquinas listadas como "procurando" para sempre.
+            await emVoo.value
+            return
+        }
+        let passada = Task { await self.umaPassadaDeVivas(mostrandoCarga: mostrandoCarga) }
+        passadaDeVivas = passada
+        await passada.value
+        passadaDeVivas = nil
+    }
+
+    private func umaPassadaDeVivas(mostrandoCarga: Bool) async {
         // Máquinas com cache: se o fetch falhar (hiccup), reusa as últimas — assim
         // uma falha transitória NÃO zera o "Ao vivo".
         let machines = (try? await api.targets()).flatMap { $0.isEmpty ? nil : $0 } ?? cachedMachines
         guard !machines.isEmpty else { return } // sem como consultar → mantém o estado
         cachedMachines = machines
+        mergedor.definirOrdem(machines)
+        if mostrandoCarga { maquinasPendentes = Set(machines) }
 
-        var all: [LiveEntry] = []
-        for machine in machines {
-            let panes = await api.tmuxList(machine: machine)
-            all.append(contentsOf: panes.map { LiveEntry(machine: machine, session: $0) })
+        await withTaskGroup(of: (String, [LiveEntry]).self) { grupo in
+            for machine in machines {
+                grupo.addTask { [api] in
+                    let panes = await api.tmuxList(machine: machine)
+                    return (machine, panes.map { LiveEntry(machine: machine, session: $0) })
+                }
+            }
+            // Cada máquina que responde já funde e já pinta: o `macbook` não
+            // fica esperando o `windows` (nem vice-versa, se as respostas
+            // vierem fora de ordem — `MergedorDeVivas` mantém a ordem estável
+            // de `/targets` independente de quem chega primeiro).
+            for await (machine, entradasDaMaquina) in grupo {
+                let atual = mergedor.fundir(maquina: machine, entradas: entradasDaMaquina)
+                // Só re-anima quando o CONJUNTO de panes muda; mudança só de
+                // estado (cor) aplica sem animar a lista inteira → menos piscada.
+                if atual.map(\.id) != liveSessions.map(\.id) {
+                    withAnimation(.snappy) { liveSessions = atual }
+                } else {
+                    liveSessions = atual
+                }
+                maquinasPendentes.remove(machine)
+            }
         }
 
-        // Veio vazio mas tínhamos sessões? Pode ser hiccup do SSH — só limpa após
-        // 2 leituras vazias seguidas (mata o "some e volta").
-        if all.isEmpty && !liveSessions.isEmpty {
-            emptyLiveStreak += 1
-            if emptyLiveStreak < 2 { return }
-        } else {
-            emptyLiveStreak = 0
-        }
-
-        // Retrato completo dos vivos: só chega até aqui depois dos dois `return`
-        // acima (sem máquina pra consultar; hiccup de SSH com cache antigo), então
-        // os dois casos que NÃO são retrato já saíram antes desta linha.
+        // Retrato completo dos vivos: uma passada inteira (todas as máquinas de
+        // `/targets`) terminou. Equivalente, no modelo paralelo, ao fim do laço
+        // sequencial de antes — o que mudou é que `liveSessions` já foi
+        // publicada aos pedaços, uma máquina de cada vez, em vez de só aqui.
         temRetratoDosVivos = true
-
-        // Só re-anima quando o CONJUNTO de panes muda; mudança só de estado (cor)
-        // aplica sem animar a lista inteira → menos piscada.
-        if all.map(\.id) != liveSessions.map(\.id) {
-            withAnimation(.snappy) { liveSessions = all }
-        } else {
-            liveSessions = all
-        }
+        maquinasPendentes = []
     }
 
     // MARK: Apagar sessão
@@ -349,9 +428,14 @@ struct SessionListView: View {
     @State private var confirmingClearSubagents = false
     @State private var concludedExpanded = false
     @State private var subagentsExpanded = false
-    // Tema de cor escolhido nos ajustes — o "ao vivo" (rodando) segue ele.
-    @AppStorage(AppThemeKeys.accent) private var accentRaw = AppAccent.blue.rawValue
-    private var accentColor: Color { (AppAccent(rawValue: accentRaw) ?? .blue).color }
+    // [13/08/2026] Cor de destaque como valor de AMBIENTE, não `@AppStorage`
+    // lido à mão: `Color.accentColor` ignorava o `.tint()` da raiz (o app
+    // resolvia a cor de destaque por dois caminhos diferentes, e este arquivo
+    // era um dos que ficava preso no azul do sistema) — a onda 0 desta leva
+    // unificou em `EnvironmentValues.corDeDestaque`. O "ao vivo" (rodando)
+    // continua seguindo a cor escolhida (ver `liveColor`); é semântica
+    // correta e fica.
+    @Environment(\.corDeDestaque) private var destaque
 
     // Alvos tmux (compostos socket\tpane) que estão vivos agora. É `paneTarget`,
     // não `id`: o que casa com o `tmuxTarget` do registry é o alvo do pane, sem
@@ -402,7 +486,7 @@ struct SessionListView: View {
             } header: {
                 HStack {
                     Label("Ao vivo · \(grupo.grupo)", systemImage: "dot.radiowaves.left.and.right")
-                        .foregroundStyle(accentColor)
+                        .foregroundStyle(destaque)
                         .textCase(nil)
                     Spacer()
                     Menu {
@@ -423,6 +507,25 @@ struct SessionListView: View {
                         Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
                     }
                     .accessibilityLabel("Ações do server \(grupo.grupo)")
+                }
+            }
+        }
+    }
+
+    // Linha de carregando ao fim da seção "Ao vivo" (13/08/2026): enquanto
+    // alguma máquina não respondeu na passada corrente, nomeia QUAL — é o que
+    // distingue "o windows está desligado, o resto já chegou" de uma tela
+    // vazia e silenciosa, que era o motivo de sempre precisar puxar pra baixo
+    // (card 0c63a052ebb1cabc). Sem isto, o `macbook` some atrás do
+    // `ProgressView` genérico OU aparece sem nenhuma pista de que falta algo.
+    @ViewBuilder private var carregandoAoVivoSection: some View {
+        if !model.maquinasPendentes.isEmpty {
+            Section {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Procurando sessões em \(model.maquinasPendentes.sorted().joined(separator: ", "))…")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -617,12 +720,20 @@ struct SessionListView: View {
         }
         .refreshable {
             await model.refresh()
-            await model.refreshLive()
+            // `mostrandoCarga: true`: puxar pra baixo é um pedido explícito de
+            // "mostra de novo" — a linha "Procurando sessões em …" volta a
+            // aparecer enquanto a máquina mais lenta não respondeu.
+            await model.refreshLive(mostrandoCarga: true)
         }
         .task {
-            await model.refresh()
+            // [13/08/2026] O ao vivo começa ANTES do `await` do registro, não
+            // depois. Antes, `startLivePolling()` só rodava depois de
+            // `refresh()` terminar — os ~11 s da varredura de máquinas (ver
+            // `MergedorDeVivas`) só COMEÇAVAM depois da carga do registry, em
+            // vez de em paralelo com ela.
             model.startLiveUpdates()
             model.startLivePolling()
+            await model.refresh()
             resolveDeepLink() // pode haver um push pendente antes da lista carregar
         }
         .onDisappear {
@@ -680,6 +791,7 @@ struct SessionListView: View {
     @ViewBuilder private var listCore: some View {
         List(selection: selecaoDaLista) {
             liveServerSections
+            carregandoAoVivoSection
             needsYouSection
             activeSection
             concludedSection
@@ -841,7 +953,9 @@ struct SessionListView: View {
         switch target {
         case .selection(let selection):
             // G6: `.selection` só acontece embutido (iPad) — abre/foca a aba
-            // DE PASSAGEM correspondente, além de publicar `splitSelection`
+            // correspondente ([13/08/2026] dizia "aba DE PASSAGEM"; não existe
+            // mais aba de passagem, `abrir` nunca substitui), além de publicar
+            // `splitSelection`
             // como sempre (é o que o iPhone ignoraria por não ter esse
             // caminho: lá `splitSelection` é nil e `SessionNavigationLogic`
             // nunca devolve `.selection`).
@@ -919,8 +1033,7 @@ struct SessionListView: View {
     /// Cor da linha ao vivo: "rodando" segue o TEMA (accent); os demais estados
     /// mantêm a cor semântica (verde concluiu / laranja espera).
     private func liveColor(_ entry: LiveEntry) -> Color {
-        let s = liveState(entry)
-        return s == .running ? accentColor : s.color
+        CorDeStatus.para(liveState(entry), destaque: destaque)
     }
 
     private func liveRow(_ entry: LiveEntry) -> some View {
@@ -1127,16 +1240,25 @@ private struct SessionRow: View {
 // MARK: - Pulso "ao vivo" (bolinha verde pulsante)
 
 private struct LivePulse: View {
-    /// Cor do pulso, dirigida pelo estado da sessão (azul rodando, verde concluído).
-    var color: Color = .blue
+    /// Cor do pulso, dirigida pelo estado da sessão (destaque rodando, verde
+    /// concluído). `nil` = usa a cor de destaque das Preferências.
+    ///
+    /// [13/08/2026] Era `Color = .blue` — um azul literal fixo, que não via
+    /// ambiente nenhum (um dos pontos da varredura de cor desta leva). Hoje
+    /// ninguém chama `LivePulse()` sem `color:` (quem chama já resolve com
+    /// `liveColor`/`destaque`), mas o parâmetro passa a ser opcional para não
+    /// ter um `.blue` hardcoded como valor padrão de novo.
+    var color: Color?
+    @Environment(\.corDeDestaque) private var destaque
     @State private var on = false
     var body: some View {
+        let cor = color ?? destaque
         Circle()
-            .fill(color)
+            .fill(cor)
             .frame(width: 10, height: 10)
             .overlay(
                 Circle()
-                    .stroke(color, lineWidth: 2)
+                    .stroke(cor, lineWidth: 2)
                     .scaleEffect(on ? 2.2 : 1)
                     .opacity(on ? 0 : 0.8)
             )

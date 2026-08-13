@@ -21,6 +21,11 @@ struct NewSessionView: View {
     }
 
     @Environment(\.dismiss) private var dismiss
+    /// [13/08/2026] O ícone de pasta e o "Escolher" eram `.blue` cravado — dois
+    /// dos "alguns lugares fica com cor padrao". Nenhum dos dois é semântico:
+    /// são afordância de toque, papel de destaque. Ver `corDeDestaque` em
+    /// `AppTheme.swift`.
+    @Environment(\.corDeDestaque) private var corDeDestaque
     private let api = APIClient()
 
     // Máquinas disponíveis, vindas do hub via /targets (com fallback).
@@ -216,7 +221,7 @@ struct NewSessionView: View {
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "folder")
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(corDeDestaque)
                     Text(cwd.isEmpty ? "Home da máquina" : cwd)
                         .foregroundStyle(cwd.isEmpty ? .secondary : .primary)
                         .font(.system(.body, design: .monospaced))
@@ -225,7 +230,7 @@ struct NewSessionView: View {
                     Spacer(minLength: 8)
                     Text("Escolher")
                         .font(.footnote)
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(corDeDestaque)
                 }
                 .contentShape(Rectangle())
             }

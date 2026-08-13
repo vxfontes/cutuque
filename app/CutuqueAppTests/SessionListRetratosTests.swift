@@ -10,6 +10,10 @@ final class APIFalsa: SessionListAPI {
     var alvos: [String] = []
     var panesPorMaquina: [String: [DiscoveredSession]] = [:]
     var mensagensDoStream: [WSMessage] = []
+    /// Atraso artificial em `tmuxList` — é o que dá uma janela para duas
+    /// passadas de `refreshLive` se cruzarem no teste de reentrância. Sem ele o
+    /// dublê responde na mesma volta e a corrida nunca acontece.
+    var atrasoDeTmuxList: Duration?
     private(set) var chamouTmuxList = 0
 
     func sessions() async throws -> [Session] {
@@ -19,6 +23,7 @@ final class APIFalsa: SessionListAPI {
     func targets() async throws -> [String] { alvos }
     func tmuxList(machine: String) async -> [DiscoveredSession] {
         chamouTmuxList += 1
+        if let atrasoDeTmuxList { try? await Task.sleep(for: atrasoDeTmuxList) }
         return panesPorMaquina[machine] ?? []
     }
     func deleteSession(id: String) async throws {}
@@ -152,6 +157,45 @@ final class SessionListRetratosTests: XCTestCase {
         await m.refreshLive()
         XCTAssertTrue(m.temRetratoDosVivos)
         XCTAssertTrue(m.liveSessions.isEmpty)
+    }
+
+    // MARK: reentrância de refreshLive
+
+    /// [13/08/2026] O debounce de `MergedorDeVivas` ("2 leituras vazias
+    /// SEGUIDAS antes de acreditar que a máquina esvaziou") só protege se as
+    /// duas leituras vierem de duas passadas de ~15 s. `refreshLive` tem quatro
+    /// chamadores independentes — o laço do polling, o pull-to-refresh, o
+    /// callback de criar terminal e o app intent `.reload` — e `@MainActor` NÃO
+    /// impede que dois `Task` entrem na mesma passada: serializa só o trecho
+    /// síncrono entre `await`s. Sem a guarda de reentrância, um hiccup de rede
+    /// mais um pull-to-refresh davam dois vazios em segundos e a aba VIVA
+    /// virava "Sessão encerrada" — o bug que já custou duas rodadas de conserto.
+    func testDuasPassadasConcorrentesContamUmaLeituraVaziaSo() async {
+        let api = APIFalsa()
+        api.alvos = ["macmini"]
+        api.panesPorMaquina = ["macmini": [paneDeTeste(id: "sock\t%1")]]
+        let m = modelo(api)
+        await m.refreshLive()
+        XCTAssertEqual(m.liveSessions.count, 1)
+
+        // Hiccup: a máquina passa a responder vazio, e devagar o bastante para
+        // as duas passadas se cruzarem.
+        api.panesPorMaquina = ["macmini": []]
+        api.atrasoDeTmuxList = .milliseconds(80)
+
+        async let primeira: Void = m.refreshLive()                    // poll de fundo
+        async let segunda: Void = m.refreshLive(mostrandoCarga: true)  // pull-to-refresh
+        _ = await (primeira, segunda)
+
+        XCTAssertEqual(m.liveSessions.count, 1,
+                       "duas passadas cruzadas não podem valer como dois vazios seguidos")
+        XCTAssertTrue(m.maquinasPendentes.isEmpty, "a linha de carregando tem de sumir ao fim")
+
+        // E o debounce continua funcionando: a PRÓXIMA passada, essa sim
+        // separada no tempo, é a segunda leitura vazia de verdade.
+        api.atrasoDeTmuxList = nil
+        await m.refreshLive()
+        XCTAssertTrue(m.liveSessions.isEmpty, "2 vazios em passadas distintas é verdade, não hiccup")
     }
 
     // MARK: auxiliares
