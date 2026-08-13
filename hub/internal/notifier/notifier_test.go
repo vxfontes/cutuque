@@ -486,3 +486,76 @@ func TestCloseDoesNotHangWithConcurrentNeedsYou(t *testing.T) {
 		}
 	}
 }
+
+// esperaMapas espera até que a presença do id nos mapas por sessão do Notifier
+// seja `quer`. O loop consome canal do Registry, então tanto o registro quanto a
+// limpeza são assíncronos — sem polling o teste seria uma corrida.
+func esperaMapas(t *testing.T, n *Notifier, id string, quer bool) {
+	t.Helper()
+	prazo := time.Now().Add(2 * time.Second)
+	for {
+		n.mu.Lock()
+		_, temEstado := n.states[id]
+		_, temNudge := n.nudges[id]
+		_, temDone := n.donePushes[id]
+		n.mu.Unlock()
+		presente := temEstado || temNudge || temDone
+		if presente == quer {
+			return
+		}
+		if time.Now().After(prazo) {
+			t.Fatalf("id %q: presente=%v, quero %v (estado=%v nudge=%v done=%v)",
+				id, presente, quer, temEstado, temNudge, temDone)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestRemoveEsqueceASessao é o regressor do vazamento: o loop só consumia sub.C
+// e ignorava sub.Removed, então `states` nunca perdia uma entrada — crescia uma
+// por sessão apagada, viva até o processo morrer, junto com o re-cutucão que
+// continuava agendado para uma sessão que não existe mais.
+func TestRemoveEsqueceASessao(t *testing.T) {
+	eng, reg, _, fake, n := fixture(t)
+	startSession(eng, "s1")
+	eng.Apply(event.Event{SessionID: "s1", Type: event.NeedsInput, Data: "posso?", At: time.Now()})
+	recv(t, fake) // o push de needs_you saiu: estado registrado, re-cutucão em pé
+
+	esperaMapas(t, n, "s1", true)
+
+	if !reg.Remove("s1") {
+		t.Fatal("Remove devia ter apagado a sessão")
+	}
+	esperaMapas(t, n, "s1", false)
+}
+
+// TestRemoveCancelaAgendamentoDeDone: apagar uma sessão externa com push de
+// "concluído" adiado desmarca o agendamento (o mapa donePushes esvazia) e nada
+// cutuca. O disparo em si já era barrado pela releitura do Registry no fim do
+// prazo; o que faltava era largar o cancel guardado no mapa.
+func TestRemoveCancelaAgendamentoDeDone(t *testing.T) {
+	reg := registry.New()
+	eng := engine.New(reg)
+	store := devices.New()
+	store.Upsert("tokendevice1", "ios")
+	fake := newFakePusher()
+	n := New(fake, store, reg, nil)
+	// Prazo folgado de propósito: o teste precisa apagar a sessão ANTES do timer,
+	// e o prazo curto do fixture viraria corrida com o próprio agendamento.
+	n.doneDelay = 400 * time.Millisecond
+	n.Start()
+	t.Cleanup(n.Close)
+
+	startExternal(eng, "ext1")
+	eng.Apply(event.Event{SessionID: "ext1", Type: event.Finished, At: time.Now()})
+	esperaMapas(t, n, "ext1", true)
+
+	if !reg.Remove("ext1") {
+		t.Fatal("Remove devia ter apagado a sessão")
+	}
+	esperaMapas(t, n, "ext1", false)
+
+	if p, got := tryRecv(fake, 700*time.Millisecond); got {
+		t.Fatalf("push de done disparou para sessão apagada: %s", p.payload)
+	}
+}

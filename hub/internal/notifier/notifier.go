@@ -197,12 +197,44 @@ func (n *Notifier) Close() {
 	n.wg.Wait()
 }
 
-// loop consome as mudanças do Registry até o canal fechar (Unsubscribe).
+// loop consome as mudanças do Registry até os DOIS canais da inscrição fecharem
+// (Unsubscribe fecha os dois). Remoção vem por um canal próprio (sub.Removed)
+// porque não é transição de estado — é o fim da sessão, e é o único momento em
+// que dá para limpar o que o Notifier guardava dela.
 func (n *Notifier) loop() {
 	defer n.wg.Done()
-	for s := range n.sub.C {
-		n.handle(s)
+	mudancas, removidas := n.sub.C, n.sub.Removed
+	for mudancas != nil || removidas != nil {
+		select {
+		case s, ok := <-mudancas:
+			if !ok {
+				mudancas = nil // fechado: nil para o select parar de girar em falso
+				continue
+			}
+			n.handle(s)
+		case id, ok := <-removidas:
+			if !ok {
+				removidas = nil
+				continue
+			}
+			n.forget(id)
+		}
 	}
+}
+
+// forget descarta tudo o que o Notifier guardava de uma sessão APAGADA: o último
+// estado notificado, o re-cutucão e o push de "concluído" adiado. Sem isto o id
+// ficava para sempre em `states` (o mapa só crescia — uma entrada por sessão
+// apagada, viva até o processo morrer) e um push adiado ainda podia disparar por
+// uma sessão que não existe mais.
+func (n *Notifier) forget(id string) {
+	n.stopNudge(id)
+	n.cancelDonePush(id)
+	n.mu.Lock()
+	delete(n.states, id)
+	n.mu.Unlock()
+	// A sessão saiu do registry: o agregado da Live Activity mudou com ela.
+	n.maybePushLiveActivity()
 }
 
 // handle decide se a mudança recebida é uma transição que merece push.
