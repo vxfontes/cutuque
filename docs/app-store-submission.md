@@ -18,8 +18,15 @@ enviar o build pelo App Store Connect.
       segmentos que a aba DECLAROU, pelo mesmo caminho que o Picker da chrome usa
       (`NavigationState.alternarSegmento`) — Terminal→Info ao vivo,
       Chat→Terminal→Info com chat, e Terminal→Arquivos na aba de máquina de graça.
-      Suíte **540/540**. O hub **não** foi tocado nesta versão — mas ela vem depois
-      do bloco de ciclo de vida do hub, então a imagem no ar é a `5bc3529a`.
+      Suíte **540/540**. O app não depende do hub nesta versão, mas o que está no ar
+      **mudou depois** do bump: a imagem em produção é a **`32426ba6`** (era
+      `5bc3529a`), com o conserto do vazamento do terminal PTY — o `ssh` do terminal
+      livre ficava vivo para sempre quando o cliente ia embora, inclusive no
+      fechamento limpo, e levava com ele a sessão do sshd no destino. Nada a fazer no
+      app: quem usar o terminal desta build já pega o hub consertado. Provado em
+      produção nos dois modos (RST e close frame): zero `ssh` no container e zero
+      `sshd-session`/login shell no destino depois da queda, com o instrumento
+      conferido **durante** a sessão viva (achava o par `ssh -tt` + `-bash`).
       ⚠️ **Ela já gerou o archive da 2.7.1 build 21** (iPad) — foi de lá que saiu o
       apontamento do ⌘⇧T. Se o 21 subiu ao ASC/TestFlight, o número não repete.
       **2.7.1 aberta em 2026-08-13 (noite)**, no `master`: **patch**, não minor —
