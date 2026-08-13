@@ -478,6 +478,11 @@ struct FilterMenu: View {
     @Binding var selection: String
     let options: [String]
 
+    // [13/08/2026] `Color.accentColor` não lê o `.tint()` da raiz (ver
+    // `AppTheme.swift`) — era por isso que o filtro ativo ficava sempre azul,
+    // mesmo trocando a cor em Ajustes.
+    @Environment(\.corDeDestaque) private var destaque
+
     var body: some View {
         Menu {
             Button { selection = "all" } label: {
@@ -495,13 +500,13 @@ struct FilterMenu: View {
                 Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
             }
             .padding(.horizontal, 11).padding(.vertical, 6)
-            .foregroundStyle(selection == "all" ? Color.secondary : Color.accentColor)
+            .foregroundStyle(selection == "all" ? Color.secondary : destaque)
             .background(
                 Capsule().fill(selection == "all" ? Color(.secondarySystemBackground)
-                               : Color.accentColor.opacity(0.14))
+                               : destaque.opacity(0.14))
             )
             .overlay(Capsule().stroke(selection == "all" ? Color(.separator).opacity(0.5)
-                                      : Color.accentColor.opacity(0.5), lineWidth: 1))
+                                      : destaque.opacity(0.5), lineWidth: 1))
         }
     }
 }
@@ -518,6 +523,11 @@ private struct BoardColumnCard: View {
     let onDrop: (String) -> Void
     let onTap: (BoardTask) -> Void
     @State private var isTargeted = false
+
+    // [13/08/2026] `Color.accentColor` não lê o `.tint()` da raiz (ver
+    // `AppTheme.swift`) — era por isso que o realce do drop-target ficava
+    // sempre azul, mesmo trocando a cor em Ajustes.
+    @Environment(\.corDeDestaque) private var destaque
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -574,7 +584,7 @@ private struct BoardColumnCard: View {
         } isTargeted: { isTargeted = $0 }
         .overlay(
             RoundedRectangle(cornerRadius: 14)
-                .stroke(Color.accentColor, lineWidth: isTargeted ? 2.5 : 0)
+                .stroke(destaque, lineWidth: isTargeted ? 2.5 : 0)
         )
         .animation(.easeOut(duration: 0.12), value: isTargeted)
     }
