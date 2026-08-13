@@ -92,6 +92,11 @@ struct QuestionCardView: View {
     /// "aprovar", só responder ou cancelar).
     let onCancel: () -> Void
 
+    // [13/08/2026] `Color.accentColor` não lê o `.tint()` da raiz (ver
+    // `AppTheme.swift`) — era por isso que a barra de progresso e o "Próxima"
+    // ficavam sempre azuis, mesmo trocando a cor em Ajustes.
+    @Environment(\.corDeDestaque) private var destaque
+
     @State private var answers: [String: QuestionAnswer] = [:]
     /// Página atual (0-based) — o progresso só aparece quando há mais de uma
     /// pergunta no set.
@@ -233,7 +238,7 @@ struct QuestionCardView: View {
             HStack(spacing: 5) {
                 ForEach(questions.indices, id: \.self) { index in
                     Capsule()
-                        .fill(index <= currentIndex ? Color.accentColor : Color.secondary.opacity(0.25))
+                        .fill(index <= currentIndex ? destaque : Color.secondary.opacity(0.25))
                         .frame(height: 5)
                 }
             }
@@ -300,7 +305,9 @@ struct QuestionCardView: View {
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .tint(isLastQuestion ? .green : Color.accentColor)
+            // O verde do último passo é semântico ("Responder" = confirmar) e
+            // fica; "Próxima" (páginas intermediárias) segue o destaque.
+            .tint(isLastQuestion ? .green : destaque)
             .disabled(questions.isEmpty || (isLastQuestion ? !allValid : !currentValid))
             .accessibilityLabel(isLastQuestion ? "Enviar a resposta" : "Próxima pergunta")
         }
@@ -332,6 +339,10 @@ private struct QuestionBlockView: View {
     /// campo mora aqui — daí o binding.
     @FocusState.Binding var otherFieldFocused: Bool
 
+    // [13/08/2026] Struct privada própria — precisa do seu próprio
+    // `@Environment`, não herda o do `QuestionCardView` pai.
+    @Environment(\.corDeDestaque) private var destaque
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 6) {
@@ -339,10 +350,10 @@ private struct QuestionBlockView: View {
                 // hardcoded — a usuária escolhe a cor do app nos ajustes.
                 Text(question.header.uppercased())
                     .font(.caption2.weight(.bold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(destaque)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
-                    .background(Color.accentColor.opacity(0.15), in: Capsule())
+                    .background(destaque.opacity(0.15), in: Capsule())
                 if question.multiSelect {
                     Text("múltipla escolha")
                         .font(.caption2)
@@ -376,7 +387,7 @@ private struct QuestionBlockView: View {
         } label: {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: iconName(selected: isSelected))
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.6))
+                    .foregroundStyle(isSelected ? destaque : Color.secondary.opacity(0.6))
                     .font(.system(size: 20))
                     .padding(.top, 1)
                 VStack(alignment: .leading, spacing: 3) {
@@ -405,7 +416,7 @@ private struct QuestionBlockView: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
+                    .stroke(isSelected ? destaque : Color.clear, lineWidth: 2)
             )
             .shadow(color: .black.opacity(0.05), radius: 1, y: 1)
         }
@@ -423,7 +434,7 @@ private struct QuestionBlockView: View {
         let isFilled = !answer.otherText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return HStack(spacing: 12) {
             Image(systemName: "pencil.line")
-                .foregroundStyle(isFilled ? Color.accentColor : Color.secondary.opacity(0.6))
+                .foregroundStyle(isFilled ? destaque : Color.secondary.opacity(0.6))
                 .font(.system(size: 20))
             TextField("Outro…", text: $answer.otherText, axis: .vertical)
                 .font(.callout)
@@ -447,7 +458,7 @@ private struct QuestionBlockView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(
-                    isFilled ? Color.accentColor : Color.secondary.opacity(0.3),
+                    isFilled ? destaque : Color.secondary.opacity(0.3),
                     style: StrokeStyle(lineWidth: isFilled ? 2 : 1, dash: isFilled ? [] : [5, 4])
                 )
         )
