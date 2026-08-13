@@ -1,7 +1,9 @@
 package registry
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -31,6 +33,69 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	}
 	if _, ok := r2.Get("b"); ok {
 		t.Error("'b' foi apagada; não devia reaparecer")
+	}
+}
+
+// TestPersistNaoGravaSessaoVelha: o TTL também vale na ESCRITA. Antes só o load
+// filtrava, então um hub que nunca reinicia reescrevia para sempre o que o
+// próximo boot ia jogar fora — o arquivo crescia sem limite.
+func TestPersistNaoGravaSessaoVelha(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	velha := time.Now().Add(-persistSessionTTL - time.Hour)
+	agora := time.Now()
+
+	r := NewAt(path)
+	r.Add(session.Session{ID: "velha", Machine: "m", State: session.StateDone, CreatedAt: velha, UpdatedAt: velha})
+	r.Add(session.Session{ID: "nova", Machine: "m", State: session.StateDone, CreatedAt: agora, UpdatedAt: agora})
+	r.Add(session.Session{ID: "probe", Machine: "m", State: session.StateDone, Cwd: "/tmp/ClaudeProbe", CreatedAt: agora, UpdatedAt: agora})
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("lendo o arquivo persistido: %v", err)
+	}
+	var ps persistState
+	if err := json.Unmarshal(b, &ps); err != nil {
+		t.Fatalf("json inválido: %v", err)
+	}
+	gravadas := map[string]bool{}
+	for _, s := range ps.Sessions {
+		gravadas[s.ID] = true
+	}
+	if gravadas["velha"] {
+		t.Error("sessão além do TTL não devia ir para o disco")
+	}
+	if gravadas["probe"] {
+		t.Error("probe (cwd efêmero) não devia ir para o disco")
+	}
+	if !gravadas["nova"] {
+		t.Errorf("sessão nova devia estar no disco; gravadas=%v", gravadas)
+	}
+}
+
+// TestLoadDescartaVelhaJaGravada: arquivo escrito por um hub ANTERIOR ao filtro
+// da escrita pode ter sessões velhas — o load segue descartando (é o que limpa o
+// lixo herdado no primeiro restart).
+func TestLoadDescartaVelhaJaGravada(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	velha := time.Now().Add(-persistSessionTTL - time.Hour)
+	agora := time.Now()
+	b, err := json.Marshal(persistState{Sessions: []session.Session{
+		{ID: "velha", Machine: "m", State: session.StateDone, CreatedAt: velha, UpdatedAt: velha},
+		{ID: "nova", Machine: "m", State: session.StateDone, CreatedAt: agora, UpdatedAt: agora},
+	}})
+	if err != nil {
+		t.Fatalf("montando o json: %v", err)
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatalf("escrevendo o arquivo: %v", err)
+	}
+
+	r := NewAt(path)
+	if _, ok := r.Get("velha"); ok {
+		t.Error("sessão velha já gravada não devia recarregar")
+	}
+	if _, ok := r.Get("nova"); !ok {
+		t.Error("sessão nova devia recarregar")
 	}
 }
 

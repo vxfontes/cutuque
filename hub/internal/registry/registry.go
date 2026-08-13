@@ -56,9 +56,22 @@ type persistState struct {
 	Dismissed []string          `json:"dismissed"`
 }
 
-// persistSessionTTL descarta, no load, sessões paradas há mais que isso — evita
-// o arquivo crescer sem limite com sessões velhas que ninguém vai mais abrir.
+// persistSessionTTL descarta sessões paradas há mais que isso — evita o arquivo
+// crescer sem limite com sessões velhas que ninguém vai mais abrir. Vale nos DOIS
+// sentidos: não recarrega (load) e não grava (snapshot).
 const persistSessionTTL = 7 * 24 * time.Hour
+
+// persistivel diz se a sessão entra no arquivo: descarta vazias, paradas há mais
+// que o TTL e probes/health-checks (cwd efêmero, ex.: ClaudeProbe).
+//
+// [13/08/2026] Este critério era aplicado SÓ no load. Um hub que não reinicia
+// (o caso normal: o macmini fica meses de pé) reescrevia a cada persist tudo o
+// que o próximo boot ia jogar fora — o arquivo crescia sem limite, exatamente o
+// que o TTL existe para evitar; o descarte só acontecia num restart. Agora leitura
+// e escrita usam a MESMA regra: o que o load descartaria, o snapshot não grava.
+func persistivel(s session.Session, cutoff time.Time) bool {
+	return s.ID != "" && !s.UpdatedAt.Before(cutoff) && !session.IsEphemeralCwd(s.Cwd)
+}
 
 // New cria um Registry vazio, só em memória.
 func New() *Registry {
@@ -98,9 +111,9 @@ func (r *Registry) load() {
 	cutoff := time.Now().Add(-persistSessionTTL)
 	r.mu.Lock()
 	for _, s := range ps.Sessions {
-		// Pula vazias, velhas (TTL) e probes/health-checks (ex.: ClaudeProbe) —
-		// assim um restart limpa o lixo que já estava persistido.
-		if s.ID == "" || s.UpdatedAt.Before(cutoff) || session.IsEphemeralCwd(s.Cwd) {
+		// Assim um restart limpa o lixo que já estava persistido (arquivos gravados
+		// antes de o snapshot passar a filtrar também).
+		if !persistivel(s, cutoff) {
 			continue
 		}
 		r.byID[s.ID] = s
@@ -122,7 +135,11 @@ func (r *Registry) snapshot() persistState {
 		Sessions:  make([]session.Session, 0, len(r.byID)),
 		Dismissed: make([]string, 0, len(r.dismissed)),
 	}
+	cutoff := time.Now().Add(-persistSessionTTL)
 	for _, s := range r.byID {
+		if !persistivel(s, cutoff) {
+			continue // não grava o que o próximo load descartaria
+		}
 		ps.Sessions = append(ps.Sessions, s)
 	}
 	for id, d := range r.dismissed {
