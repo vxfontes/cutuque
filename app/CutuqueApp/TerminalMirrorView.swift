@@ -186,6 +186,10 @@ struct TerminalMirrorView: View {
     @StateObject private var model: TerminalMirrorModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    // [13/08/2026] `Color.accentColor` não lê o `.tint()` da raiz (ver
+    // `AppTheme.swift`) — era por isso que o botão de enviar ficava sempre
+    // azul, mesmo trocando a cor em Ajustes.
+    @Environment(\.corDeDestaque) private var destaque
     @State private var input = ""
     @State private var confirmingKill = false
     @FocusState private var inputFocused: Bool
@@ -619,7 +623,7 @@ struct TerminalMirrorView: View {
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 34, height: 34)
-                        .background(Color.accentColor, in: Circle())
+                        .background(destaque, in: Circle())
                 }
             }
             .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty || model.sending)
