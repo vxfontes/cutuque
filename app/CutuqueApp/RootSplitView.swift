@@ -204,9 +204,12 @@ struct RootSplitView: View {
                 $0.abrir(chave: .board, titulo: "Board", conteudo: .board)
             }
         }
-        // Escolher um host na lista abre/foca a aba dele. `estilo: .passagem`
-        // (padrão) é o modelo do VS Code: a próxima coisa aberta substitui esta
-        // se ela não tiver sido fixada.
+        // Escolher um host na lista abre/foca a aba dele.
+        // [Reescrito em 13/08/2026] Dizia que a aba nascia `estilo: .passagem`
+        // e que a próxima abertura a substituiria se ela não fosse fixada.
+        // Falso desde a revogação do modelo VS Code: `EstiloDeAba` foi removido
+        // e abrir nunca substitui (ver `OpenTabs.abrir`). Máquinas acumulam na
+        // barra como qualquer outra aba, e quem segura o custo é `maxVivas`.
         .onChange(of: nav.machineSelection) { _, machine in
             guard let machine else { return }
             tabsStore.mutar {

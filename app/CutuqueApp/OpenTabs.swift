@@ -209,7 +209,10 @@ struct OpenTabs: Equatable {
         abas.map { AbaPersistida(chave: $0.chave, titulo: $0.titulo, fixa: $0.fixa) }
     }
 
-    /// Abas do disco nascem `normal`, com o conteúdo que já podem mostrar sem
+    /// [Reescrito em 13/08/2026] Dizia "abas do disco nascem `normal`" — e
+    /// `EstiloDeAba.normal` não existe mais: com o modelo de navegador nenhuma
+    /// aba é de passagem, então não há estilo pra nascer com. O que continua
+    /// verdade é o resto: nascem com o conteúdo que já podem mostrar sem
     /// perguntar a ninguém (ver `conteudoInicial`). A ordem de foco é a da
     /// barra (a primeira é a mais "recente"), o que faz o teto de 6 da G2
     /// dormir as da direita até a Vanessa tocar nelas.

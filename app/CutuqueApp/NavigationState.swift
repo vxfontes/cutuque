@@ -237,10 +237,14 @@ final class NavigationState: ObservableObject {
     ///
     /// Não é mais `@Published`: é COMPUTADA sobre `modosPorAba`/`modoSemAba`,
     /// que são os `@Published` de verdade. Consequência real: `$nav.paneMode`
-    /// deixou de existir. O único lugar que usava o binding era o `Picker` de
-    /// `SessionDetailPane` — ele troca pra um `Binding(get:set:)` manual que
-    /// lê o modo já validado (`SessionDetailPaneLogic.modoValido`) e escreve
-    /// cru na chave da própria aba (ver `SessionDetailPane.swift`).
+    /// deixou de existir. O único lugar que usava o binding era o `Picker` do
+    /// seletor de painel — que, na época, morava dentro de `SessionDetailPane`.
+    /// [Atualizado em 13/08/2026] O `Picker` mudou de casa: saiu do painel e foi
+    /// pra `ChromeDaAba`, uma barra só para todas as abas, porque N painéis
+    /// montados (decisão #19) contribuindo pra MESMA navigation bar faziam o
+    /// SwiftUI esconder quase todos ("não ta aparecendo o terminal / info
+    /// embaixo da aba"). O `Binding(get:set:)` manual continua existindo, agora
+    /// em `ChromeDaAba.escolhaBinding`, e o painel só LÊ `nav.escolha(de:)`.
     var paneMode: PaneMode {
         get { paneMode(de: abaEmFoco) }
         set { definirPaneMode(newValue, de: abaEmFoco) }

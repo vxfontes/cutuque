@@ -953,7 +953,9 @@ struct SessionListView: View {
         switch target {
         case .selection(let selection):
             // G6: `.selection` só acontece embutido (iPad) — abre/foca a aba
-            // DE PASSAGEM correspondente, além de publicar `splitSelection`
+            // correspondente ([13/08/2026] dizia "aba DE PASSAGEM"; não existe
+            // mais aba de passagem, `abrir` nunca substitui), além de publicar
+            // `splitSelection`
             // como sempre (é o que o iPhone ignoraria por não ter esse
             // caminho: lá `splitSelection` é nil e `SessionNavigationLogic`
             // nunca devolve `.selection`).
