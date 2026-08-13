@@ -240,6 +240,50 @@ final class MachineAppearanceTests: XCTestCase {
         XCTAssertEqual(escritor.confirmada, b)
     }
 
+    /// [13/08/2026] A releitura do hub (`MachineInfoSheet.resemear`) tem de
+    /// arrumar TAMBÉM o desfazer: a sheet nasce com o `@State` congelado de
+    /// `MachineDetailView` (decisão #19 — o painel nunca desmonta), e sem adotar
+    /// o valor lido, uma falha de PUT depois dela voltaria para esse palpite
+    /// velho em vez de para o que o hub tem.
+    @MainActor
+    func testAdotarComoConfirmadaMudaOAlvoDoDesfazer() async {
+        let falso = EnvioFalso()
+        falso.erroNoPrimeiro = ErroDeTeste()
+        let escritor = EscritorDeAparencia(confirmada: AparenciaDaMaquina(tema: "", icone: ""),
+                                           enviar: { try await falso.enviar($0) })
+
+        let doHub = AparenciaDaMaquina(tema: "dracula", icone: "server")
+        escritor.adotarComoConfirmada(doHub)
+        XCTAssertEqual(escritor.confirmada, doHub)
+
+        let corrida = Task { await escritor.aplicar(AparenciaDaMaquina(tema: "nord", icone: "server")) }
+        await falso.esperarPrimeiro()
+        falso.soltar()
+        guard case .falhou = await corrida.value else {
+            return XCTFail("o envio devia falhar neste teste")
+        }
+        XCTAssertEqual(escritor.confirmada, doHub,
+                       "desfazer volta pro que o HUB tem, não pro palpite com que a sheet nasceu")
+    }
+
+    /// E a leitura não pode passar na frente de um envio em voo — ele é mais
+    /// novo que ela. Foi ela que abriu a tela; o toque veio depois.
+    @MainActor
+    func testAdotarComoConfirmadaNaoAtropelaEnvioEmVoo() async {
+        let falso = EnvioFalso()
+        let escritor = EscritorDeAparencia(confirmada: AparenciaDaMaquina(tema: "", icone: ""),
+                                           enviar: { try await falso.enviar($0) })
+
+        let toque = AparenciaDaMaquina(tema: "nord", icone: "cloud")
+        let corrida = Task { await escritor.aplicar(toque) }
+        await falso.esperarPrimeiro()
+        escritor.adotarComoConfirmada(AparenciaDaMaquina(tema: "dracula", icone: "server"))
+        falso.soltar()
+
+        guard case .gravou = await corrida.value else { return XCTFail("o envio devia gravar") }
+        XCTAssertEqual(escritor.confirmada, toque, "a leitura velha não pode virar o confirmado")
+    }
+
     // MARK: - Segmentos da chrome (13/08/2026 — abas de navegador e chrome única)
 
     /// Ids de `MachinePane`, não de `PaneMode`: as duas abas (sessão e máquina)

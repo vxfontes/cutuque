@@ -27,6 +27,10 @@ struct MachineInfoSheet: View {
 
     /// SO detectado, que muda aqui mesmo quando ela pede para detectar de novo.
     @State private var so: String?
+    /// [13/08/2026] Se ela já escolheu algo NESTA abertura da sheet. Guarda a
+    /// releitura de `resemear()`: `.task` só roda depois do primeiro render, e um
+    /// toque nessa janela seria desfeito pela leitura, que é mais VELHA que ele.
+    @State private var tocouAqui = false
     @State private var detectando = false
     @State private var erro: String?
     @State private var avisoSO: String?
@@ -79,6 +83,7 @@ struct MachineInfoSheet: View {
                     Button("Pronto") { dismiss() }
                 }
             }
+            .task { await resemear() }
         }
     }
 
@@ -185,6 +190,8 @@ struct MachineInfoSheet: View {
     private func aplicar(tema novoTema: String, icone novoIcone: String) {
         let alvo = AparenciaDaMaquina(tema: novoTema, icone: novoIcone)
         guard alvo != AparenciaDaMaquina(tema: tema, icone: icone) else { return }
+        // A partir daqui a escolha dela é mais nova que qualquer leitura em voo.
+        tocouAqui = true
         tema = alvo.tema
         icone = alvo.icone
         erro = nil
@@ -202,6 +209,37 @@ struct MachineInfoSheet: View {
                 erro = motivo.localizedDescription
             }
         }
+    }
+
+    /// Relê a aparência do hub ao abrir e re-semeia os `Binding`.
+    ///
+    /// [13/08/2026] Os bindings vêm do `@State` de `MachineDetailView`, semeado
+    /// da `Machine` uma única vez — e desde a decisão #19 esse painel NUNCA
+    /// desmonta, então esse `@State` fica congelado desde a hora em que a aba
+    /// abriu, por dias. Quando o par tema/ícone muda em outro lugar (a tela de
+    /// editar, o Command Center, outro aparelho), esta sheet abre mostrando o
+    /// valor velho — e como o `PUT /appearance` substitui os DOIS campos, tocar
+    /// no ícone mandava o tema velho junto e apagava o de verdade. O mesmo
+    /// apagamento que a revisão pegou na tela de editar, por outra porta.
+    ///
+    /// Aqui a releitura é INCONDICIONAL (não precisa da regra do "campo
+    /// intocado" que a tela de editar usa): esta sheet grava por PUT imediato a
+    /// cada toque, então o hub é sempre a autoridade e o binding é só cache.
+    /// A única guarda é `tocouAqui` — leitura não desfaz toque.
+    ///
+    /// Falhar é inofensivo: fica o comportamento de antes.
+    private func resemear() async {
+        guard machine.isEditable,
+              let todas = try? await api.listMachines(),
+              let fresca = todas.first(where: { $0.name == machine.name }),
+              !tocouAqui else { return }
+        let doHub = AparenciaDaMaquina(tema: fresca.theme ?? "", icone: fresca.icon ?? "")
+        guard doHub != AparenciaDaMaquina(tema: tema, icone: icone) else { return }
+        tema = doHub.tema
+        icone = doHub.icone
+        // Sem isto, uma falha de PUT mais tarde desfaria para o palpite velho
+        // com que a sheet nasceu, em vez de para o que o hub tem.
+        escrita.adotarComoConfirmada(doHub)
     }
 
     /// Falhar aqui não é fatal: é só o ícone automático que fica sem fato para se
@@ -264,6 +302,17 @@ final class EscritorDeAparencia: ObservableObject {
          enviar: @escaping (AparenciaDaMaquina) async throws -> Void) {
         self.confirmada = confirmada
         self.enviar = enviar
+    }
+
+    /// Adota um valor como "o que o hub confirmou" SEM enviar nada — para quando
+    /// a tela releu a aparência do próprio hub (ver `MachineInfoSheet.resemear`).
+    ///
+    /// [13/08/2026] Sem isto, a releitura arrumava a tela mas não o desfazer: uma
+    /// falha de PUT depois dela voltaria para o palpite velho com que a sheet
+    /// nasceu. Envio em voo ganha da leitura — ele é mais novo.
+    func adotarComoConfirmada(_ valor: AparenciaDaMaquina) {
+        guard !enviando else { return }
+        confirmada = valor
     }
 
     func aplicar(_ alvo: AparenciaDaMaquina) async -> Resultado {
