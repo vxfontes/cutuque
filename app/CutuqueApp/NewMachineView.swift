@@ -42,6 +42,19 @@ struct NewMachineView: View {
         }
     }
 
+    /// O que mandar para `PUT /machines/{n}/appearance` ao salvar a edição, ou
+    /// `nil` se nada mudou (não gastar pedido nem sobrescrever com igual).
+    struct Aparencia: Equatable {
+        let tema: String
+        let icone: String
+
+        static func decidir(temaAtual: String, iconeAtual: String,
+                            temaEscolhido: String, iconeEscolhido: String) -> Aparencia? {
+            guard temaEscolhido != temaAtual || iconeEscolhido != iconeAtual else { return nil }
+            return Aparencia(tema: temaEscolhido, icone: iconeEscolhido)
+        }
+    }
+
     let modo: Modo
     /// Avisa a lista para recarregar quando algo mudou de verdade.
     let onChanged: () -> Void
@@ -54,6 +67,7 @@ struct NewMachineView: View {
         _host = State(initialValue: existente.host ?? "")
         _porta = State(initialValue: String(existente.port == 0 ? 22 : existente.port))
         _tema = State(initialValue: existente.theme ?? "")
+        _icone = State(initialValue: existente.icon ?? "")
         if modo.editando {
             // Editando, os campos nascem ABERTOS — travar aqui seria travar
             // exatamente o que a usuária veio mudar. E `mexeuNoHub` fica falso:
@@ -80,6 +94,9 @@ struct NewMachineView: View {
     @State private var host = ""
     @State private var porta = "22"
     @State private var tema = ""
+    /// `""` = automático. Só existe estado próprio porque, ao editar, o ícone
+    /// vai junto do tema no MESMO `PUT /appearance` — ver `secaoAparencia`.
+    @State private var icone = ""
 
     // Identidade escolhida (objeto cheio, não só o nome — precisa de
     // `hasPassword` na hora de decidir se o install-key pede senha).
@@ -126,11 +143,18 @@ struct NewMachineView: View {
             Form {
                 secaoHost
                 secaoIdentidade
-                // Editando, aparência não vem: tema e ícone são do
-                // `PUT /appearance` (onde vazio é escolha, não "mantém"), e o
-                // PATCH desta tela não tem como expressar "volta ao padrão".
-                // Quem cuida disso é a sheet Informações, dentro da máquina.
-                if !modo.editando { secaoTema }
+                // [13/08/2026] Editando, aparência agora vem — pedido da
+                // Vanessa ("a parte de personalizar a maquina não deixa
+                // escolher as coisas do hub tipo icone, tema e tal"), e ela
+                // pediu nos DOIS lugares (aqui e na sheet Informações). O
+                // `PATCH` continua mandando `theme: ""` (= mantém) porque
+                // continua não sabendo expressar "volta ao padrão": quem leva
+                // aparência é o `PUT /appearance`, chamado no salvar (ver
+                // `salvarEdicao`). Cadastrando, segue só o tema pelo POST —
+                // máquina que ainda não existe não tem `/appearance` para
+                // chamar (era a assimetria que o comentário antigo
+                // registrava, e continua valendo pro cadastro).
+                if modo.editando { secaoAparencia } else { secaoTema }
 
                 if fase == .pedindoSenha { secaoSenha }
 
@@ -298,7 +322,11 @@ struct NewMachineView: View {
             Text("Credenciais")
         } footer: {
             if modo.editando {
-                Text("Trocar de identidade instala a chave da nova no destino. Tema e ícone ficam em Informações, dentro da máquina.")
+                // [13/08/2026] Perdeu o "tema e ícone ficam em Informações":
+                // desde que `secaoAparencia` existe, as duas aparecem AQUI
+                // também (a sheet Informações continua tendo — são os dois
+                // lugares que a Vanessa pediu, não um só).
+                Text("Trocar de identidade instala a chave da nova no destino.")
             }
         }
         .disabled(camposTravados)
@@ -310,6 +338,35 @@ struct NewMachineView: View {
                 .frame(minHeight: 220) // o picker é um ScrollView sem altura própria
         } header: {
             Text("Tema do terminal")
+        }
+        .disabled(camposTravados)
+    }
+
+    /// Ícone + tema ao EDITAR — item 4 do apontamento dela. Usa o MESMO
+    /// `SeletorDeIconeDeMaquina` e `TerminalThemePicker` que a sheet
+    /// Informações já usa: duplicar a grade à mão aqui divergiria da sheet na
+    /// primeira mexida em qualquer uma das duas.
+    ///
+    /// Ao contrário de `secaoTema` (só cadastro), esta seção não escreve nada
+    /// sozinha — só junta `tema`/`icone` no `@State`. Quem manda ao hub é
+    /// `salvarEdicao`, e só se `Aparencia.decidir` disser que mudou algo.
+    @ViewBuilder private var secaoAparencia: some View {
+        Section {
+            SeletorDeIconeDeMaquina(so: modo.machine?.os, escolhido: icone, habilitado: !camposTravados) {
+                icone = $0
+            }
+        } header: {
+            Text("Ícone")
+        } footer: {
+            Text("Automático usa o sistema detectado.")
+        }
+        Section {
+            TerminalThemePicker(selection: $tema)
+                .frame(minHeight: 220) // o picker é um ScrollView sem altura própria
+        } header: {
+            Text("Tema do terminal")
+        } footer: {
+            Text("Vale só para esta máquina, e o terminal aberto muda de cor na hora.")
         }
         .disabled(camposTravados)
     }
@@ -490,12 +547,23 @@ struct NewMachineView: View {
             // rebaixar a porta de ninguém (o ✓ já exige uma válida).
             port: Self.portaValida(porta) ?? atual.port,
             identity: novaIdentidade,
-            // Vazio = mantém. Tema aqui seria o único jeito de esta tela mexer
-            // em aparência, e ela não deve: quem faz isso é o PUT /appearance.
+            // [13/08/2026] Vazio = mantém, e isso continua valendo: o PATCH
+            // nunca soube expressar "volta ao padrão" (e não tem campo de
+            // ícone nenhum). O que mudou é que esta tela AGORA manda
+            // aparência de verdade — só que pelo PUT /appearance logo abaixo,
+            // que sabe dizer isso.
             theme: ""
         )
         mexeuNoHub = true
         camposTravados = true
+        // Depois dos campos, a aparência — nessa ordem, e só quando
+        // `Aparencia.decidir` (abaixo) diz que tema ou ícone realmente
+        // mudaram: não vale a pena gastar um PUT nem sobrescrever com o
+        // mesmo valor que já estava lá.
+        if let alvo = Aparencia.decidir(temaAtual: atual.theme ?? "", iconeAtual: atual.icon ?? "",
+                                        temaEscolhido: tema, iconeEscolhido: icone) {
+            _ = try await api.setAppearance(name: atual.name, theme: alvo.tema, icon: alvo.icone)
+        }
         if atualizada.needsTrust {
             let fp = try await api.scanMachine(name: atual.name)
             fingerprintConhecido = fp
@@ -662,6 +730,10 @@ private struct IdentitySheet: View {
     let onEscolhida: (Identity) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    // [13/08/2026] `Color.accentColor` ignora o `.tint()` da raiz (resolve do
+    // catálogo de assets, que este app nem tem) — era por isso que o ✓ desta
+    // lista ficava azul mesmo com outro tema escolhido em Ajustes.
+    @Environment(\.corDeDestaque) private var corDeDestaque
     private let api = APIClient()
 
     @State private var identidades: [Identity] = []
@@ -719,7 +791,7 @@ private struct IdentitySheet: View {
             }
             Spacer()
             if candidata.id == identidadeAtual?.id {
-                Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                Image(systemName: "checkmark").foregroundStyle(corDeDestaque)
             }
         }
     }
