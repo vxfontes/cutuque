@@ -273,6 +273,28 @@ func TestHookTitleFromRoleWinsOverCwd(t *testing.T) {
 	}
 }
 
+// TestHookSubagentStopNaoMexeNaSessaoPai: o session_id do SubagentStop é o da
+// sessão PAI (Claude Code 2.1.231 — ver o case em hooks.go), então ele NÃO pode
+// concluir nem encerrar nada: o pai está vivo e trabalhando justamente quando um
+// subagente dele termina. Este teste é o guarda: se alguém mapear o evento para
+// Finished (→ done) ou SessionEnded (→ idle), ele quebra aqui.
+func TestHookSubagentStopNaoMexeNaSessaoPai(t *testing.T) {
+	now := time.Date(2026, 8, 13, 10, 0, 0, 0, time.UTC)
+	for _, antes := range []session.State{session.StateRunning, session.StateNeedsYou} {
+		cfg, reg := testDeps()
+		reg.Add(session.Session{ID: "pai", Machine: "macbook", Agent: "claude-code", Title: "cutuque", State: antes, CreatedAt: now, UpdatedAt: now})
+
+		rec := postHook(t, cfg, reg, `{"session_id":"pai","hook_event_name":"SubagentStop","cwd":"/Users/example/proj","machine":"macbook"}`)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("estado %q: status = %d, quero 200", antes, rec.Code)
+		}
+		if s, _ := reg.Get("pai"); s.State != antes {
+			t.Errorf("SubagentStop mudou a sessão pai de %q para %q — o session_id é o do PAI, não do subagente", antes, s.State)
+		}
+	}
+}
+
 func TestHookUnknownEventIsNoOp(t *testing.T) {
 	cfg, reg := testDeps()
 	now := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)

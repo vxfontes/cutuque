@@ -146,6 +146,8 @@ const maxHookBody = 64 * 1024
 //     encerra o turno (o claude continua no ar esperando a próxima mensagem).
 //     É o único aviso de saída que a origem manda; sem ele, sessão fechada pelo
 //     terminal fica running para sempre e o reaper só a resolve meia hora depois.
+//   - SubagentStop → NADA, de propósito. O session_id dele é o da sessão PAI;
+//     ver o case, que existe só para registrar o motivo.
 //
 // Outros hooks (PreToolUse, etc.) são aceitos e ignorados. É um canal de
 // detecção complementar ao stream-json do Runner (docs/02, docs/03).
@@ -206,6 +208,24 @@ func HookHandler(eng *engine.Engine) http.HandlerFunc {
 			// chega logo depois por SessionStart). A distinção fica no Data, não
 			// na decisão. O Engine é quem recusa rebaixar done/error.
 			eng.Apply(event.Event{SessionID: p.SessionID, Type: event.SessionEnded, Data: p.Reason, At: time.Now()})
+		case "SubagentStop":
+			// Nenhuma transição, de propósito — e este case existe só para dizer
+			// por quê, para ninguém "consertar" isto depois num SessionEnded.
+			//
+			// [13/08/2026] A ideia era usar o SubagentStop para fechar na origem a
+			// sessão do subagente que acaba. Não dá: no Claude Code 2.1.231 o
+			// `session_id` de TODO payload de hook é o da sessão PAI — a função que
+			// monta o corpo devolve `session_id: <sessão>.id`, e o subagente
+			// aparece só em `agent_id`/`agent_transcript_path`/`agent_type`, campos
+			// que o scripts/hook.sh nem repassa (e o transcript do subagente também
+			// carrega o sessionId do pai). Mapear isto para SessionEnded ou
+			// Finished encerraria/concluiria a sessão PAI a cada subagente que
+			// termina — e é exatamente aí que o pai está vivo e trabalhando.
+			//
+			// Para o hub distinguir subagente, primeiro o hook.sh teria de repassar
+			// o agent_id e o registro ganhar identidade de subagente. Enquanto isso
+			// não existir, não há o que transicionar aqui. (O EnsureRegistered
+			// acima roda e está certo: o evento prova que o PAI está de pé.)
 		case "SessionStart", "UserPromptSubmit":
 			// Sessão (re)ativa: volta a running (ex.: usuária mandou novo prompt
 			// numa sessão que estava done). External:true marca que veio de hook —
