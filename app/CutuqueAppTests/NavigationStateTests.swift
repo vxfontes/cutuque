@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import XCTest
 @testable import CutuqueApp
@@ -707,6 +708,56 @@ final class NavigationStateTests: XCTestCase {
         nav.paneMode = .info
         XCTAssertEqual(nav.paneMode(de: aba2), .info)
         XCTAssertEqual(nav.paneMode(de: aba1), .chat, "aba1 não pode ser afetada por uma escrita com foco em aba2")
+    }
+
+    /// [13/08/2026] A faixa da `ChromeDaAba` desenha `escolha(de:)`, que é um
+    /// cache paralelo a `modosPorAba`. Todo escritor de modo que não seja o
+    /// Picker da chrome tem de atualizar os dois, senão o seletor MENTE sobre o
+    /// conteúdo. O caminho testado aqui é o ✕ de fechar o terminal, que grava
+    /// `.info` direto (`SessionDetailPane.closeTerminalButton`).
+    func testDefinirPaneModeSincronizaAEscolhaDaChrome() {
+        let nav = NavigationState()
+        let aba = ChaveDeAba(tipo: .live, machine: "macmini", alvo: "%1")
+
+        nav.definirSegmentos([SegmentoDeChrome(id: PaneMode.terminal.rawValue, titulo: "Terminal", simbolo: "terminal"),
+                              SegmentoDeChrome(id: PaneMode.info.rawValue, titulo: "Info", simbolo: "info.circle")],
+                             de: aba)
+        nav.escolher(PaneMode.terminal.rawValue, de: aba)
+
+        nav.definirPaneMode(.info, de: aba)   // o ✕, sem passar pela chrome
+        XCTAssertEqual(nav.escolha(de: aba), PaneMode.info.rawValue,
+                       "seletor da chrome ficaria em Terminal com a Info na tela")
+    }
+
+    /// Mesmo defeito pelo outro escritor: o ⌘⇧T do menu, que só conhece a
+    /// propriedade de compatibilidade `nav.paneMode`.
+    func testAtalhoDeCompatibilidadeSincronizaAEscolhaDaChrome() {
+        let nav = NavigationState()
+        let aba = ChaveDeAba(tipo: .chat, machine: "m1", alvo: "sessao-1")
+        nav.abaEmFoco = aba
+        nav.definirPaneMode(.chat, de: aba)
+        XCTAssertEqual(nav.escolha(de: aba), PaneMode.chat.rawValue)
+
+        nav.paneMode = .terminal              // ⌘⇧T
+        XCTAssertEqual(nav.escolha(de: aba), PaneMode.terminal.rawValue)
+    }
+
+    /// O guarda de igualdade de `definirPaneMode` não é enfeite: pela decisão
+    /// #19 os N painéis ficam montados, então cada publicação recompõe todos.
+    func testDefinirPaneModeComValorIgualNaoPublica() {
+        let nav = NavigationState()
+        let aba = ChaveDeAba(tipo: .chat, machine: "m1", alvo: "sessao-1")
+        nav.definirPaneMode(.terminal, de: aba)
+
+        var publicacoes = 0
+        let assinatura = nav.objectWillChange.sink { _ in publicacoes += 1 }
+        defer { assinatura.cancel() }
+
+        nav.definirPaneMode(.terminal, de: aba)
+        XCTAssertEqual(publicacoes, 0)
+
+        nav.definirPaneMode(.info, de: aba)
+        XCTAssertGreaterThan(publicacoes, 0, "mudança de verdade tem de publicar")
     }
 
     /// `descartarModos` é a limpeza que impede `modosPorAba` de crescer pra

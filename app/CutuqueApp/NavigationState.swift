@@ -202,12 +202,31 @@ final class NavigationState: ObservableObject {
     /// Escreve o modo guardado de `chave` (ou de `modoSemAba`, se `nil`).
     /// Cru, sem validar contra a seleção da aba — mesma observação de
     /// `paneMode(de:)`.
+    ///
+    /// [13/08/2026] Também mantém a escolha da chrome em sincronia, e é aqui
+    /// (não em cada painel) de propósito. `escolhaPorAba` é um cache paralelo:
+    /// qualquer escritor de modo que não passe pelo Picker da `ChromeDaAba` o
+    /// deixaria órfão, e o sintoma é o seletor da faixa MENTINDO sobre o
+    /// conteúdo — destacando "Chat" com o Terminal na tela. Existem dois
+    /// escritores desses: o ✕ de fechar o terminal (`SessionDetailPane` grava
+    /// `.info` direto) e o ⌘⇧T do menu (`CutuqueCommands`, pela propriedade
+    /// `paneMode` abaixo). Consertar no único ponto por onde os dois passam faz
+    /// a invariante valer por construção, em vez de depender de cada painel
+    /// lembrar de um `.onChange` a mais. Vale a convenção que a chrome já usa:
+    /// o `id` do segmento de uma aba de sessão É o `rawValue` do `PaneMode`
+    /// (ver `SessionDetailPaneLogic.segmentosDeChrome`).
+    ///
+    /// O guarda de igualdade não é enfeite: pela decisão #19 os N painéis ficam
+    /// montados, então cada `objectWillChange` daqui recompõe todos eles.
     func definirPaneMode(_ modo: PaneMode, de chave: ChaveDeAba?) {
         guard let chave else {
+            guard modoSemAba != modo else { return }
             modoSemAba = modo
             return
         }
+        guard modosPorAba[chave] != modo else { return }
         modosPorAba[chave] = modo
+        escolher(modo.rawValue, de: chave)
     }
 
     /// Propriedade de COMPATIBILIDADE: o modo da aba em foco (`abaEmFoco`).
