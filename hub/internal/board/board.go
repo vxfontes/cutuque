@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"slices"
 	"sort"
@@ -272,19 +273,40 @@ func weekStartFor(label string, now time.Time) (time.Time, string) {
 	return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, now.Location()), label
 }
 
-// CloseWeek arquiva os cards concluídos e marca como encalhada os a_fazer que já
-// existiam antes do início da semana fechada. Retorna as contagens.
+// weekCutoffFor devolve o FIM da semana rotulada — a segunda-feira 00:00
+// seguinte, limite EXCLUSIVO — junto do rótulo usado. É o corte da encalhada:
+// entra tudo que nasceu em qualquer momento dentro da semana fechada; fica de
+// fora o que nasceu depois dela (o card das 00:30 da segunda, quando o
+// fechamento da semana anterior roda de madrugada, é da semana nova).
+func weekCutoffFor(label string, now time.Time) (time.Time, string) {
+	start, usado := weekStartFor(label, now)
+	return start.AddDate(0, 0, 7), usado
+}
+
+// CloseWeek arquiva os cards concluídos e marca como encalhada os a_fazer que
+// atravessaram a semana fechada sem nunca sair da coluna. Retorna as contagens.
 //
 // `week` é o rótulo de destino ("2026-W30"); vazio = a semana de `now`, que é o
 // caminho do fechamento automático de domingo 23:59. Passar um rótulo anterior é
 // o que resolve a virada de madrugada: o que foi concluído às 00:30 de segunda
 // entra na semana em que o trabalho aconteceu, em vez de abrir uma semana nova.
 //
-// O corte da encalhada acompanha o rótulo escolhido, e não o relógio: fechando na
-// W30, um a_fazer criado durante a W30 não vira encalhado no mesmo fechamento que
-// encerra a semana dele.
+// O corte da encalhada é o FIM da semana rotulada (weekCutoffFor): quem nasceu
+// dentro dela e não começou é marcado no fechamento dela mesma.
+//
+// [13/08/2026] O corte era o INÍCIO da semana rotulada, e isto estava escrito
+// aqui como intencional: "o corte da encalhada acompanha o rótulo escolhido, e
+// não o relógio: fechando na W30, um a_fazer criado durante a W30 não vira
+// encalhado no mesmo fechamento que encerra a semana dele" (commit bdec684). O
+// efeito era uma semana inteira de carência extra — um card nascido na W32 só
+// seria marcado no fechamento da W33 — enquanto o /board-protocol promete o
+// contrário: encalhada é quem "atravessa a virada da semana sem nunca ter
+// começado", e a virada que ele atravessa é a do domingo seguinte ao nascimento.
+// Decisão da Vanessa em 13/08/2026: corte no fim da semana. O caso que o corte
+// antigo protegia segue protegido pelo limite exclusivo — fechando a W30 às
+// 00:30 da segunda, o card nascido àquela hora é da W31 e não encalha.
 func (s *MemStore) CloseWeek(now time.Time, week string) (archived, stalled int) {
-	weekStart, label := weekStartFor(week, now)
+	cutoff, label := weekCutoffFor(week, now)
 	var removed []string
 	var updated []Task
 	s.mu.Lock()
@@ -295,7 +317,7 @@ func (s *MemStore) CloseWeek(now time.Time, week string) (archived, stalled int)
 			delete(s.byID, id)
 			removed = append(removed, id)
 			archived++
-		case t.Column == "a_fazer" && !t.Encalhada && t.CreatedAt.Before(weekStart):
+		case t.Column == "a_fazer" && !t.Encalhada && t.CreatedAt.Before(cutoff):
 			t.Encalhada = true
 			s.byID[id] = t
 			updated = append(updated, t)
@@ -462,12 +484,21 @@ func (s *MemStore) Search(q string) []Task {
 }
 
 // StartWeeklyCloser dispara CloseWeek automaticamente todo domingo 23:59 na loc.
+//
+// Loga o horário agendado e as contagens de cada rodada. Não é enfeite: com 0
+// arquivado e 0 encalhado, um fechamento que rodou e um que nunca rodou são
+// indistinguíveis no board — e foi isso que fez o diagnóstico do corte da
+// encalhada (13/08/2026) virar eliminação de hipóteses em vez de leitura de log.
 func StartWeeklyCloser(s Store, loc *time.Location) {
 	go func() {
 		for {
-			time.Sleep(time.Until(nextSundayClose(time.Now().In(loc))))
+			prox := nextSundayClose(time.Now().In(loc))
+			log.Printf("board: próximo fechamento automático da semana em %s", prox.Format(time.RFC3339))
+			time.Sleep(time.Until(prox))
 			// Rótulo vazio: domingo 23:59 a semana do relógio É a semana certa.
-			s.CloseWeek(time.Now().In(loc), "")
+			arquivados, encalhados := s.CloseWeek(time.Now().In(loc), "")
+			log.Printf("board: fechamento automático da semana concluído: %d arquivado(s), %d encalhado(s)",
+				arquivados, encalhados)
 		}
 	}()
 }

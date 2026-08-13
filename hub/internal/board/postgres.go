@@ -384,9 +384,11 @@ func (s *PostgresStore) Remove(id string) bool {
 }
 
 // CloseWeek arquiva os concluídos no rótulo `week` (vazio = semana de `now`).
-// Ver a doc do MemStore para o porquê do rótulo escolhido.
+// Ver a doc do MemStore para o porquê do rótulo escolhido e do corte no FIM da
+// semana — os dois caminhos têm de encalhar exatamente os mesmos cards, então o
+// critério é o mesmo weekCutoffFor.
 func (s *PostgresStore) CloseWeek(now time.Time, week string) (archived, stalled int) {
-	weekStart, label := weekStartFor(week, now)
+	cutoff, label := weekCutoffFor(week, now)
 	ctx, cancel := s.ctx()
 	defer cancel()
 
@@ -411,7 +413,7 @@ func (s *PostgresStore) CloseWeek(now time.Time, week string) (archived, stalled
 	}
 	rows2, err := tx.Query(ctx, `UPDATE cutuque.board_tasks SET encalhada=true, updated_at=$2
 		WHERE column_name='a_fazer' AND NOT encalhada AND archived_week IS NULL AND created_at < $1
-		RETURNING id`, weekStart, now)
+		RETURNING id`, cutoff, now)
 	if err == nil {
 		for rows2.Next() {
 			var id string

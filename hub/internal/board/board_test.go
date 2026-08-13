@@ -200,8 +200,11 @@ func TestCloseWeekArchivesAndStalls(t *testing.T) {
 	if archived != 1 {
 		t.Fatalf("archived=%d, esperava 1", archived)
 	}
-	if stalled != 1 {
-		t.Fatalf("stalled=%d, esperava 1", stalled)
+	// Os DOIS a_fazer encalham: o corte é o fim da semana fechada, então o card
+	// criado nesta semana também atravessou a virada sem começar. O em_progresso
+	// não entra — quem saiu da coluna começou.
+	if stalled != 2 {
+		t.Fatalf("stalled=%d, esperava 2 (os dois a_fazer)", stalled)
 	}
 	if _, ok := s.Get(done.ID); ok {
 		t.Fatalf("concluido deveria ter saído do board")
@@ -209,8 +212,11 @@ func TestCloseWeekArchivesAndStalls(t *testing.T) {
 	if g, _ := s.Get(oldTodo.ID); !g.Encalhada {
 		t.Fatalf("oldTodo deveria ser encalhada")
 	}
-	if g, _ := s.Get(recentTodo.ID); g.Encalhada {
-		t.Fatalf("recentTodo NÃO deveria ser encalhada")
+	if g, _ := s.Get(recentTodo.ID); !g.Encalhada {
+		t.Fatalf("recentTodo deveria ser encalhada (nasceu na semana que está fechando)")
+	}
+	if g, _ := s.Get(prog.ID); g.Encalhada {
+		t.Fatalf("card em em_progresso não pode encalhar")
 	}
 	weeks := s.ArchivedWeeks()
 	if len(weeks) != 1 || len(weeks[0].Tasks) != 1 || weeks[0].Tasks[0].ID != done.ID {
@@ -251,30 +257,69 @@ func TestCloseWeekArquivaNaSemanaEscolhida(t *testing.T) {
 	}
 }
 
-// O corte da encalhada segue o rótulo escolhido, não o relógio: fechando na W30,
-// um a_fazer criado durante a W30 não encalha no fechamento da própria semana.
-func TestCloseWeekEncalhaPeloRotuloEscolhido(t *testing.T) {
+// O corte da encalhada é o FIM da semana rotulada, não o começo: fechando a W30,
+// o a_fazer criado DENTRO da W30 encalha no fechamento dela mesma — foi o que a
+// virada de 13/08/2026 mudou (antes ele ganhava uma semana inteira de carência).
+//
+// E a fronteira que o corte antigo protegia continua de pé: fechar a W30 às 00:30
+// da segunda (já dentro da W31, o caso da madrugada) não pode encalhar o card
+// nascido àquela hora — ele é da W31, ainda não atravessou virada nenhuma.
+func TestCloseWeekEncalhaQuemAtravessouASemanaFechada(t *testing.T) {
 	s := New()
+	madrugadaDeSegunda := time.Date(2026, 7, 27, 0, 30, 0, 0, time.UTC) // 2026-W31
+
 	daSemanaFechada := s.Add(NewTask{Title: "criado na W30", Group: "g", Session: "x"})
 	anterior := s.Add(NewTask{Title: "criado na W28", Group: "g", Session: "x"})
+	daSemanaNova := s.Add(NewTask{Title: "criado 00:30 de segunda (W31)", Group: "g", Session: "x"})
+	backdate := map[string]time.Time{
+		daSemanaFechada.ID: time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC), // quarta da W30
+		anterior.ID:        time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC),  // W28
+		daSemanaNova.ID:    madrugadaDeSegunda,
+	}
 	s.mu.Lock()
-	a := s.byID[daSemanaFechada.ID]
-	a.CreatedAt = time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC) // quarta da W30
-	s.byID[daSemanaFechada.ID] = a
-	b := s.byID[anterior.ID]
-	b.CreatedAt = time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC) // W28
-	s.byID[anterior.ID] = b
+	for id, quando := range backdate {
+		t := s.byID[id]
+		t.CreatedAt = quando
+		s.byID[id] = t
+	}
 	s.mu.Unlock()
 
-	_, stalled := s.CloseWeek(time.Date(2026, 7, 27, 0, 30, 0, 0, time.UTC), "2026-W30")
-	if stalled != 1 {
-		t.Fatalf("stalled=%d, esperava só o card da W28", stalled)
+	_, stalled := s.CloseWeek(madrugadaDeSegunda, "2026-W30")
+	if stalled != 2 {
+		t.Fatalf("stalled=%d, esperava 2 (o da W30 e o da W28, não o da W31)", stalled)
 	}
-	if g, _ := s.Get(daSemanaFechada.ID); g.Encalhada {
-		t.Fatalf("card criado dentro da semana fechada não deveria encalhar")
+	if g, _ := s.Get(daSemanaFechada.ID); !g.Encalhada {
+		t.Fatalf("card criado dentro da semana fechada deveria encalhar")
 	}
 	if g, _ := s.Get(anterior.ID); !g.Encalhada {
 		t.Fatalf("card de duas semanas atrás deveria encalhar")
+	}
+	if g, _ := s.Get(daSemanaNova.ID); g.Encalhada {
+		t.Fatalf("card nascido DEPOIS da semana fechada não pode encalhar (fronteira da madrugada)")
+	}
+}
+
+// O corte tem de andar com o RÓTULO, não com o relógio: fechando a W28 hoje (um
+// fechamento atrasado, com rótulo antigo), o que nasceu na W30 fica fora.
+func TestCloseWeekCorteAcompanhaORotuloEscolhido(t *testing.T) {
+	s := New()
+	daW30 := s.Add(NewTask{Title: "criado na W30", Group: "g", Session: "x"})
+	daW28 := s.Add(NewTask{Title: "criado na W28", Group: "g", Session: "x"})
+	s.mu.Lock()
+	a := s.byID[daW30.ID]
+	a.CreatedAt = time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	s.byID[daW30.ID] = a
+	b := s.byID[daW28.ID]
+	b.CreatedAt = time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
+	s.byID[daW28.ID] = b
+	s.mu.Unlock()
+
+	_, stalled := s.CloseWeek(time.Date(2026, 7, 27, 0, 30, 0, 0, time.UTC), "2026-W28")
+	if stalled != 1 {
+		t.Fatalf("stalled=%d, esperava só o card da W28", stalled)
+	}
+	if g, _ := s.Get(daW30.ID); g.Encalhada {
+		t.Fatalf("fechando a W28, o card da W30 não pode encalhar")
 	}
 }
 
@@ -330,5 +375,35 @@ func TestCloseOptionsSemEscolhaQuandoNaoHaOutraSemana(t *testing.T) {
 	}
 	if opt.Current.Count != 1 {
 		t.Fatalf("current deveria contar o que já foi arquivado nela: %+v", opt.Current)
+	}
+}
+
+// weekCutoffFor é o corte da encalhada nas duas stores (MemStore e Postgres), e
+// é a segunda-feira 00:00 SEGUINTE ao fim da semana rotulada — limite exclusivo.
+// A virada do ano é o caso que quebra aritmética ingênua de semana ISO.
+func TestWeekCutoffFor(t *testing.T) {
+	agora := time.Date(2026, 7, 27, 0, 30, 0, 0, time.UTC) // segunda, W31
+	casos := []struct {
+		rotulo     string
+		querCorte  time.Time
+		querUsado  string
+		explicacao string
+	}{
+		{"2026-W30", time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC), "2026-W30",
+			"W30 = 20 a 26/07; o corte é a segunda seguinte, 27/07 00:00"},
+		{"2025-W01", time.Date(2025, 1, 6, 0, 0, 0, 0, time.UTC), "2025-W01",
+			"W01 de 2025 começa em 30/12/2024 e termina em 05/01/2025"},
+		{"2026-W53", time.Date(2027, 1, 4, 0, 0, 0, 0, time.UTC), "2026-W53",
+			"2026 não tem W53: a aritmética ISO cai na semana seguinte, sem estourar"},
+		{"semana passada, por favor", time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC), "2026-W31",
+			"rótulo lixo cai na semana de now (W31), corte na segunda seguinte"},
+	}
+	for _, c := range casos {
+		corte, usado := weekCutoffFor(c.rotulo, agora)
+		if !corte.Equal(c.querCorte) || usado != c.querUsado {
+			t.Errorf("weekCutoffFor(%q) = (%s, %q), quero (%s, %q) — %s",
+				c.rotulo, corte.Format(time.RFC3339), usado,
+				c.querCorte.Format(time.RFC3339), c.querUsado, c.explicacao)
+		}
 	}
 }
