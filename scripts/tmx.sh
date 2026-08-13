@@ -9,10 +9,11 @@
 #   ln -s "$PWD/scripts/tmx.sh" /usr/local/bin/tmx
 #
 # Uso rápido: entre na pasta do projeto e rode `tmx cc` (Claude Code),
-# `tmx cx` (Codex) ou `tmx oc` (OpenCode). Sem argumento, o nome da sessão
-# vira o nome da pasta. `tmx` sozinho lista todos os comandos.
+# `tmx cx` (Codex), `tmx oc` (OpenCode) ou `tmx gk` (Grok). Sem argumento, o
+# nome da sessão vira o nome da pasta. `tmx` sozinho lista todos os comandos.
 #
-# Requer: tmux e o agente que você for chamar (claude / codex / opencode).
+# Requer: tmux e o agente que você for chamar (claude / codex / opencode /
+# grok).
 
 set -e
 
@@ -175,6 +176,29 @@ case "$cmd" in
     TM new-session -A -s "$name" -c "$PWD" 'opencode'
     ;;
 
+  gk)
+    # [13/08/2026] igual ao cc/oc, mas roda o grok (xAI) na pasta atual.
+    # 3º arg = grupo (servidor -L); senão usa $TMX_SRV / 'main'.
+    #
+    # SEM flag, como o cc e o oc: o grok pede aprovação de cada ferramenta. Ele
+    # TEM um `--always-approve` (o equivalente ao `--sandbox
+    # danger-full-access` do cx), de propósito não usado aqui — auto-aprovar
+    # tudo é decisão da Vanessa, não default do atalho.
+    #
+    # Ressalva de visibilidade, diferente dos outros três: o hub reconhece
+    # agente pelo NOME na árvore de processos ('claude'|'codex'|'opencode', ver
+    # `agent_of` em hub/internal/adapter/claudecode/tmux_script.go), e 'grok'
+    # não está na lista. Então a sessão aparece no app como pane de SHELL:
+    # espelho e digitação funcionam (capture/send-keys são agnósticos), mas não
+    # há estado rodando/esperando/ocioso. Ligar isso pede calibrar os
+    # marcadores da TUI do grok por captura de tela, como foi feito pros outros.
+    if [ -z "$name" ]; then
+      name="$(basename "$PWD" | tr ' ' '_' | tr '.' '_')"
+    fi
+    [ -n "$arg3" ] && SRV="$arg3"
+    TM new-session -A -s "$name" -c "$PWD" 'grok'
+    ;;
+
   *)
     cat <<EOF
 Uso: tmx <comando> [args]   (servidor tmux = \$TMX_SRV, default 'main')
@@ -193,6 +217,7 @@ Comandos:
   cc [sessao] [grupo]   cria/entra na sessão JÁ rodando o claude; grupo = servidor -L
   cx [sessao] [grupo]   cria/entra na sessão JÁ rodando o codex (--sandbox danger-full-access); grupo = servidor -L
   oc [sessao] [grupo]   cria/entra na sessão JÁ rodando o opencode; grupo = servidor -L
+  gk [sessao] [grupo]   cria/entra na sessão JÁ rodando o grok; grupo = servidor -L
 
 Grupo via env:  TMX_SRV=defender tmx cc command
 Grupo via arg:  tmx cc command defender
