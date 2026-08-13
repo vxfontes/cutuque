@@ -55,6 +55,30 @@ func (e *APNSError) Error() string {
 	return fmt.Sprintf("apns: status %d (%s)", e.Status, e.Reason)
 }
 
+// TokenInvalido diz se o erro significa "este device token nunca mais vai
+// funcionar" — quem enviou deve APAGAR o token do store. São dois casos:
+//
+//   - 410 Unregistered (ErrGone): app desinstalado, token expirado.
+//   - 400 BadDeviceToken: token malformado ou de OUTRO ambiente (o clássico é um
+//     token de sandbox mandado para api.push.apple.com depois de trocar o
+//     aps-environment do app). Retentar não conserta: a APNs devolve o mesmo 400
+//     para sempre e o token fica no store falhando a cada transição.
+//
+// Deliberadamente FORA da lista: DeviceTokenNotForTopic, 403 e afins. Esses são
+// defeito de CONFIGURAÇÃO do hub (topic/chave errados), idênticos para todos os
+// devices — apagar por causa deles esvaziaria o store inteiro e obrigaria cada
+// app a re-registrar por um erro que não é do device.
+func TokenInvalido(err error) bool {
+	if errors.Is(err, ErrGone) {
+		return true
+	}
+	var ae *APNSError
+	if errors.As(err, &ae) {
+		return ae.Status == http.StatusBadRequest && ae.Reason == "BadDeviceToken"
+	}
+	return false
+}
+
 // Client envia pushes para a APNs. É seguro para uso concorrente.
 type Client struct {
 	http   *http.Client

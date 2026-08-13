@@ -2,13 +2,13 @@
 // detecta as TRANSIÇÕES relevantes (→ needs_you, → done, → error) e envia um
 // push com METADADOS APENAS — zero código-fonte ou output da sessão (invariante
 // de segurança do docs/02 e review/security.md). Faz fan-out para todos os
-// devices registrados; um 410 Unregistered remove o device.
+// devices registrados; token que a APNs recusa de vez (410 Unregistered / 400
+// BadDeviceToken) sai do store.
 package notifier
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"sync"
@@ -455,8 +455,14 @@ func (n *Notifier) maybePushLiveActivity() {
 			ctx, cancel := context.WithTimeout(context.Background(), pushTimeout)
 			defer cancel()
 			err := n.apns.Push(ctx, token, payload, apns.PushOptions{PushType: "liveactivity", Priority: 10})
-			if errors.Is(err, apns.ErrGone) {
-				n.devices.Remove(token) // activity encerrada/expirada
+			if apns.TokenInvalido(err) {
+				// Activity encerrada/expirada (410) ou token inválido de vez (400
+				// BadDeviceToken): não volta a funcionar, sai do store. O log é o que
+				// explica, depois, uma ilha que parou de atualizar sozinha — esta
+				// remoção era silenciosa (o gêmeo no fanout sempre logou).
+				n.devices.Remove(token)
+				n.logger.Info("token de live activity removido (inválido na APNs)",
+					"motivo", err, "token_prefix", tokenPrefix(token))
 			} else if err != nil {
 				n.logger.Warn("falha no push de live activity", "err", err, "token_prefix", tokenPrefix(token))
 			}
@@ -499,7 +505,8 @@ func buildLiveActivityPayload(live, active int, end bool) []byte {
 }
 
 // fanout envia o push a todos os devices, um por goroutine com timeout próprio.
-// Um 410 remove o device; outros erros só são logados.
+// Token que a APNs recusa de vez (410 Unregistered / 400 BadDeviceToken) sai do
+// store; outros erros só são logados.
 func (n *Notifier) fanout(payload []byte, opts apns.PushOptions) {
 	// App em foreground: não dispara push (a usuária já vê tudo ao vivo pelo WS).
 	if n.foregroundSuppressed() {
@@ -515,9 +522,10 @@ func (n *Notifier) fanout(payload []byte, opts apns.PushOptions) {
 
 			err := n.apns.Push(ctx, token, payload, opts)
 			switch {
-			case errors.Is(err, apns.ErrGone):
+			case apns.TokenInvalido(err):
 				n.devices.Remove(token)
-				n.logger.Info("device removido (410 Unregistered)", "token_prefix", tokenPrefix(token))
+				n.logger.Info("device removido (token inválido na APNs)",
+					"motivo", err, "token_prefix", tokenPrefix(token))
 			case err != nil:
 				n.logger.Warn("falha ao enviar push", "err", err, "token_prefix", tokenPrefix(token))
 			}

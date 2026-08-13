@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -165,5 +166,34 @@ func TestParseP8KeyAcceptsEC(t *testing.T) {
 	}
 	if !parsed.Equal(key) {
 		t.Error("chave parseada difere da original")
+	}
+}
+
+// TestTokenInvalido fixa a fronteira do "apaga o token": só o que é defeito DO
+// DEVICE. Erro de configuração do hub (topic/chave) e throttle NÃO entram —
+// tratá-los como token morto esvaziaria o store inteiro num deploy mal
+// configurado.
+func TestTokenInvalido(t *testing.T) {
+	casos := []struct {
+		nome string
+		err  error
+		quer bool
+	}{
+		{"nil", nil, false},
+		{"410 Unregistered", ErrGone, true},
+		{"410 embrulhado", fmt.Errorf("fan-out: %w", ErrGone), true},
+		{"400 BadDeviceToken", &APNSError{Status: 400, Reason: "BadDeviceToken"}, true},
+		{"400 embrulhado", fmt.Errorf("push: %w", &APNSError{Status: 400, Reason: "BadDeviceToken"}), true},
+		{"400 DeviceTokenNotForTopic", &APNSError{Status: 400, Reason: "DeviceTokenNotForTopic"}, false},
+		{"400 BadTopic", &APNSError{Status: 400, Reason: "BadTopic"}, false},
+		{"403 InvalidProviderToken", &APNSError{Status: 403, Reason: "InvalidProviderToken"}, false},
+		{"429 TooManyRequests", &APNSError{Status: 429, Reason: "TooManyRequests"}, false},
+		{"503 ServiceUnavailable", &APNSError{Status: 503, Reason: "ServiceUnavailable"}, false},
+		{"erro de rede", errors.New("dial tcp: i/o timeout"), false},
+	}
+	for _, c := range casos {
+		if got := TokenInvalido(c.err); got != c.quer {
+			t.Errorf("%s: TokenInvalido = %v, quero %v", c.nome, got, c.quer)
+		}
 	}
 }

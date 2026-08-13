@@ -3,6 +3,7 @@ package notifier
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -23,15 +24,27 @@ type recordedPush struct {
 }
 
 // fakePusher captura pushes e os entrega por um canal para o teste sincronizar
-// sem sleeps. Se o token estiver em goneTokens, devolve ErrGone.
+// sem sleeps. goneToken devolve ErrGone; erroPorToken devolve o erro configurado
+// para aquele token (para os casos de APNSError: 400, 403, throttle).
 type fakePusher struct {
-	ch        chan recordedPush
-	mu        sync.Mutex
-	goneToken string
+	ch           chan recordedPush
+	mu           sync.Mutex
+	goneToken    string
+	erroPorToken map[string]error
 }
 
 func newFakePusher() *fakePusher {
 	return &fakePusher{ch: make(chan recordedPush, 16)}
+}
+
+// erroDe configura o erro que a APNs falsa devolve para um token.
+func (f *fakePusher) erroDe(token string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.erroPorToken == nil {
+		f.erroPorToken = map[string]error{}
+	}
+	f.erroPorToken[token] = err
 }
 
 func (f *fakePusher) Push(_ context.Context, token string, payload []byte, opts apns.PushOptions) error {
@@ -39,11 +52,12 @@ func (f *fakePusher) Push(_ context.Context, token string, payload []byte, opts 
 	f.ch <- recordedPush{token: token, payload: cp, opts: opts}
 	f.mu.Lock()
 	gone := f.goneToken
+	erro := f.erroPorToken[token]
 	f.mu.Unlock()
 	if token == gone {
 		return apns.ErrGone
 	}
-	return nil
+	return erro
 }
 
 // recv espera um push com timeout; falha o teste se nada chegar.
@@ -557,5 +571,110 @@ func TestRemoveCancelaAgendamentoDeDone(t *testing.T) {
 
 	if p, got := tryRecv(fake, 700*time.Millisecond); got {
 		t.Fatalf("push de done disparou para sessão apagada: %s", p.payload)
+	}
+}
+
+// esperaDevices espera o store chegar a `quer` devices (a remoção acontece na
+// goroutine de fan-out, depois do Push).
+func esperaDevices(t *testing.T, store *devices.Store, quer int) {
+	t.Helper()
+	prazo := time.Now().Add(2 * time.Second)
+	for {
+		n := len(store.List())
+		if n == quer {
+			return
+		}
+		if time.Now().After(prazo) {
+			t.Fatalf("store tem %d devices, quero %d", n, quer)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestBadDeviceTokenRemoveDevice: 400 BadDeviceToken também é token morto — o
+// caso clássico é um token de sandbox depois de o app virar production. Antes só
+// o 410 removia, então esse token ficava no store falhando a cada transição.
+func TestBadDeviceTokenRemoveDevice(t *testing.T) {
+	eng, _, store, fake, _ := fixture(t)
+	fake.erroDe("tokendevice1", &apns.APNSError{Status: 400, Reason: "BadDeviceToken"})
+
+	startSession(eng, "s1")
+	eng.Apply(event.Event{SessionID: "s1", Type: event.Finished, At: time.Now()})
+	recv(t, fake) // consome o push (que devolve o 400)
+
+	esperaDevices(t, store, 0)
+}
+
+// TestErroDeConfiguracaoNaoRemoveDevice é o contrapeso: DeviceTokenNotForTopic
+// (e 403 e afins) é defeito de CONFIGURAÇÃO do hub, igual para todos os devices.
+// Remover por causa disso esvaziaria o store inteiro e obrigaria cada app a
+// re-registrar por um erro que não é do device.
+func TestErroDeConfiguracaoNaoRemoveDevice(t *testing.T) {
+	eng, _, store, fake, _ := fixture(t)
+	fake.erroDe("tokendevice1", &apns.APNSError{Status: 400, Reason: "DeviceTokenNotForTopic"})
+
+	startSession(eng, "s1")
+	eng.Apply(event.Event{SessionID: "s1", Type: event.Finished, At: time.Now()})
+	recv(t, fake)
+
+	// Dá tempo de uma remoção indevida acontecer antes de afirmar que não houve.
+	time.Sleep(200 * time.Millisecond)
+	if len(store.List()) != 1 {
+		t.Errorf("device foi removido por erro de configuração do hub; store tem %d", len(store.List()))
+	}
+}
+
+// logSpy captura o log do Notifier. Precisa de mutex: as goroutines de push
+// escrevem em paralelo.
+type logSpy struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (l *logSpy) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *logSpy) texto() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+// TestLiveActivityTokenInvalidoRemoveComLog: a remoção do token de live activity
+// era SILENCIOSA (o gêmeo no fan-out sempre logou) — a ilha parava de atualizar
+// e não sobrava rastro nenhum. Agora usa o mesmo classificador do fan-out e loga
+// o motivo.
+func TestLiveActivityTokenInvalidoRemoveComLog(t *testing.T) {
+	reg := registry.New()
+	eng := engine.New(reg)
+	store := devices.New()
+	store.Upsert("tokenla1", "liveactivity")
+	fake := newFakePusher()
+	fake.erroDe("tokenla1", &apns.APNSError{Status: 400, Reason: "BadDeviceToken"})
+	spy := &logSpy{}
+	n := New(fake, store, reg, slog.New(slog.NewTextHandler(spy, nil)))
+	n.Start()
+	t.Cleanup(n.Close)
+
+	// Primeira sessão de tmux ao vivo: o agregado muda (0 → 1) e a Live Activity
+	// é empurrada. Fica em running, então nenhum push de alerta concorre aqui.
+	startExternal(eng, "ext1")
+
+	p := recv(t, fake)
+	if p.opts.PushType != "liveactivity" {
+		t.Fatalf("push_type = %q, quero liveactivity", p.opts.PushType)
+	}
+	esperaDevices(t, store, 0)
+	// Close espera as goroutines de push: o log sai DEPOIS do Remove, então sem
+	// isto a leitura do buffer seria uma corrida.
+	n.Close()
+	if !strings.Contains(spy.texto(), "live activity removido") {
+		t.Errorf("remoção do token de live activity ficou sem log:\n%s", spy.texto())
+	}
+	if !strings.Contains(spy.texto(), "BadDeviceToken") {
+		t.Errorf("log sem o motivo da remoção:\n%s", spy.texto())
 	}
 }
