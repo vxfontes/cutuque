@@ -239,4 +239,31 @@ final class MachineAppearanceTests: XCTestCase {
         XCTAssertEqual(falso.recebidos, [a, b])
         XCTAssertEqual(escritor.confirmada, b)
     }
+
+    // MARK: - Segmentos da chrome (13/08/2026 — abas de navegador e chrome única)
+
+    /// Ids de `MachinePane`, não de `PaneMode`: as duas abas (sessão e máquina)
+    /// usam a MESMA `ChromeDaAba`, e o registro em `NavigationState` é por
+    /// CHAVE DE ABA — "terminal" numa não é "terminal" na outra. A ponte de
+    /// cada painel converte com o SEU enum (aqui, `MachinePane(rawValue:)`).
+    @MainActor
+    func testChromeDaMaquinaUsaOsIdsDeMachinePane() {
+        let nav = NavigationState()
+        let chave = ChaveDeAba.maquina("macmini")
+        nav.definirSegmentos(MachineDetailView.segmentosDeChrome(), de: chave)
+        XCTAssertEqual(nav.segmentos(de: chave).map(\.id),
+                       [MachinePane.terminal.rawValue, MachinePane.files.rawValue])
+        XCTAssertEqual(nav.segmentos(de: chave).map(\.titulo), ["Terminal", "Arquivos"])
+    }
+
+    /// A lista é `MachinePane.allCases`, então crescer o enum (um terceiro
+    /// painel, um dia) cresce a chrome sozinho — sem lembrar de tocar aqui
+    /// também. Este teste falha primeiro se algum dia isso divergir.
+    func testSegmentosSeguemTodosOsCasosDoMachinePane() {
+        let s = MachineDetailView.segmentosDeChrome()
+        XCTAssertEqual(s.count, MachinePane.allCases.count)
+        for pane in MachinePane.allCases {
+            XCTAssertTrue(s.contains { $0.id == pane.rawValue && $0.simbolo == pane.symbol })
+        }
+    }
 }
