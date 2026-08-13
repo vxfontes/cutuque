@@ -124,6 +124,10 @@ func FileWriteHandler(lch Launcher) http.HandlerFunc {
 // hub — um vídeo de 2 GB não pode ser a diferença entre atender o pedido e
 // derrubar o processo que também segura board, sessões e terminais.
 //
+// r.Context() vai para o Launcher (achado #2 da revisão adversarial do Task
+// H): se a usuária sai da tela e o app derruba a conexão, o processo remoto
+// (cat/ssh) morre junto, em vez de ficar preso até o hub reiniciar.
+//
 //	GET /machines/{machine}/fs/download?path=/Users/vx/foto.png
 //	→ 200 <bytes> | 400 | 404 | 502
 func FileDownloadHandler(lch Launcher) http.HandlerFunc {
@@ -133,7 +137,7 @@ func FileDownloadHandler(lch Launcher) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "bad_request")
 			return
 		}
-		rc, err := lch.DownloadFile(r.PathValue("machine"), path)
+		rc, err := lch.DownloadFile(r.Context(), r.PathValue("machine"), path)
 		switch {
 		case errors.Is(err, launcher.ErrUnknownMachine):
 			writeJSONError(w, http.StatusNotFound, "unknown_machine")

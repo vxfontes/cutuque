@@ -278,6 +278,14 @@ func TestGetFsDownloadDevolveOsBytesCrus(t *testing.T) {
 	if kind != "attachment" || params["filename"] != "foto.png" {
 		t.Errorf("Content-Disposition errado: %q", cd)
 	}
+	// Prova a razão de existir do closeTrackingReader (achado #1 da revisão
+	// adversarial de 12/08/2026 do Task H): sem esta linha, downloadClosed é
+	// escrito mas nunca lido, e um defer rc.Close() removido do handler
+	// passaria despercebido — exatamente o zumbi que a Parte 1 do plano existe
+	// para evitar.
+	if !f.downloadClosed {
+		t.Error("handler não fechou o corpo do download — defer rc.Close() sumiu")
+	}
 }
 
 // O nome do arquivo vai num header; aspas e newline nele quebrariam o header

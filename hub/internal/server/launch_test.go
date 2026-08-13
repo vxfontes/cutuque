@@ -119,7 +119,7 @@ func (f *fakeLauncher) WriteFile(machine, path string, content []byte) (session.
 	f.gotWriteMachine, f.gotWritePath, f.gotWriteContent = machine, path, content
 	return f.fileWrite, f.writeErr
 }
-func (f *fakeLauncher) DownloadFile(machine, path string) (io.ReadCloser, error) {
+func (f *fakeLauncher) DownloadFile(ctx context.Context, machine, path string) (io.ReadCloser, error) {
 	f.gotDownloadMachine, f.gotDownloadPath = machine, path
 	if f.downloadErr != nil {
 		return nil, f.downloadErr

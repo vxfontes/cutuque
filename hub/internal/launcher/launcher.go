@@ -692,19 +692,36 @@ func (l *Launcher) WriteFile(machine, path string, content []byte) (session.File
 	return writer.WriteFile(ctx, path, content)
 }
 
+// downloadTimeout é o TETO PRÓPRIO do download — não os 15s do
+// discoverTimeout (um arquivo de verdade pode legitimamente levar mais que
+// isso para atravessar a rede), mas também não infinito. Generoso o bastante
+// para o teto de 50 MB que o app aplica ANTES de pedir o download (ver desenho
+// "O teto de 50 MB"), mesmo numa conexão ruim.
+//
+// REESCRITO 12/08/2026 (achado #2 da revisão adversarial do Task H): a versão
+// anterior desta função tirou o discoverTimeout citando "a mesma razão do
+// ShellCommand", mas não é a mesma razão — ShellCommand recebe o ctx de quem
+// chama (a conexão WebSocket real, ver comentário dele), enquanto DownloadFile
+// não recebia ctx nenhum e ficava preso só ao baseCtx (vive até o hub
+// desligar). Resultado: um mount de rede travado, ou o comando remoto preso
+// (o ServerAliveInterval do ssh não pega isso — é o transporte que fica de
+// pé, não o comando dentro dele), nunca acionava o Close() — que só roda
+// quando io.Copy retorna — e o processo cat/ssh ficava vivo até reiniciar o
+// hub manualmente (a Vanessa não faz isso, ver downloadReadCloser). Trocou-se
+// "download grande derruba o hub por memória" por "download travado nunca
+// termina". Agora DownloadFile some as duas pontas: o ctx do handler HTTP
+// (r.Context(), morre se a usuária sai da tela) E este teto próprio,
+// combinados — o que vier primeiro cancela.
+const downloadTimeout = 10 * time.Minute
+
 // DownloadFile traz os bytes crus de um arquivo na máquina, EM FLUXO (download
 // da aba Máquinas — inclusive binário, que o visualizador não mostra). Quem
 // chama TEM que fechar o ReadCloser (defer) — é o Close() dele que espera o
 // processo (cat/ssh) e evita zumbi (ver claudecode.downloadReadCloser).
 //
-// SEM o discoverTimeout de propósito — mesma razão do ShellCommand (comentário
-// lá embaixo): um arquivo genuinamente grande pode levar bem mais que os 15s
-// da descoberta para atravessar a rede, e amarrar o download a esse prazo
-// mataria a transferência no meio do jeito errado (silenciosamente, sem
-// diferenciar "arquivo grande" de "máquina travada"). Quem encerra o processo
-// é o Close() (o handler faz defer rc.Close() ao fim do io.Copy), não um
-// cancel programado aqui.
-func (l *Launcher) DownloadFile(machine, path string) (io.ReadCloser, error) {
+// ctx é o da requisição HTTP (o handler passa r.Context()), somado ao teto
+// próprio downloadTimeout — ver o comentário dele para a razão de existir.
+func (l *Launcher) DownloadFile(ctx context.Context, machine, path string) (io.ReadCloser, error) {
 	tgt, ok := l.anyTarget(machine)
 	if !ok {
 		return nil, ErrUnknownMachine
@@ -713,7 +730,30 @@ func (l *Launcher) DownloadFile(machine, path string) (io.ReadCloser, error) {
 	if !ok {
 		return nil, ErrUnknownMachine
 	}
-	return dl.DownloadFile(l.baseCtx, path)
+	dctx, cancel := context.WithTimeout(ctx, downloadTimeout)
+	rc, err := dl.DownloadFile(dctx, path)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	return &cancelOnCloseReader{ReadCloser: rc, cancel: cancel}, nil
+}
+
+// cancelOnCloseReader libera o cancel do context.WithTimeout assim que o
+// download termina (o Close do handler) — sem isto o timer do teto ficaria
+// vivo até estourar sozinho mesmo num download rápido. Não chamar cancel()
+// antes do Close (ex.: via defer logo após criar o contexto) cancelaria o ctx
+// na hora e mataria o processo remoto imediatamente — exec.CommandContext
+// mata o processo assim que o ctx é cancelado, não só quando ele expira.
+type cancelOnCloseReader struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnCloseReader) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
 }
 
 // ShellCommand monta (sem rodar) o comando de um shell interativo na máquina —

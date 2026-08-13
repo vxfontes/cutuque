@@ -37,8 +37,11 @@ type Launcher interface {
 	ReadFile(machine, path string) (session.FileContent, error)
 	WriteFile(machine, path string, content []byte) (session.FileWrite, error)
 	// DownloadFile devolve o arquivo EM FLUXO (12/08/2026) — quem chama tem que
-	// fechar o io.ReadCloser (defer), é o Close() que reclama o processo.
-	DownloadFile(machine, path string) (io.ReadCloser, error)
+	// fechar o io.ReadCloser (defer), é o Close() que reclama o processo. ctx é
+	// o da requisição (r.Context()): o Launcher soma a ele um teto próprio
+	// (achado #2 da revisão adversarial do Task H — ver launcher.DownloadFile),
+	// então o download morre se a usuária sair da tela OU se travar demais.
+	DownloadFile(ctx context.Context, machine, path string) (io.ReadCloser, error)
 	ShellCommand(ctx context.Context, machine string) (*exec.Cmd, error)
 	Adopt(machine, id, cwd, title, agent string) (session.Session, error)
 	TmuxList(machine string) ([]session.Discovered, error)
