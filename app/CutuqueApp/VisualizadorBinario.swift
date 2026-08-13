@@ -129,16 +129,20 @@ struct VisualizadorBinario: View {
 
     @ViewBuilder
     private func preview(_ url: URL) -> some View {
-        // `abreNoQuickLook` é sempre verdadeiro por desenho (decisão #1: um
-        // componente único, sem roteamento por tipo). O `if` fica mesmo assim
-        // porque é o lugar certo para o dia em que alguém tentar reintroduzir
-        // o roteamento por tipo (o "híbrido" que a Vanessa descartou) sem
-        // lembrar que `.outro` — zip, .docx — também precisa do QuickLook.
-        if TipoDeArquivo.de(nome: entry.name).abreNoQuickLook {
-            QuickLookView(url: url)
-        } else {
-            ContentUnavailableView("Sem preview para este arquivo", systemImage: "doc.questionmark")
-        }
+        // Sem roteamento por tipo aqui, de propósito — decisão #1 da Vanessa:
+        // um componente único cobre tudo o que chega neste visualizador.
+        //
+        // Se alguém for reintroduzir o roteamento (o "híbrido" descartado), o
+        // erro fácil é gatear por `abreNoPreview`: aquele campo exclui `.outro`
+        // DE PROPÓSITO (zip e .docx são identificados pelo `binary` do hub, não
+        // pela extensão — ver `TipoDeArquivo.swift`), e é justo o `.outro` que
+        // mais precisa do QuickLook aqui.
+        //
+        // 12/08/2026: existia um gate `TipoDeArquivo.abreNoQuickLook` neste
+        // ponto. Saiu porque era a constante `true` — um `if` sem caminho falso
+        // e três testes que só reafirmavam a constante. A razão acima é o que
+        // valia a pena guardar; virou comentário.
+        QuickLookView(url: url)
     }
 
     private func falha(_ mensagem: String) -> some View {
@@ -268,19 +272,4 @@ private struct QuickLookView: UIViewControllerRepresentable {
             url as NSURL
         }
     }
-}
-
-extension TipoDeArquivo {
-    /// Todo arquivo que chega ao `VisualizadorBinario` (isto é,
-    /// `!content.podeMostrarTexto`) abre no QuickLook — decisão #1 da
-    /// Vanessa: um componente único cobre tudo, sem visualizador por tipo.
-    ///
-    /// Por isso esta propriedade NÃO delega para `abreNoPreview`: aquele campo
-    /// exclui `.outro` DE PROPÓSITO (zip e .docx são identificados pelo
-    /// `binary` do hub, não pela extensão — ver o comentário em
-    /// `TipoDeArquivo.swift`), e é exatamente o `.outro` que mais precisa do
-    /// QuickLook aqui. Fica sempre `true` hoje; existe como o lugar único e
-    /// testado onde essa decisão vive, para o dia em que alguém precisar
-    /// mexer nela sem repetir o erro de usar `abreNoPreview` puro.
-    var abreNoQuickLook: Bool { true }
 }

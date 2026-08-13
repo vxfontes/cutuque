@@ -262,6 +262,60 @@ func TestReadScriptArquivoPequenoNaoGanhaCauda(t *testing.T) {
 	}
 }
 
+// TestReadScriptFalhaDeLeituraNaoInventaCauda tranca a invariante que o app
+// consome (achado da revisão, 12/08/2026): arquivo acima do teto que não rendeu
+// leitura nenhuma não pode voltar com tail=true, senão o app desenha a faixa
+// "só o fim do arquivo" sobre uma tela em branco — pior que dizer "grande
+// demais", que ao menos é verdade.
+//
+// O que este teste NÃO faz: distinguir a ordem antiga da nova dentro do script.
+// Com chmod 000 quem estoura é o PRIMEIRO open (o do teste de binário), antes
+// de qualquer flag ser ligada, então o código antigo também passaria aqui. As
+// duas falhas que motivaram o conserto — o open/seek/read da cauda estourando,
+// e o arquivo encolhendo entre o getsize e o seek — dependem de uma corrida que
+// não dá para montar de fora do script. A garantia delas está na ordem do
+// próprio `readScriptFmt` (`if content: tail=True`) e no comentário de lá.
+func TestReadScriptFalhaDeLeituraNaoInventaCauda(t *testing.T) {
+	py, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 ausente; pulando teste do script de leitura")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("rodando como root: chmod 000 não impede a leitura")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "grande-sem-permissao.txt")
+	raw := []byte(strings.Repeat("linha de texto\n", (maxReadBytes/15)+2000))
+	if len(raw) <= maxReadBytes {
+		t.Fatalf("fixture não passou do teto — teste não testa nada: %d bytes", len(raw))
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("escrever fixture: %v", err)
+	}
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) }) // senão o TempDir não some
+
+	cmd := exec.Command(py, "-", path)
+	cmd.Stdin = strings.NewReader(readScript())
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("rodar o script: %v", err)
+	}
+	fc, err := parseFileContent(out)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	// A invariante que o app consome: cauda ligada obriga conteúdo.
+	if fc.Tail && fc.Content == "" {
+		t.Errorf("tail=true com conteúdo vazio — o app mostraria a faixa da cauda em branco: %+v", fc)
+	}
+	if fc.Content != "" {
+		t.Errorf("arquivo sem permissão não podia render conteúdo: %+v", fc)
+	}
+}
+
 // MARK: escrita
 
 // O conteúdo viaja base64 DENTRO do script (pelo stdin), não no argv: um

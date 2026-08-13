@@ -32,14 +32,23 @@ final class PreviewDeArquivoTests: XCTestCase {
 
     // MARK: - Roteamento para o QuickLook
 
-    /// O caso que mais importa aqui é o `.zip`: `TipoDeArquivo.abreNoPreview`
-    /// exclui `.outro` de propósito (quem identifica zip/.docx é o `binary` do
-    /// hub, não a extensão — comentário em `TipoDeArquivo.swift`), então usar
-    /// `abreNoPreview` puro no visualizador binário deixaria zip SEM preview.
-    /// `abreNoQuickLook` é o que corrige isso — é o ponto que este teste tranca.
-    func testTipoDeArquivoRoteiaParaOQuickLook() {
-        for nome in ["ferias.mov", "foto.png", "contrato.pdf", "retrato.heic", "backup.zip"] {
-            XCTAssertTrue(TipoDeArquivo.de(nome: nome).abreNoQuickLook, nome)
+    /// O `VisualizadorBinario` manda tudo para o QuickLook sem olhar o tipo, de
+    /// propósito (decisão #1) — então não há gate para testar. O que dá para
+    /// trancar é a armadilha: quem um dia tentar rotear por tipo vai buscar
+    /// `abreNoPreview`, e ele é FALSO justo para os arquivos que mais precisam
+    /// do QuickLook. `.zip` e `.docx` caem em `.outro` porque quem os identifica
+    /// é o `binary` do hub, não a extensão (comentário em `TipoDeArquivo.swift`).
+    /// Este teste existe para essa asserção falhar barulhenta se alguém achar
+    /// que `abreNoPreview` serve de gate ali.
+    func testAbreNoPreviewNaoServeDeGateNoVisualizadorBinario() {
+        for nome in ["backup.zip", "contrato.docx"] {
+            XCTAssertEqual(TipoDeArquivo.de(nome: nome), .outro, nome)
+            XCTAssertFalse(TipoDeArquivo.de(nome: nome).abreNoPreview, nome)
+        }
+        // Os que o `abreNoPreview` cobre continuam cobertos — o campo não está
+        // errado, só é estreito demais para servir de gate no binário.
+        for nome in ["ferias.mov", "foto.png", "contrato.pdf", "retrato.heic"] {
+            XCTAssertTrue(TipoDeArquivo.de(nome: nome).abreNoPreview, nome)
         }
     }
 
@@ -55,12 +64,14 @@ final class PreviewDeArquivoTests: XCTestCase {
             from: Data(#"{"name":"Makefile","path":"/proj/Makefile","size":1024,"mtime":0,"is_dir":false}"#.utf8)
         )
         XCTAssertEqual(TipoDeArquivo.de(nome: semExtensao.name), .outro)
-        XCTAssertTrue(TipoDeArquivo.de(nome: semExtensao.name).abreNoQuickLook)
         XCTAssertFalse(VisualizadorBinario.devePedirConfirmacao(tamanho: semExtensao.size))
         XCTAssertFalse(semExtensao.sizeLabel.isEmpty)
     }
 
+    /// Nome vazio não é hipótese de laboratório: o hub devolve o que o `ls`
+    /// deu, e um `name` vazio não pode virar crash no caminho do preview.
     func testNomeVazioNaoQuebra() {
-        XCTAssertTrue(TipoDeArquivo.de(nome: "").abreNoQuickLook)
+        XCTAssertEqual(TipoDeArquivo.de(nome: ""), .outro)
+        XCTAssertFalse(VisualizadorBinario.devePedirConfirmacao(tamanho: 0))
     }
 }

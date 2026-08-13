@@ -97,6 +97,16 @@ const tailBytes = 204800
 // descartá-la que mostrar lixo como se fosse a primeira linha da cauda.
 // Arquivo ilegível não é erro: volta zerado, e o app mostra vazio em vez de
 // derrubar a navegação.
+//
+// A ORDEM dentro do `if size > teto` importa (achado da revisão, 12/08/2026):
+// `truncated` é verdade assim que sabemos o tamanho, mas `tail` só pode ser
+// ligado DEPOIS de a cauda existir de fato. São dois jeitos reais de a leitura
+// não render nada: o `open`/`seek`/`read` estourar (o `except` engole e as
+// flags ficariam mentindo) e o arquivo encolher entre o `getsize` e o `seek`
+// (aí o seek cai além do fim, `read()` devolve vazio e nem exceção há). Nos
+// dois casos o certo é truncated=true com tail=false: o app cai no "arquivo
+// grande demais", que é verdade, em vez de mostrar a faixa "só o fim do
+// arquivo" sobre uma tela vazia.
 const readScriptFmt = `import os,json,sys
 p=os.path.abspath(sys.argv[1])
 try: size=os.path.getsize(p)
@@ -107,13 +117,14 @@ try:
         if b'\x00' in f.read(8192): binary=True
     if not binary:
         if size > %d:
-            truncated=True;tail=True
+            truncated=True
             with open(p,'rb') as f:
                 f.seek(size-%d)
                 raw=f.read()
             quebra=raw.find(b'\n')
             if quebra != -1: raw=raw[quebra+1:]
             content=raw.decode('utf-8','replace')
+            if content: tail=True
         else:
             with open(p,'rb') as f: content=f.read().decode('utf-8','replace')
 except Exception: pass
