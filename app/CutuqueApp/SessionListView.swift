@@ -106,6 +106,11 @@ final class SessionListViewModel: ObservableObject {
     /// passadas de fundo (a cada 15 s) a lista já está carregada e reexibir a
     /// linha de carregando seria ruído, não sinal.
     @Published var maquinasPendentes: Set<String> = []
+    /// Passada de "ao vivo" em voo, se houver — ver a guarda de reentrância em
+    /// `refreshLive(mostrandoCarga:)`. `@MainActor` serializa só o trecho
+    /// síncrono entre `await`s: sem esta referência, dois `Task` diferentes
+    /// entram na mesma passada e corrompem o contador de vazios do `mergedor`.
+    private var passadaDeVivas: Task<Void, Never>?
 
     // Haptics locais: "gostinho do cutucão" antes do push da Fase 4.
     private let haptics = UINotificationFeedbackGenerator()
@@ -221,7 +226,34 @@ final class SessionListViewModel: ObservableObject {
     /// `mostrandoCarga` liga `maquinasPendentes` (a linha "Procurando sessões
     /// em …" da lista) — quem decide QUANDO ligar é o chamador (a primeira
     /// passada do polling, e o pull-to-refresh); aqui só publica e limpa.
+    ///
+    /// [13/08/2026] REENTRÂNCIA: quem chega no meio de uma passada ESPERA a que
+    /// está rodando em vez de abrir uma segunda. São quatro chamadores
+    /// independentes (o laço do polling, o pull-to-refresh, o callback de criar
+    /// terminal e o app intent `.reload`) e todos compartilham o mesmo
+    /// `mergedor` e o mesmo `maquinasPendentes`. Duas passadas cruzadas
+    /// produziriam duas leituras vazias da mesma máquina em SEGUNDOS — e o
+    /// debounce de `MergedorDeVivas` ("2 vazios seguidos") existe justamente
+    /// para exigir duas passadas de ~15s antes de acreditar que a máquina
+    /// esvaziou. Sem esta guarda, um hiccup de rede + um pull-to-refresh (o
+    /// hábito da usuária: "sempre preciso puxar pra baixo") marcavam uma aba
+    /// VIVA como "Sessão encerrada". Esperar também deixa o spinner do
+    /// `.refreshable` terminar junto com a passada de verdade.
     func refreshLive(mostrandoCarga: Bool = false) async {
+        if let emVoo = passadaDeVivas {
+            // Não mexe em `maquinasPendentes` aqui: a passada em voo já removeu
+            // as máquinas que responderam, e repopular o conjunto deixaria
+            // essas máquinas listadas como "procurando" para sempre.
+            await emVoo.value
+            return
+        }
+        let passada = Task { await self.umaPassadaDeVivas(mostrandoCarga: mostrandoCarga) }
+        passadaDeVivas = passada
+        await passada.value
+        passadaDeVivas = nil
+    }
+
+    private func umaPassadaDeVivas(mostrandoCarga: Bool) async {
         // Máquinas com cache: se o fetch falhar (hiccup), reusa as últimas — assim
         // uma falha transitória NÃO zera o "Ao vivo".
         let machines = (try? await api.targets()).flatMap { $0.isEmpty ? nil : $0 } ?? cachedMachines
@@ -999,8 +1031,7 @@ struct SessionListView: View {
     /// Cor da linha ao vivo: "rodando" segue o TEMA (accent); os demais estados
     /// mantêm a cor semântica (verde concluiu / laranja espera).
     private func liveColor(_ entry: LiveEntry) -> Color {
-        let s = liveState(entry)
-        return s == .running ? destaque : s.color
+        CorDeStatus.para(liveState(entry), destaque: destaque)
     }
 
     private func liveRow(_ entry: LiveEntry) -> some View {
