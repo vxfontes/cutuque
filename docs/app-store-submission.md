@@ -5,10 +5,25 @@ enviar o build pelo App Store Connect.
 
 ## Estado atual (já pronto no repo)
 
-- [x] **Versão / build:** `CFBundleShortVersionString 2.7.0`, `CFBundleVersion 20`
+- [x] **Versão / build:** `CFBundleShortVersionString 2.7.1`, `CFBundleVersion 21`
       (iOS, watchOS e widget alinhados — ver `app/project.yml`). Lembrete: subir o
       `CFBundleVersion` a cada upload novo ao TestFlight — o número precisa ser
       único **dentro do trem daquela versão curta**, não globalmente.
+      **2.7.1 aberta em 2026-08-13 (noite)**, no `master`: **patch**, não minor —
+      são dois consertos e nenhuma capacidade nova. (1) **"novo terminal" falhava
+      com 502** em todas as máquinas, com a sessão já criada: sem `LANG` no
+      ambiente o cliente tmux não anuncia UTF-8 e o servidor sanitiza a saída de
+      `-F`, trocando o **TAB** do alvo composto `<socket>\t<pane>` por `_`. Fix:
+      `-u` em todo comando tmux (`38466e7`). (2) **Enter não enviava mensagem** no
+      chat nem no terminal — `TextField(axis: .vertical)` é multilinha e o Return
+      nunca dispara `.onSubmit`; agora a quebra recém-inserida é o sinal de envio,
+      e `⇧⏎` quebra linha (`e38baec`). Suíte **532/532**.
+      ⚠️ **O build 20 foi queimado**: o bump da 2.7.0 (`65fd9df`) veio **antes**
+      do conserto do Enter, então archive de build 20 não leva o fix — daí pular
+      direto pro 21. Se o 20 chegou a subir ao ASC, o número não pode repetir.
+      ⚠️ Diferente da 2.7.0, esta versão **mexeu no hub**: a imagem nova
+      (`b39476a5`) **já está no ar** no macmini e o app novo depende dela pro
+      "novo terminal" responder 200.
       **2.7.0 aberta em 2026-08-13**, no `master` (`65fd9df`): consertos dos **seis
       apontamentos** dela depois de rodar a 2.6.0/19 no iPad, com três raízes —
       `Color.accentColor` ignorando o `.tint()` (por isso trocar a cor não pegava em
