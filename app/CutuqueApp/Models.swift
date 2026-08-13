@@ -541,7 +541,15 @@ struct FileContent: Decodable {
 
     /// Dá para editar e compartilhar? Só com o arquivo INTEIRO em mãos: salvar
     /// ou compartilhar um pedaço com o nome do todo destruiria/mentiria.
-    var isReadable: Bool { !binary && !truncated }
+    ///
+    /// O `!ehCauda` é redundante com o hub de hoje — lá `tail` só liga dentro do
+    /// ramo que já ligou `truncated` — e fica de propósito (revisão, 12/08/2026):
+    /// sem ele, a defesa contra o pior bug possível daqui (salvar por cima de um
+    /// arquivo do qual só se viu o FIM) moraria inteira no fluxo de controle de
+    /// um script python do outro lado da rede. Um `{"truncated":false,
+    /// "tail":true}` vindo de outro adaptador, de um bug futuro ou de um mock de
+    /// teste já bastaria para liberar Editar. Custa um `&&`.
+    var isReadable: Bool { !binary && !truncated && !ehCauda }
 
     /// Dá para desenhar como texto? A cauda entra aqui e não em `isReadable`:
     /// ler o fim de um log é exatamente o que se quer, escrever por cima não.

@@ -107,6 +107,12 @@ const tailBytes = 204800
 // dois casos o certo é truncated=true com tail=false: o app cai no "arquivo
 // grande demais", que é verdade, em vez de mostrar a faixa "só o fim do
 // arquivo" sobre uma tela vazia.
+//
+// Um terceiro caso cai no mesmo destino, e é legítimo: se a janela da cauda
+// tiver UMA só quebra de linha e ela for o último byte (uma linha de 200 KiB+
+// terminada no EOF), o descarte do fragmento inicial deixa o conteúdo vazio
+// sem erro nenhum. Cair no "grande demais" continua sendo a resposta honesta —
+// o que sobrou para mostrar era mesmo nada.
 const readScriptFmt = `import os,json,sys
 p=os.path.abspath(sys.argv[1])
 try: size=os.path.getsize(p)

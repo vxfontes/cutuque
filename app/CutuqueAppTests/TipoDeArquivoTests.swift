@@ -98,6 +98,18 @@ final class TipoDeArquivoTests: XCTestCase {
         XCTAssertNil(c.unreadableReason)
     }
 
+    /// A combinação que o hub de hoje NÃO produz (`tail` só liga dentro do ramo
+    /// que já ligou `truncated`) e que mesmo assim não pode liberar Editar —
+    /// achado da revisão, 12/08/2026. É o cenário do pior bug possível daqui:
+    /// se um adaptador novo, um bug do script ou um mock emitir isto, salvar
+    /// escreveria por cima do arquivo inteiro com o pedaço que ela viu.
+    func testCaudaSemTruncatedAindaAssimNaoDeixaEditar() throws {
+        let c: FileContent = try decode(#"{"path":"/b.log","size":5242880,"binary":false,"truncated":false,"tail":true,"content":"fim"}"#)
+        XCTAssertTrue(c.ehCauda)
+        XCTAssertTrue(c.podeMostrarTexto)
+        XCTAssertFalse(c.isReadable, "cauda nunca libera Editar/Compartilhar, venha truncated ou não")
+    }
+
     func testGrandeSemCaudaContinuaSemTexto() throws {
         let c: FileContent = try decode(#"{"path":"/b.log","size":5242880,"binary":false,"truncated":true,"content":""}"#)
         XCTAssertFalse(c.podeMostrarTexto)
