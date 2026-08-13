@@ -59,6 +59,22 @@ enum TabConteudo: Equatable {
     case arquivado(BoardTask)
     case pendente
     case morta
+
+    /// Se este conteúdo tem painel próprio para DECLARAR segmentos de chrome.
+    ///
+    /// [13/08/2026] `.morta` desenha só o aviso (`abaMorta`) e `.pendente` só um
+    /// spinner: nenhum dos dois tem painel para declarar nada. Existe porque
+    /// `reconciliar` troca o conteúdo MANTENDO a chave (hub reiniciado, `ssh`
+    /// que caiu e voltou — reversível de propósito), e aí
+    /// `descartarChrome(mantendo:)`, que só varre chave que SAIU do array, não
+    /// pegava: o Picker continuava desenhado por cima de "Máquina fora do
+    /// registro", clicável e sem ninguém escutando. Achado da revisão da F4.
+    var declaraChrome: Bool {
+        switch self {
+        case .sessao, .board, .maquina, .arquivado: return true
+        case .pendente, .morta: return false
+        }
+    }
 }
 
 /// O que vai pro disco: chave, título e se é fixa. Conteúdo NÃO vai — é ele que

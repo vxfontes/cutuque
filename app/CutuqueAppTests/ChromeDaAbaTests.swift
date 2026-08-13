@@ -102,4 +102,36 @@ final class ChromeDaAbaTests: XCTestCase {
         nav.definirSegmentos(tresDaSessao.reversed(), de: sessao)
         XCTAssertEqual(nav.segmentos(de: sessao).map(\.id), ["info", "terminal", "chat"])
     }
+
+    // MARK: - Limpar a chrome de aba que virou casca
+
+    private func maquinaFalsa() -> Machine {
+        Machine(name: "macmini", dest: "vx@macmini", port: 22, source: "app",
+                hostFingerprint: nil, host: "macmini", identity: "vx",
+                os: nil, theme: nil, icon: nil)
+    }
+
+    /// [13/08/2026] `descartarChrome(mantendo:)` só varre chave que SAIU do
+    /// array. `OpenTabs.reconciliar` troca o conteúdo mantendo a chave — a aba
+    /// segue lá, virou `.morta`, e a chrome dela ficava órfã na tela (segmentos
+    /// e escolha de um painel que não existe mais). `declaraChrome` é o que
+    /// `RootSplitView` usa para varrer também esse caso. Achado da revisão
+    /// adversarial da frente 4.
+    func testSoOsConteudosComPainelDeclaramChrome() {
+        let comChrome: [TabConteudo] = [
+            .sessao(.live(LiveEntry(
+                machine: "macbook",
+                session: DiscoveredSession(id: "cutuque\t%3", cwd: "/tmp", title: "t")))),
+            .board,
+            .maquina(maquinaFalsa()),
+            .arquivado(BoardTask(id: "t1", title: "t", column: "concluido",
+                                 group: "g", session: "s")),
+        ]
+        for conteudo in comChrome {
+            XCTAssertTrue(conteudo.declaraChrome, "\(conteudo) monta painel e declara chrome")
+        }
+        // Casca: a aba existe, mostra um placeholder, e nenhum painel roda.
+        XCTAssertFalse(TabConteudo.pendente.declaraChrome)
+        XCTAssertFalse(TabConteudo.morta.declaraChrome)
+    }
 }

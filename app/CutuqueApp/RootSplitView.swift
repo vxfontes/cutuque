@@ -180,6 +180,13 @@ struct RootSplitView: View {
             // isto, reabrir uma aba fechada acharia segmento velho de conteúdo
             // que já não existe.
             nav.descartarChrome(mantendo: vivas)
+            // E a aba que segue ABERTA mas cujo conteúdo virou `.morta` ou
+            // `.pendente` também perde a chrome: a linha acima só varre chave
+            // que saiu do array, e `reconciliar` troca o conteúdo mantendo a
+            // chave. Ver `TabConteudo.declaraChrome`.
+            for aba in tabs.abas where !aba.conteudo.declaraChrome {
+                nav.limparChrome(de: aba.chave)
+            }
 
             let orfas = AbasNavegacao.selecoesOrfas(
                 abas: tabs.abas.map(\.chave), sessao: nav.selection,
@@ -418,7 +425,10 @@ struct RootSplitView: View {
                               paneState: tabsStore.tabs.estado(de: aba.chave),
                               chave: aba.chave)
         case .board:
-            BoardView(embedded: true)
+            // `emFoco` pelo mesmo motivo do `paneState` dos outros dois casos:
+            // o painel fica montado escondido e não pode emprestar toolbar.
+            BoardView(embedded: true,
+                      emFoco: tabsStore.tabs.estado(de: aba.chave) == .ativo)
         case .maquina(let machine):
             // Mesmo motivo do antigo `.id(machine.name)` do case `.machines`:
             // identidade pelo NOME, não pela struct inteira (tema/ícone

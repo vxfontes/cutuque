@@ -132,6 +132,17 @@ struct BoardView: View {
     /// e aparecem. Mesma família do `.inspector` que não renderiza a barra do
     /// `NavigationStack` que apresenta (ver `BoardTaskDetailView`).
     var embedded: Bool = false
+
+    /// [13/08/2026] `false` quando este board é uma aba MONTADA mas não
+    /// escolhida. Pela decisão #19 os painéis do iPad nunca desmontam — então
+    /// um board de aba escondida continua declarando `padSearchField` na
+    /// posição principal e dois botões à direita, e eles pousam na barra da aba
+    /// que ESTÁ em foco. Era metade do item 3 da queixa ("a parte de máquinas e
+    /// board tb tá sofrendo isso da aba"): campo de busca do board aparecendo
+    /// sobre uma sessão. Mesmo remédio do ✕ de `SessionDetailPane`, que já se
+    /// guarda com `paneState == .ativo`. Padrão `true` para o iPhone, onde
+    /// existe um board só e ele está sempre em foco.
+    var emFoco: Bool = true
     // Injetado pelo app — mesmo modelo em iPhone e iPad.
     @EnvironmentObject private var model: BoardModel
     @EnvironmentObject private var nav: NavigationState
@@ -298,31 +309,35 @@ struct BoardView: View {
             // da busca. No iPhone o título fica onde sempre esteve.
             .navigationTitle(embedded ? "" : "Cutuque Board")
             .navigationBarTitleDisplayMode(.inline)
+            // Os TRÊS itens dependem de `emFoco`: painel montado e escondido não
+            // empresta controle nenhum pra barra de quem está em foco.
             .toolbar {
-                if embedded {
+                if embedded && emFoco {
                     ToolbarItem(placement: .principal) { padSearchField }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { Task { await model.load() } } label: { Image(systemName: "arrow.clockwise") }
-                        .accessibilityLabel("Recarregar")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button {
-                            showArchive = true
-                        } label: {
-                            Label("Arquivo semanal", systemImage: "archivebox")
-                        }
-                        Button {
-                            // Pergunta ONDE arquivar — precisa das opções antes.
-                            Task { await model.loadCloseOptions(); showCloseWeekConfirm = true }
-                        } label: {
-                            Label("Fechar semana", systemImage: "calendar.badge.checkmark")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
+                if emFoco {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { Task { await model.load() } } label: { Image(systemName: "arrow.clockwise") }
+                            .accessibilityLabel("Recarregar")
                     }
-                    .accessibilityLabel("Mais ações")
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu {
+                            Button {
+                                showArchive = true
+                            } label: {
+                                Label("Arquivo semanal", systemImage: "archivebox")
+                            }
+                            Button {
+                                // Pergunta ONDE arquivar — precisa das opções antes.
+                                Task { await model.loadCloseOptions(); showCloseWeekConfirm = true }
+                            } label: {
+                                Label("Fechar semana", systemImage: "calendar.badge.checkmark")
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                        .accessibilityLabel("Mais ações")
+                    }
                 }
             }
             .alert(CloseWeekPrompt.title(model.closeOptions), isPresented: $showCloseWeekConfirm) {
