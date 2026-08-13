@@ -23,6 +23,12 @@ arg3="$3"
 SRV="${TMX_SRV:-main}"        # servidor tmux = "grupo". env TMX_SRV manda; default 'main'
 TM() { tmux -L "$SRV" "$@"; } # todo tmux passa por aqui
 
+# Onde o tmux guarda os sockets dos servidores nomeados (-L). É o mesmo default
+# do tmux: $TMUX_TMPDIR, senão /tmp. Escrito assim porque este script também
+# roda no macmini (Linux, root → /tmp/tmux-0), e não só no macOS: lá /tmp é
+# symlink de /private/tmp, então a forma com /tmp serve nos dois.
+sock_dir() { echo "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)"; }
+
 has_tmux_session() {
   TM has-session -t "$1" 2>/dev/null
 }
@@ -84,7 +90,7 @@ case "$cmd" in
     ;;
 
   servers)
-    ls "/private/tmp/tmux-$(id -u)/" 2>/dev/null || echo "(nenhum servidor tmux ativo)"
+    ls "$(sock_dir)/" 2>/dev/null || echo "(nenhum servidor tmux ativo)"
     ;;
 
   kill)
@@ -102,7 +108,7 @@ case "$cmd" in
 
     read -r -p "Isso vai matar TODAS as sessões do servidor '$SRV'. Continuar? [y/N] " confirm
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
-      sock="/private/tmp/tmux-$(id -u)/$SRV"
+      sock="$(sock_dir)/$SRV"
       if TM kill-server 2>/dev/null; then
         echo "Servidor '$SRV' encerrado."
       elif [ -e "$sock" ]; then
