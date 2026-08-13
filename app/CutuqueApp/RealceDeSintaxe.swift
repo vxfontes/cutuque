@@ -187,12 +187,22 @@ enum RealceDeSintaxe {
             comentarioDeLinha: "#", comentarioDeBloco: nil, aspas: aspasPadrao
         ),
         .rust: RegraDeLinguagem(
+            // "Self", "None", "Some", "Ok" e "Err" (maiúsculos) ficam DE FORA de
+            // propósito — MESMO caso do "Self" do Swift logo acima na tabela: a
+            // checagem de palavra-chave vem antes da de tipo em
+            // `categoriaDoIdentificador`, então listá-los aqui impediria a regra
+            // geral de maiúscula de colori-los como tipo (12/08/2026 — achado de
+            // revisão adversarial da Task R: o comentário de
+            // `categoriaDoIdentificador` já citava "`Ok`/`Err` do Rust" como
+            // exemplo funcionando, mas a tabela aqui contradizia o próprio
+            // comentário até esta correção). "self" minúsculo continua
+            // palavra-chave normalmente — só a convenção Maiúscula-vira-tipo
+            // muda de lado.
             palavrasChave: [
                 "fn", "let", "mut", "const", "if", "else", "for", "while", "loop", "return", "struct",
-                "enum", "impl", "trait", "pub", "use", "mod", "match", "self", "Self", "super",
+                "enum", "impl", "trait", "pub", "use", "mod", "match", "self", "super",
                 "crate", "where", "async", "await", "move", "ref", "dyn", "unsafe", "extern",
-                "static", "type", "as", "in", "break", "continue", "true", "false", "None", "Some",
-                "Ok", "Err",
+                "static", "type", "as", "in", "break", "continue", "true", "false",
             ],
             comentarioDeLinha: "//", comentarioDeBloco: ("/*", "*/"), aspas: ["\""]
         ),

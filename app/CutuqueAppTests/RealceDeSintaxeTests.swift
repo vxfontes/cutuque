@@ -161,6 +161,30 @@ final class RealceDeSintaxeTests: XCTestCase {
         XCTAssertTrue(ts.contains { $0.texto == "Self" && $0.cor == .teal })
     }
 
+    /// Mesmo caso do Swift acima, só que na tabela do Rust — cobre o achado da
+    /// revisão adversarial da Task R (12/08/2026): "Self", "None", "Some",
+    /// "Ok" e "Err" precisam ficar de FORA da lista de palavras-chave do Rust
+    /// para a regra geral de maiúscula colori-los como tipo, exatamente como o
+    /// comentário de `categoriaDoIdentificador` promete. Sem este teste, uma
+    /// futura reintrodução de qualquer um deles na tabela do Rust passaria
+    /// batido (o `testIdentidadeDoTextoPreservadaEmTodasAsLinguagens` só
+    /// confere identidade de texto, nunca cor).
+    func testIdentificadorRustComecandoComMaiusculaViraTipo() {
+        let saida = RealceDeSintaxe.aplicar(
+            "let x: Self = Self::padrao();\nlet y: Option<i32> = Some(1);\nlet z: Result<i32, i32> = Ok(1);\n",
+            linguagem: .rust
+        )
+        let ts = trechos(saida)
+        XCTAssertTrue(ts.contains { $0.texto == "Self" && $0.cor == .teal })
+        XCTAssertTrue(ts.contains { $0.texto == "Some" && $0.cor == .teal })
+        XCTAssertTrue(ts.contains { $0.texto == "Ok" && $0.cor == .teal })
+        // "self" minúsculo (não usado na amostra acima, mas é o par que
+        // continua palavra-chave) não deve ser confundido aqui — checagem
+        // feita à parte para não acoplar as duas asserções.
+        let saidaSelfMinusculo = trechos(RealceDeSintaxe.aplicar("fn f(&self) {}\n", linguagem: .rust))
+        XCTAssertTrue(saidaSelfMinusculo.contains { $0.texto == "self" && $0.cor == .pink })
+    }
+
     func testPalavraChaveEhReconhecida() {
         let saida = RealceDeSintaxe.aplicar("if true { return }\n", linguagem: .swift)
         let ts = trechos(saida)
