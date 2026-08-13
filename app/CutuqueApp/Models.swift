@@ -63,6 +63,23 @@ enum SessionState: String, Codable {
     }
 }
 
+/// A cor de um status na tela, considerando a cor de destaque escolhida em
+/// Ajustes. Separada de `SessionState.color` porque a de destaque vem do
+/// AMBIENTE (`\.corDeDestaque`, ver `AppTheme.swift`) e modelo não lê
+/// ambiente — `enum`/`struct` puro não tem `@Environment`.
+///
+/// `SessionListView` já resolvia isto à mão (`s == .running ? accentColor :
+/// s.color`); aqui vira um lugar só, testável fora de View. (13/08/2026)
+enum CorDeStatus {
+    /// `.running` é o único status que segue a preferência: ele não é
+    /// semântico (não é erro, não é sucesso, não é aviso) — é "a coisa está
+    /// andando", que é o papel de destaque do app. Os demais (`.needsYou`,
+    /// `.done`, `.error`, `.idle`) são semânticos e permanecem literais.
+    static func para(_ status: SessionState, destaque: Color) -> Color {
+        status == .running ? destaque : status.color
+    }
+}
+
 // MARK: - Chunks de output (transcrito estilo chat)
 
 /// Tipo de um pedaço de output, conforme o contrato novo do hub.

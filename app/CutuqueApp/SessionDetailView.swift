@@ -234,6 +234,10 @@ struct SessionDetailView: View {
     // `init` desta view monta o ViewModel ANTES de `@EnvironmentObject` estar
     // disponível, então o hub só pode ser entregue mais tarde, no `.task`.
     @EnvironmentObject private var hub: LiveHub
+    // [13/08/2026] `Color.accentColor` não lê o `.tint()` da raiz (ver
+    // `AppTheme.swift`) — era por isso que a bolha enviada e o botão de
+    // enviar ficavam sempre azuis, mesmo trocando a cor em Ajustes.
+    @Environment(\.corDeDestaque) private var destaque
     /// Falso quando esta view está viva na hierarquia mas escondida atrás do
     /// terminal (painel Chat|Terminal do iPad, `SessionDetailPane`, decisão
     /// #19). Default `true` preserva o iPhone, que só monta um painel por
@@ -768,7 +772,7 @@ struct SessionDetailView: View {
                 .frame(width: 36, height: 36)
                 .foregroundStyle(.white)
                 .background(
-                    isRunning ? Color.red : (canSend ? Color.accentColor : Color.gray.opacity(0.35)),
+                    isRunning ? Color.red : (canSend ? destaque : Color.gray.opacity(0.35)),
                     in: Circle()
                 )
             }
@@ -1004,7 +1008,7 @@ struct SessionDetailView: View {
                 // escolher duas linhas no lugar é o que se quer.
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .background(destaque, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
@@ -1034,12 +1038,16 @@ struct SessionDetailView: View {
 // MARK: - Avatar discreto do agente
 
 private struct AgentAvatar: View {
+    // [13/08/2026] Struct própria — precisa do seu próprio `@Environment`,
+    // não herda o do `SessionDetailView` pai.
+    @Environment(\.corDeDestaque) private var destaque
+
     var body: some View {
         Image(systemName: "sparkles")
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(.white)
             .frame(width: 26, height: 26)
-            .background(Color.accentColor.gradient, in: Circle())
+            .background(destaque.gradient, in: Circle())
             .accessibilityHidden(true)
     }
 }
