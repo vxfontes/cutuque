@@ -75,9 +75,27 @@ enum CorDeStatus {
     /// semântico (não é erro, não é sucesso, não é aviso) — é "a coisa está
     /// andando", que é o papel de destaque do app. Os demais (`.needsYou`,
     /// `.done`, `.error`, `.idle`) são semânticos e permanecem literais.
+    ///
+    /// [13/08/2026] EXCEÇÃO: se a cor escolhida em Ajustes for justamente uma
+    /// das cores semânticas, `.running` mantém a própria cor em vez de seguir a
+    /// preferência. `AppAccent` oferece Laranja e Verde, que são exatamente o
+    /// laranja de "precisa de você" e o verde de "concluído" — sem esta guarda,
+    /// escolher Verde fazia uma sessão AINDA RODANDO parecer concluída, e
+    /// escolher Laranja a fazia parecer que estava esperando resposta. A
+    /// instrução era varrer as cores "preservando as semânticas": preservar
+    /// semântica inclui manter os estados distinguíveis entre si.
     static func para(_ status: SessionState, destaque: Color) -> Color {
-        status == .running ? destaque : status.color
+        guard status == .running else { return status.color }
+        return coresSemanticas.contains(destaque) ? SessionState.running.color : destaque
     }
+
+    /// As cores que já significam alguma coisa no vocabulário de estado do app
+    /// (ver `SessionState.color`). Colidir com qualquer uma delas custa mais do
+    /// que ganhar a cor preferida numa bolinha.
+    private static let coresSemanticas: [Color] = [
+        SessionState.needsYou.color, SessionState.done.color,
+        SessionState.error.color, SessionState.idle.color,
+    ]
 }
 
 // MARK: - Chunks de output (transcrito estilo chat)
