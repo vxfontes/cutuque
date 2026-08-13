@@ -1117,3 +1117,34 @@ Nomear as máquinas pendentes é de propósito: é o que mostra que a demora é 
 5. Editar máquina: ícone e tema estão lá; mudar aplica e o terminal aberto muda de cor.
 6. Abrir o app com o `windows` desligado: as sessões do macbook aparecem em ~1 s, com a linha
    "Procurando sessões em windows…" enquanto o resto não respondeu.
+
+---
+
+## Emendas da Onda 0 (13/08/2026, commit `358274a`)
+
+Escritas DEPOIS do plano, ao implementar. Onde o plano acima divergir daqui, **vale o código** — as
+seis frentes receberam estas assinaturas nos prompts.
+
+- `ChromeDaAba` recebe **`let chave: ChaveDeAba?`**, não `ChaveDeAba`. Com aba nenhuma escolhida a
+  faixa ainda precisa existir para o ⤡ e o ⌘⌃F não sumirem.
+- `SeletorDeIconeDeMaquina.so` é **`String?`**: `Machine.os` é opcional e
+  `Machine.osIcon(para: String?)` já trata o caso — pedir `String` obrigaria quem chama a inventar um
+  valor.
+- A limpeza do registro **não** é um `.onChange` novo diffando chaves de aba, como o plano previa.
+  `RootSplitView` já tinha um `.onChange(of: tabsStore.tabs, initial: true)` chamando
+  `nav.descartarModos(mantendo:)`; entrou `nav.descartarChrome(mantendo:)` na mesma linha, com o mesmo
+  conjunto de chaves vivas. Um handler só, como o comentário daquele bloco exige.
+  `limparChrome(de:)` continua existindo para o caso de UMA aba trocar de natureza.
+- `TipoDeAba` **não tem** `.sessao`: os casos são `live, chat, board, maquina, arquivado`. O teste que
+  o plano escreveu usava `.sessao` — corrigido para `.live`/`.maquina` no
+  `ChromeDaAbaTests.swift` entregue.
+- `CorDeDestaqueDoApp` (ViewModifier) entrou junto do valor de ambiente, para `.tint` e
+  `\.corDeDestaque` serem aplicados **sempre pelo mesmo ponto** e não dessincronizarem.
+- **Ambiente:** o simulador do baseline (iOS 18.6, `E90308CB-…`) não existe mais no disco — o runtime
+  virou "Unavailable". Destino desta leva: **iPhone 17 Pro, iOS 26.3,
+  `E171FB55-2F53-4BAC-8AF5-18B01E8E0A2F`**. Se der "Unable to boot device because it cannot be located
+  on disk", `xcrun simctl erase <UDID>` recria os dados. Baseline recontado: **487/487** (479 + 8 novos
+  de `ChromeDaAbaTests`).
+- **`RootSplitView.swift` ficou fora de alcance das seis frentes** (a costura já está feita). Frente
+  que precise de mudança lá relata em vez de editar — foi o único arquivo com risco real de conflito
+  entre F3 e F4.
