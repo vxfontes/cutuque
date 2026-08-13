@@ -216,6 +216,10 @@ func main() {
 	serverOpts := []server.RouterOption{
 		server.WithBoard(boardStore),
 		server.WithMachines(mreg),
+		// O MESMO `eng` do launcher/reaper: é o único que faz write-through do
+		// histórico. Sem isto o Router cria um Engine local e o que entra pelos
+		// hooks não chega no Postgres.
+		server.WithEngine(eng),
 	}
 	// CUTUQUE_MACHINES_DIR liga o CADASTRO de máquinas pelo app (aba Máquinas):
 	// é onde ficam o registro, as chaves privadas geradas aqui e o known_hosts

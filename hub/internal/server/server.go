@@ -25,6 +25,7 @@ type routerConfig struct {
 	machineKeys MachineKeys
 	machineTgts MachineTargets
 	identities  Identities
+	engine      *engine.Engine
 }
 
 // RouterOption configura dependências opcionais do Router.
@@ -94,6 +95,16 @@ func WithMachineTargets(t MachineTargets) RouterOption {
 	return func(rc *routerConfig) { rc.machineTgts = t }
 }
 
+// WithEngine faz as rotas usarem o Engine dado em vez de instanciar um próprio.
+// Existe por causa do histórico: engine.New e engine.NewWithHistory NÃO são
+// equivalentes — o segundo carrega a fila de escrita no Postgres. Sem esta opção
+// os hooks aplicavam transições num Engine sem write-through e nada do que
+// entrava por /hooks/claude aparecia no histórico. Sem a opção o Router segue
+// criando o seu (testes, e hub sem CUTUQUE_DATABASE_URL).
+func WithEngine(eng *engine.Engine) RouterOption {
+	return func(rc *routerConfig) { rc.engine = eng }
+}
+
 // Router registra as rotas do hub. As rotas protegidas passam pelo middleware
 // de token; /health fica aberto para healthcheck. lch pode ser nil quando os
 // comandos de lançamento/aprovação não são necessários (ex.: alguns testes).
@@ -105,9 +116,20 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 
 	mux := http.NewServeMux()
 
-	// O engine é sem estado próprio (só encapsula o registry), então instanciá-lo
-	// aqui para os hooks é equivalente ao usado pelos runners.
-	eng := engine.New(reg)
+	// O Engine dos hooks. Vem do main (WithEngine) para ser o MESMO dos runners.
+	//
+	// [13/08/2026] Aqui morava um `engine.New(reg)` incondicional, com o comentário
+	// "o engine é sem estado próprio (só encapsula o registry), então instanciá-lo
+	// aqui para os hooks é equivalente ao usado pelos runners". Deixou de ser
+	// verdade quando o histórico entrou: NewWithHistory carrega fila e goroutine de
+	// escrita, o Engine local não carregava nenhuma das duas, e todo evento que
+	// chegava por /hooks/claude (Notification, Stop, SessionEnd, SessionStart)
+	// sumia do Postgres. O fallback fica para quem não passa a opção: os testes, e
+	// o hub sem CUTUQUE_DATABASE_URL.
+	eng := rc.engine
+	if eng == nil {
+		eng = engine.New(reg)
+	}
 
 	// Aberta (sem auth).
 	mux.Handle("GET /health", HealthHandler())
