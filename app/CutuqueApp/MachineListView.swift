@@ -14,6 +14,11 @@ struct MachineListView: View {
     var splitSelection: Binding<Machine?>?
     private var isEmbedded: Bool { splitSelection != nil }
 
+    /// [13/08/2026] O `.tint` do arrastar-para-editar era `.blue` cravado — um
+    /// dos "alguns lugares fica com cor padrao". "Editar" não é semântico (o
+    /// destrutivo é o vermelho do `.onDelete`, que o sistema pinta e NÃO segue
+    /// preferência nenhuma), então segue o destaque. Ver `AppTheme.swift`.
+    @Environment(\.corDeDestaque) private var corDeDestaque
     @State private var machines: [Machine] = []
     @State private var loading = false
     @State private var error: String?
@@ -128,7 +133,7 @@ struct MachineListView: View {
                         Button { cadastro = .editar(machine) } label: {
                             Label("Editar", systemImage: "pencil")
                         }
-                        .tint(.blue)
+                        .tint(corDeDestaque)
                     }
                 }
             }

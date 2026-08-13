@@ -10,6 +10,11 @@ struct FolderPickerView: View {
     var onSelect: (String) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    /// [13/08/2026] O ícone de pasta era `.blue` cravado — um dos "alguns
+    /// lugares fica com cor padrao" do relato. Aqui o azul nunca significou
+    /// nada (não é erro nem sucesso): é afeto de "isto é tocável", papel de
+    /// destaque. Ver `EnvironmentValues.corDeDestaque` em `AppTheme.swift`.
+    @Environment(\.corDeDestaque) private var corDeDestaque
     @State private var listing: DirListing?
     @State private var loading = false
     @State private var error: String?
@@ -45,7 +50,7 @@ struct FolderPickerView: View {
                             } label: {
                                 HStack(spacing: 10) {
                                     Image(systemName: "folder.fill")
-                                        .foregroundStyle(dir.isHidden ? Color.secondary : Color.blue)
+                                        .foregroundStyle(dir.isHidden ? Color.secondary : corDeDestaque)
                                     Text(dir.name)
                                         .foregroundStyle(.primary)
                                         .lineLimit(1)
