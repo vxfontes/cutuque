@@ -98,6 +98,50 @@ enum SessionDetailPaneLogic {
         return []
     }
 
+    /// [13/08/2026] Os segmentos do seletor, no formato que a `ChromeDaAba`
+    /// consome (`SegmentoDeChrome`, com `id` cru de `String`) — a versão
+    /// testável de `SessionDetailPane.selectorSegments`, que morria dentro da
+    /// view e virava `ToolbarItem(placement: .principal)`. Com N painéis
+    /// montados ao mesmo tempo (decisão #19), N desses `ToolbarItem`
+    /// disputavam a MESMA navigation bar e o SwiftUI escondia quase todos —
+    /// a causa raiz de "não ta aparecendo o terminal / info embaixo da aba em
+    /// terminais live e tal". A saída (Onda 0, `NavigationState`) é o painel
+    /// DECLARAR os segmentos aqui computados, e a `ChromeDaAba` — uma só,
+    /// fora dos painéis — desenhar os da aba em foco.
+    ///
+    /// Não delega para `selectorSegments`: as duas respondem perguntas
+    /// diferentes. `selectorSegments` é uma escolha MUTUAMENTE EXCLUSIVA
+    /// entre pares (`hasInfo` vence `hasChat` de propósito, porque uma
+    /// entrada ao vivo nunca tem chat — ver o comentário lá) pensada para
+    /// alimentar `modoValido`, que precisa de UM segmento "primeiro" para
+    /// cair quando o modo guardado é impossível. Esta função é mais simples e
+    /// mais geral: cada "tem" independente vira um segmento, na ordem fixa
+    /// Chat → Terminal → Info, e um único segmento disponível não é escolha
+    /// (a chrome mostra só o ⤡). Para toda combinação que de fato ACONTECE no
+    /// app (nunca chat+info juntos — ver `terminalTarget`/`PaneMode`), as duas
+    /// funções concordam byte a byte; divergem só na combinação impossível
+    /// (chat E info juntos), que nenhum estado real produz — por isso não é
+    /// duplicação de fonte de verdade, é uma segunda pergunta sobre os mesmos
+    /// três booleanos. `modoValido` continua lendo `selectorSegments`, não
+    /// esta função — são contratos diferentes e não podem se confundir.
+    static func segmentosDeChrome(hasChat: Bool, hasTerminal: Bool,
+                                  hasInfo: Bool) -> [SegmentoDeChrome] {
+        var segmentos: [SegmentoDeChrome] = []
+        if hasChat {
+            segmentos.append(SegmentoDeChrome(id: PaneMode.chat.rawValue, titulo: "Chat", simbolo: "bubble.left"))
+        }
+        if hasTerminal {
+            segmentos.append(SegmentoDeChrome(id: PaneMode.terminal.rawValue, titulo: "Terminal", simbolo: "apple.terminal"))
+        }
+        if hasInfo {
+            segmentos.append(SegmentoDeChrome(id: PaneMode.info.rawValue, titulo: "Info", simbolo: "info.circle"))
+        }
+        // Um segmento só não é escolha nenhuma — mesma regra de vazio que
+        // `selectorSegments` já tinha (ver seu comentário e `SessionDetailPane`,
+        // que só checava `isEmpty`).
+        return segmentos.count > 1 ? segmentos : []
+    }
+
     /// [12/08/2026] O modo que esta seleção deve MOSTRAR agora, a cada
     /// render — não confundir com `entryPaneMode`, que só decide onde uma aba
     /// NOVA abre. Função identidade no caso comum: se `modo` (o modo GUARDADO

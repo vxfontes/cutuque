@@ -193,6 +193,47 @@ final class SessionDetailPaneLogicTests: XCTestCase {
         }
     }
 
+    // MARK: - segmentosDeChrome
+
+    /// [13/08/2026] Os ids são os `rawValue` de `PaneMode` de propósito: a
+    /// chrome devolve um `String` cru (não conhece `PaneMode`) e a ponte de
+    /// volta no painel é `PaneMode(rawValue:)`. Se os ids divergirem do
+    /// `rawValue`, o toque no seletor não muda painel nenhum — silenciosamente,
+    /// porque `PaneMode(rawValue:)` devolve `nil` e o `.onChange` do painel
+    /// descarta (ver `SessionDetailPane`).
+    func testIdsDosSegmentosSaoOsRawValuesDoPaneMode() {
+        let s = SessionDetailPaneLogic.segmentosDeChrome(hasChat: true, hasTerminal: true, hasInfo: true)
+        XCTAssertEqual(s.map(\.id), [PaneMode.chat.rawValue, PaneMode.terminal.rawValue, PaneMode.info.rawValue])
+        XCTAssertEqual(s.map(\.titulo), ["Chat", "Terminal", "Info"])
+    }
+
+    /// Um único painel disponível não é escolha — a chrome mostra só o ⤡,
+    /// sem seletor nenhum (mesma regra de vazio que `selectorSegments` já
+    /// tinha, ver o comentário de `segmentosDeChrome`).
+    func testSessaoSoComChatNaoGeraSeletor() {
+        let s = SessionDetailPaneLogic.segmentosDeChrome(hasChat: true, hasTerminal: false, hasInfo: false)
+        XCTAssertTrue(s.isEmpty, "um segmento só não é escolha — a chrome mostra só o ⤡")
+    }
+
+    /// Entrada ao vivo: Terminal e Info, sem Chat (que ela nunca tem).
+    func testEntradaAoVivoTemTerminalEInfoSemChat() {
+        let s = SessionDetailPaneLogic.segmentosDeChrome(hasChat: false, hasTerminal: true, hasInfo: true)
+        XCTAssertEqual(s.map(\.id), ["terminal", "info"])
+    }
+
+    /// Sessão do registry no tmux: Chat e Terminal, sem Info.
+    func testSessaoDoRegistryGeraChatETerminal() {
+        let s = SessionDetailPaneLogic.segmentosDeChrome(hasChat: true, hasTerminal: true, hasInfo: false)
+        XCTAssertEqual(s.map(\.id), ["chat", "terminal"])
+        XCTAssertEqual(s.map(\.simbolo), ["bubble.left", "apple.terminal"])
+    }
+
+    /// Nada disponível (hipotético) não gera segmento nenhum.
+    func testNadaDisponivelNaoGeraSegmento() {
+        XCTAssertTrue(SessionDetailPaneLogic.segmentosDeChrome(
+            hasChat: false, hasTerminal: false, hasInfo: false).isEmpty)
+    }
+
     // MARK: - modoValido
 
     /// Modo possível: função identidade — devolve o mesmo valor recebido,
