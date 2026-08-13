@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"io"
 	"os/exec"
 
 	"github.com/vxfontes/cutuque/hub/internal/session"
@@ -82,8 +83,14 @@ type FileWriter interface {
 
 // FileDownloader traz os bytes crus de um arquivo (download da aba Máquinas —
 // inclusive binário, que o visualizador não mostra). Opcional, mesmo motivo.
+//
+// Devolve um io.ReadCloser, não []byte (12/08/2026): bufferizar o arquivo
+// inteiro na memória do hub era a diferença entre atender um vídeo de 2 GB e o
+// hub cair levando board, sessões e terminais junto. Quem chama TEM que fechar
+// (defer) — é o Close() que espera o processo (cat/ssh) e evita zumbi; ver
+// claudecode.startDownload.
 type FileDownloader interface {
-	DownloadFile(ctx context.Context, path string) ([]byte, error)
+	DownloadFile(ctx context.Context, path string) (io.ReadCloser, error)
 }
 
 // ShellDialer monta o comando de um shell interativo na máquina (terminal livre

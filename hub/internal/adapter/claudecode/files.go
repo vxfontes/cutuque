@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 
@@ -66,38 +67,61 @@ func parseFileListing(out []byte) (session.FileListing, error) {
 	return fl, nil
 }
 
-// maxReadBytes é o teto de leitura como texto (1 MiB). Acima disso o script
-// devolve truncated=true sem conteúdo: puxar um log de 2 GB para a memória do
-// iPhone não é uma opção.
+// maxReadBytes é o teto de leitura como texto (1 MiB). Acima disso, texto não
+// vem mais vazio (12/08/2026): vem a cauda (ver tailBytes). Só binário
+// continua vindo vazio.
 const maxReadBytes = 1048576
 
+// tailBytes é o tamanho da cauda (200 KiB) devolvida no lugar do vazio quando
+// um arquivo de TEXTO passa do maxReadBytes (12/08/2026) — é o pedaço que
+// importa num log grande ("os arquivos de texto será que tem como..." — o
+// pedido dela era não perder justo o fim). Curto o bastante para não pesar no
+// app; bem maior que uma linha, para sobrar conteúdo depois de descartar a
+// primeira linha (sempre parcial, ver readScriptFmt).
+const tailBytes = 204800
+
 // readScriptFmt lê um arquivo de texto da máquina. Recebe o caminho como
-// argv[1] e o teto de bytes por Sprintf (%d). Emite JSON:
+// argv[1], o teto de leitura e o teto da cauda por Sprintf (dois %d, NESTA
+// ordem). Emite JSON:
 //
-//	{"path","size","binary","truncated","content"}
+//	{"path","size","binary","truncated","tail","content"}
 //
 // Binário é detectado por byte nulo nos primeiros 8 KiB — o mesmo heurístico
-// que o git usa. Binário e arquivo acima do teto voltam com content vazio.
+// que o git usa. Binário continua vindo com content vazio (o corte de binário
+// é anterior a esta leva). Arquivo de TEXTO acima do teto de leitura NÃO volta
+// mais vazio (12/08/2026): volta com os últimos `tailBytes` do arquivo,
+// truncated=true E tail=true. A cauda começa DEPOIS da primeira quebra de
+// linha encontrada no pedaço lido — um seek por byte quase nunca cai numa
+// borda de linha, e a "linha" antes disso é só um fragmento do meio de uma
+// linha real (podendo até cortar um caractere UTF-8 multibyte ao meio); melhor
+// descartá-la que mostrar lixo como se fosse a primeira linha da cauda.
 // Arquivo ilegível não é erro: volta zerado, e o app mostra vazio em vez de
 // derrubar a navegação.
 const readScriptFmt = `import os,json,sys
 p=os.path.abspath(sys.argv[1])
 try: size=os.path.getsize(p)
-except Exception: print(json.dumps({'path':p,'size':0,'binary':False,'truncated':False,'content':''})); sys.exit(0)
-binary=False;truncated=False;content=''
+except Exception: print(json.dumps({'path':p,'size':0,'binary':False,'truncated':False,'tail':False,'content':''})); sys.exit(0)
+binary=False;truncated=False;tail=False;content=''
 try:
     with open(p,'rb') as f:
         if b'\x00' in f.read(8192): binary=True
     if not binary:
-        if size > %d: truncated=True
+        if size > %d:
+            truncated=True;tail=True
+            with open(p,'rb') as f:
+                f.seek(size-%d)
+                raw=f.read()
+            quebra=raw.find(b'\n')
+            if quebra != -1: raw=raw[quebra+1:]
+            content=raw.decode('utf-8','replace')
         else:
             with open(p,'rb') as f: content=f.read().decode('utf-8','replace')
 except Exception: pass
-print(json.dumps({'path':p,'size':size,'binary':binary,'truncated':truncated,'content':content}))
+print(json.dumps({'path':p,'size':size,'binary':binary,'truncated':truncated,'tail':tail,'content':content}))
 `
 
-// readScript devolve o script com o teto já embutido.
-func readScript() string { return fmt.Sprintf(readScriptFmt, maxReadBytes) }
+// readScript devolve o script com os dois tetos já embutidos.
+func readScript() string { return fmt.Sprintf(readScriptFmt, maxReadBytes, tailBytes) }
 
 // runRead executa o comando (python3 lendo o readScript pelo stdin) e faz parse
 // do JSON.
@@ -224,13 +248,13 @@ func (t *LocalTarget) WriteFile(ctx context.Context, path string, content []byte
 	return runWrite(exec.CommandContext(ctx, "python3", "-", path), content)
 }
 
-// DownloadFile traz os bytes crus de um arquivo na máquina LOCAL. Usa cat em
-// vez do python3: aqui não há nada para decidir, e cat não carrega o arquivo
-// inteiro na memória do processo filho.
-func (t *LocalTarget) DownloadFile(ctx context.Context, path string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "cat", "--", path)
-	cmd.Env = childEnv()
-	return cmd.Output()
+// DownloadFile traz os bytes crus de um arquivo na máquina LOCAL, EM FLUXO. Usa
+// cat em vez do python3: aqui não há nada para decidir, e cat não carrega o
+// arquivo inteiro na memória do processo filho. Atualizado em 12/08/2026: o hub
+// também parou de bufferizar (ver startDownload) — nem o cat nem o hub seguram
+// um vídeo de 2 GB inteiro na memória a essa altura.
+func (t *LocalTarget) DownloadFile(ctx context.Context, path string) (io.ReadCloser, error) {
+	return startDownload(exec.CommandContext(ctx, "cat", "--", path))
 }
 
 // listFilesArgs monta os args do ssh. Isolado do ListFiles para ser testável
@@ -265,9 +289,54 @@ func (t *SSHTarget) downloadArgs(path string) []string {
 	return append(t.sshOpts(), "--", t.dest, "cat -- "+singleQuote(path))
 }
 
-// DownloadFile traz os bytes crus de um arquivo na máquina remota via ssh.
-func (t *SSHTarget) DownloadFile(ctx context.Context, path string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, t.prog, t.downloadArgs(path)...)
+// DownloadFile traz os bytes crus de um arquivo na máquina remota via ssh, EM
+// FLUXO (12/08/2026) — ver startDownload.
+func (t *SSHTarget) DownloadFile(ctx context.Context, path string) (io.ReadCloser, error) {
+	return startDownload(exec.CommandContext(ctx, t.prog, t.downloadArgs(path)...))
+}
+
+// downloadReadCloser adapta o StdoutPipe de um cmd (só Read; o Close dele
+// fecha o descritor, mas NÃO espera o processo) a um io.ReadCloser que espera
+// direito. Comum ao LocalTarget e ao SSHTarget — é o que faz o download em
+// fluxo (ver startDownload).
+type downloadReadCloser struct {
+	pipe io.ReadCloser
+	cmd  *exec.Cmd
+}
+
+func (d *downloadReadCloser) Read(p []byte) (int, error) { return d.pipe.Read(p) }
+
+// Close fecha o pipe e SÓ DEPOIS espera o processo (cmd.Wait) — nessa ordem.
+// Se o handler abandona a leitura antes do fim (a usuária saiu da tela, ou o
+// io.Copy bateu num cliente que já desconectou), o cat/ssh pode estar preso no
+// meio de uma escrita; fechar o pipe primeiro faz a próxima escrita dele bater
+// num descritor fechado (EPIPE/SIGPIPE), o que o encerra — só então o Wait tem
+// o que colher. SEM o Wait aqui, cada download deixaria um processo zumbi na
+// tabela do macmini que roda o hub 24h (a Vanessa não reinicia o hub para
+// limpar isso).
+func (d *downloadReadCloser) Close() error {
+	pipeErr := d.pipe.Close()
+	waitErr := d.cmd.Wait()
+	if pipeErr != nil {
+		return pipeErr
+	}
+	return waitErr
+}
+
+// startDownload liga o stdout do cmd a um pipe e o inicia, devolvendo um
+// io.ReadCloser que entrega os bytes conforme o processo produz — SEM
+// acumular o arquivo inteiro na memória do hub primeiro (a mudança central
+// desta leva: um arquivo grande virava o hub caindo, levando board, sessões e
+// terminais junto). Quem chama TEM que fechar o resultado (defer) — ver
+// downloadReadCloser.Close.
+func startDownload(cmd *exec.Cmd) (io.ReadCloser, error) {
 	cmd.Env = childEnv()
-	return cmd.Output()
+	pipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return &downloadReadCloser{pipe: pipe, cmd: cmd}, nil
 }

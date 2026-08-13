@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"mime"
 	"net/http"
 	"path/filepath"
@@ -49,12 +50,13 @@ func FilesHandler(lch Launcher) http.HandlerFunc {
 	}
 }
 
-// FileReadHandler lê um arquivo de texto da máquina. Binário ou acima do teto
-// volta 200 com o conteúdo vazio e a marca (binary/truncated) — quem decide o
-// que mostrar é o app.
+// FileReadHandler lê um arquivo de texto da máquina. Binário volta 200 com o
+// conteúdo vazio e a marca (binary); texto acima do teto volta com a CAUDA do
+// arquivo e a marca (truncated+tail), não mais vazio (12/08/2026) — quem
+// decide o que mostrar é o app.
 //
 //	GET /machines/{machine}/fs/read?path=/Users/vx/notas.md
-//	→ 200 {"path","size","binary","truncated","content"} | 400 | 404 | 502
+//	→ 200 {"path","size","binary","truncated","tail","content"} | 400 | 404 | 502
 func FileReadHandler(lch Launcher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Sem caminho não há default sensato (o "home" da listagem não se
@@ -117,6 +119,11 @@ func FileWriteHandler(lch Launcher) http.HandlerFunc {
 // FileDownloadHandler devolve os bytes crus de um arquivo — inclusive binário,
 // que o visualizador não mostra. Resposta é o arquivo em si, não JSON.
 //
+// EM FLUXO desde 12/08/2026: lch.DownloadFile devolve um io.ReadCloser que o
+// io.Copy drena direto para w, sem o arquivo inteiro passar pela memória do
+// hub — um vídeo de 2 GB não pode ser a diferença entre atender o pedido e
+// derrubar o processo que também segura board, sessões e terminais.
+//
 //	GET /machines/{machine}/fs/download?path=/Users/vx/foto.png
 //	→ 200 <bytes> | 400 | 404 | 502
 func FileDownloadHandler(lch Launcher) http.HandlerFunc {
@@ -126,13 +133,14 @@ func FileDownloadHandler(lch Launcher) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "bad_request")
 			return
 		}
-		data, err := lch.DownloadFile(r.PathValue("machine"), path)
+		rc, err := lch.DownloadFile(r.PathValue("machine"), path)
 		switch {
 		case errors.Is(err, launcher.ErrUnknownMachine):
 			writeJSONError(w, http.StatusNotFound, "unknown_machine")
 		case err != nil:
 			writeJSONError(w, http.StatusBadGateway, "download_failed")
 		default:
+			defer rc.Close() // é o Close() que espera o processo (cat/ssh) e evita zumbi
 			// Sem o attachment o iOS tenta renderizar em vez de salvar. O nome
 			// vai pelo mime.FormatMediaType, que escapa aspas e recusa
 			// caracteres de controle — o nome vem do caminho digitado, então
@@ -144,7 +152,15 @@ func FileDownloadHandler(lch Launcher) http.HandlerFunc {
 			w.Header().Set("Content-Disposition", cd)
 			w.Header().Set("Content-Type", "application/octet-stream")
 			w.WriteHeader(http.StatusOK)
-			w.Write(data)
+			// A partir daqui o 200 e os headers já foram para o cliente. Se o
+			// cat/ssh falhar no meio (arquivo sumiu, ssh caiu), io.Copy só
+			// devolve um erro TARDIO: não dá para trocar o status depois de
+			// escrito, nem colar um corpo de erro JSON no meio de bytes
+			// binários — os dois ficariam corrompidos. Por isso só encerra a
+			// resposta aqui; o cliente recebe um arquivo incompleto, que é o
+			// melhor possível sem voltar a bufferizar (a própria razão desta
+			// mudança).
+			_, _ = io.Copy(w, rc)
 		}
 	}
 }

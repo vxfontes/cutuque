@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -41,6 +43,10 @@ type fakeLauncher struct {
 	writeErr    error
 	fileBytes   []byte
 	downloadErr error
+	// downloadClosed é preenchido pelo ReadCloser fake quando Close() roda —
+	// prova que o handler SEMPRE fecha o corpo do download (defer), mesmo no
+	// caminho feliz. Ver closeTrackingReader.
+	downloadClosed bool
 
 	discovered   []session.Discovered
 	discoverErr  error
@@ -113,9 +119,25 @@ func (f *fakeLauncher) WriteFile(machine, path string, content []byte) (session.
 	f.gotWriteMachine, f.gotWritePath, f.gotWriteContent = machine, path, content
 	return f.fileWrite, f.writeErr
 }
-func (f *fakeLauncher) DownloadFile(machine, path string) ([]byte, error) {
+func (f *fakeLauncher) DownloadFile(machine, path string) (io.ReadCloser, error) {
 	f.gotDownloadMachine, f.gotDownloadPath = machine, path
-	return f.fileBytes, f.downloadErr
+	if f.downloadErr != nil {
+		return nil, f.downloadErr
+	}
+	return &closeTrackingReader{Reader: bytes.NewReader(f.fileBytes), closed: &f.downloadClosed}, nil
+}
+
+// closeTrackingReader é um io.ReadCloser que registra se Close foi chamado —
+// o fake do download real (StdoutPipe) é um processo de verdade, aqui só
+// precisamos provar que o handler REST fecha (defer) o que recebe.
+type closeTrackingReader struct {
+	io.Reader
+	closed *bool
+}
+
+func (c *closeTrackingReader) Close() error {
+	*c.closed = true
+	return nil
 }
 
 // ShellCommand devolve o comando que o fake mandar rodar (o teste do PTY troca

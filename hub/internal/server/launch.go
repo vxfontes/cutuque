@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os/exec"
 
@@ -35,7 +36,9 @@ type Launcher interface {
 	ListFiles(machine, path string) (session.FileListing, error)
 	ReadFile(machine, path string) (session.FileContent, error)
 	WriteFile(machine, path string, content []byte) (session.FileWrite, error)
-	DownloadFile(machine, path string) ([]byte, error)
+	// DownloadFile devolve o arquivo EM FLUXO (12/08/2026) — quem chama tem que
+	// fechar o io.ReadCloser (defer), é o Close() que reclama o processo.
+	DownloadFile(machine, path string) (io.ReadCloser, error)
 	ShellCommand(ctx context.Context, machine string) (*exec.Cmd, error)
 	Adopt(machine, id, cwd, title, agent string) (session.Session, error)
 	TmuxList(machine string) ([]session.Discovered, error)

@@ -166,15 +166,22 @@ type FileListing struct {
 	Entries []FileEntry `json:"entries"`
 }
 
-// FileContent é o conteúdo de um arquivo lido na máquina. Binary e Truncated
-// implicam Content vazio — nos dois casos o app oferece baixar em vez de
-// renderizar.
+// FileContent é o conteúdo de um arquivo lido na máquina. Binary sempre implica
+// Content vazio — o app oferece baixar em vez de renderizar. Truncated também
+// implicava Content vazio, até 12/08/2026: agora, para texto acima do teto de
+// leitura, Truncated vem acompanhado de Tail=true e Content traz a CAUDA do
+// arquivo (últimos ~200 KiB) em vez de vir vazio — só Binary segue implicando
+// vazio.
 type FileContent struct {
 	Path      string `json:"path"`
 	Size      int64  `json:"size"`
 	Binary    bool   `json:"binary"`
 	Truncated bool   `json:"truncated"`
-	Content   string `json:"content"`
+	// Tail é true quando Content é a CAUDA do arquivo (fim, não o começo) —
+	// texto acima do teto de leitura, em vez de vir vazio como antes do
+	// 12/08/2026. Ausente/false no JSON preserva o comportamento de sempre.
+	Tail    bool   `json:"tail"`
+	Content string `json:"content"`
 }
 
 // FileWrite é o resultado de salvar um arquivo: o tamanho novo, para o app

@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -657,7 +658,9 @@ func (l *Launcher) ListFiles(machine, path string) (session.FileListing, error) 
 }
 
 // ReadFile lê um arquivo de texto na máquina (visualizador da aba Máquinas).
-// Binário ou acima do teto volta sem conteúdo, marcado — não é erro.
+// Binário volta sem conteúdo, marcado — não é erro. Texto acima do teto volta
+// com a CAUDA do arquivo (ver session.FileContent.Tail), não mais vazio
+// (12/08/2026).
 func (l *Launcher) ReadFile(machine, path string) (session.FileContent, error) {
 	tgt, ok := l.anyTarget(machine)
 	if !ok {
@@ -689,9 +692,19 @@ func (l *Launcher) WriteFile(machine, path string, content []byte) (session.File
 	return writer.WriteFile(ctx, path, content)
 }
 
-// DownloadFile traz os bytes crus de um arquivo na máquina (download da aba
-// Máquinas — inclusive binário, que o visualizador não mostra).
-func (l *Launcher) DownloadFile(machine, path string) ([]byte, error) {
+// DownloadFile traz os bytes crus de um arquivo na máquina, EM FLUXO (download
+// da aba Máquinas — inclusive binário, que o visualizador não mostra). Quem
+// chama TEM que fechar o ReadCloser (defer) — é o Close() dele que espera o
+// processo (cat/ssh) e evita zumbi (ver claudecode.downloadReadCloser).
+//
+// SEM o discoverTimeout de propósito — mesma razão do ShellCommand (comentário
+// lá embaixo): um arquivo genuinamente grande pode levar bem mais que os 15s
+// da descoberta para atravessar a rede, e amarrar o download a esse prazo
+// mataria a transferência no meio do jeito errado (silenciosamente, sem
+// diferenciar "arquivo grande" de "máquina travada"). Quem encerra o processo
+// é o Close() (o handler faz defer rc.Close() ao fim do io.Copy), não um
+// cancel programado aqui.
+func (l *Launcher) DownloadFile(machine, path string) (io.ReadCloser, error) {
 	tgt, ok := l.anyTarget(machine)
 	if !ok {
 		return nil, ErrUnknownMachine
@@ -700,9 +713,7 @@ func (l *Launcher) DownloadFile(machine, path string) ([]byte, error) {
 	if !ok {
 		return nil, ErrUnknownMachine
 	}
-	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
-	defer cancel()
-	return dl.DownloadFile(ctx, path)
+	return dl.DownloadFile(l.baseCtx, path)
 }
 
 // ShellCommand monta (sem rodar) o comando de um shell interativo na máquina —
