@@ -124,13 +124,11 @@ struct MachineInfoSheet: View {
 
     @ViewBuilder private var secaoIcone: some View {
         Section {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 64), spacing: 12)], spacing: 12) {
-                cartaoIcone(id: "", symbol: Machine.osIcon(para: so), nome: "Automático")
-                ForEach(MachineIcon.allCases) { opcao in
-                    cartaoIcone(id: opcao.rawValue, symbol: opcao.symbol, nome: opcao.label)
-                }
+            // A grade mora em `SeletorDeIconeDeMaquina` desde 13/08/2026: o
+            // formulário de máquina usa a mesma.
+            SeletorDeIconeDeMaquina(so: so, escolhido: icone, habilitado: machine.isEditable) { id in
+                aplicar(tema: tema, icone: id)
             }
-            .padding(.vertical, 4)
         } header: {
             HStack {
                 Text("Ícone")
@@ -161,34 +159,6 @@ struct MachineInfoSheet: View {
                  : "Máquina do hub.env: a aparência dela é do hub, não do app.")
         }
         .disabled(!machine.isEditable)
-    }
-
-    private func cartaoIcone(id: String, symbol: String, nome: String) -> some View {
-        let selecionado = id == icone
-        return Button {
-            aplicar(tema: tema, icone: id)
-        } label: {
-            VStack(spacing: 4) {
-                Image(systemName: symbol)
-                    .font(.title2)
-                    .frame(height: 26)
-                Text(nome)
-                    .font(.caption2)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 10)
-                .fill(selecionado ? Color.accentColor.opacity(0.18) : Color.clear))
-            .overlay(RoundedRectangle(cornerRadius: 10)
-                .stroke(selecionado ? Color.accentColor : Color.secondary.opacity(0.25),
-                        lineWidth: selecionado ? 2 : 1))
-            .foregroundStyle(selecionado ? Color.accentColor : Color.primary)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(Text(nome))
-        .accessibilityAddTraits(selecionado ? [.isSelected] : [])
     }
 
     private func linha(_ rotulo: String, _ valor: String) -> some View {

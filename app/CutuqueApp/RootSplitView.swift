@@ -173,7 +173,13 @@ struct RootSplitView: View {
         // há laço, e nenhuma aba fechada é reaberta por este handler.
         .onChange(of: tabsStore.tabs, initial: true) { _, tabs in
             nav.abaEmFoco = tabs.selecionada
-            nav.descartarModos(mantendo: Set(tabs.abas.map(\.chave)))
+            let vivas = Set(tabs.abas.map(\.chave))
+            nav.descartarModos(mantendo: vivas)
+            // [13/08/2026] O registro da chrome (segmentos declarados +
+            // escolha) cresce pelo mesmo motivo e limpa no mesmo lugar. Sem
+            // isto, reabrir uma aba fechada acharia segmento velho de conteúdo
+            // que já não existe.
+            nav.descartarChrome(mantendo: vivas)
 
             let orfas = AbasNavegacao.selecoesOrfas(
                 abas: tabs.abas.map(\.chave), sessao: nav.selection,
@@ -377,6 +383,12 @@ struct RootSplitView: View {
         VStack(spacing: 0) {
             if !tabsStore.tabs.abas.isEmpty {
                 TabBar(store: tabsStore)
+                // Uma chrome só, FORA dos painéis: com N painéis montados
+                // (decisão #19) um seletor por painel virava N contribuições
+                // pra mesma navigation bar e o SwiftUI escondia quase todas
+                // (ver `ChromeDaAba`). Fica aqui, e não dentro do `ZStack`,
+                // justamente para existir uma única instância.
+                ChromeDaAba(chave: tabsStore.tabs.selecionada)
             }
             ZStack {
                 ForEach(tabsStore.tabs.abas) { aba in

@@ -48,7 +48,12 @@ struct CutuqueApp: App {
             .environmentObject(board)
             .environmentObject(tabsStore)
             .environmentObject(liveHub)
-            .tint((AppAccent(rawValue: accentRaw) ?? .blue).color)
+            // `.tint` serve os controles nativos; `corDeDestaque` serve quem
+            // pinta com uma `Color` explícita. Os dois SEMPRE juntos, com o
+            // mesmo valor — `Color.accentColor` ignora o `.tint` (resolve do
+            // catálogo de assets, que aqui não tem `AccentColor.colorset`), e
+            // era isso que deixava "alguns lugares com cor padrao".
+            .modifier(CorDeDestaqueDoApp(cor: (AppAccent(rawValue: accentRaw) ?? .blue).color))
             .preferredColorScheme((AppColorScheme(rawValue: colorSchemeRaw) ?? .system).scheme)
             // Deep-link da Live Activity: cutuque://session/<id> abre a sessão.
             .onOpenURL { url in
