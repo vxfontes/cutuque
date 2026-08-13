@@ -27,10 +27,13 @@ struct CutuqueCommands: Commands {
 
             Divider()
 
-            Button("Chat / Terminal") {
-                nav.paneMode = nav.paneMode == .chat ? .terminal : .chat
-            }
-            .keyboardShortcut("t", modifiers: [.command, .shift])
+            // "Próximo painel" e não mais "Chat / Terminal": o que ele alterna
+            // depende da aba (Terminal↔Info ao vivo, Terminal↔Arquivos na
+            // máquina), então nomear dois painéis fixos mentiria no menu. Quem
+            // faz a conta é `NavigationState.alternarSegmento` — ver lá por que
+            // não pode ser um `paneMode` escrito na mão.
+            Button("Próximo painel") { nav.alternarSegmento() }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
             Button(nav.columnVisibility == .detailOnly ? "Recolher painel" : "Expandir painel") {
                 // Mesma curva do `expandButton` de `SessionDetailPane` — as
                 // duas superfícies do mesmo atalho ⌘⌃F precisam produzir a

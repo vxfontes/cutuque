@@ -5,10 +5,23 @@ enviar o build pelo App Store Connect.
 
 ## Estado atual (já pronto no repo)
 
-- [x] **Versão / build:** `CFBundleShortVersionString 2.7.1`, `CFBundleVersion 21`
+- [x] **Versão / build:** `CFBundleShortVersionString 2.7.2`, `CFBundleVersion 22`
       (iOS, watchOS e widget alinhados — ver `app/project.yml`). Lembrete: subir o
       `CFBundleVersion` a cada upload novo ao TestFlight — o número precisa ser
       único **dentro do trem daquela versão curta**, não globalmente.
+      **2.7.2 aberta em 2026-08-13 (madrugada)**, no `master`: **patch** — um
+      conserto só. **⌘⇧T era no-op silencioso numa aba ao vivo**: o atalho escrevia
+      `paneMode = .chat` na mão, o painel clampava de volta pra `.terminal` ao
+      renderizar (aba ao vivo não tem chat) e nada acontecia na tela — e ainda
+      deixava a escolha da chrome valendo `"chat"`, id que não existe entre os
+      segmentos daquela aba. Agora o atalho é **"Próximo painel"** e cicla pelos
+      segmentos que a aba DECLAROU, pelo mesmo caminho que o Picker da chrome usa
+      (`NavigationState.alternarSegmento`) — Terminal→Info ao vivo,
+      Chat→Terminal→Info com chat, e Terminal→Arquivos na aba de máquina de graça.
+      Suíte **540/540**. O hub **não** foi tocado nesta versão — mas ela vem depois
+      do bloco de ciclo de vida do hub, então a imagem no ar é a `5bc3529a`.
+      ⚠️ **Ela já gerou o archive da 2.7.1 build 21** (iPad) — foi de lá que saiu o
+      apontamento do ⌘⇧T. Se o 21 subiu ao ASC/TestFlight, o número não repete.
       **2.7.1 aberta em 2026-08-13 (noite)**, no `master`: **patch**, não minor —
       são dois consertos e nenhuma capacidade nova. (1) **"novo terminal" falhava
       com 502** em todas as máquinas, com a sessão já criada: sem `LANG` no

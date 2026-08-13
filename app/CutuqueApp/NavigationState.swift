@@ -104,6 +104,26 @@ struct SegmentoDeChrome: Identifiable, Equatable, Hashable {
     let id: String
     let titulo: String
     let simbolo: String
+
+    /// O id do PRÓXIMO segmento, ciclando — a conta do ⌘⇧T, pura de propósito
+    /// (dá para afirmar sem montar view nem `NavigationState`).
+    ///
+    /// `escolha` é o valor CRU guardado (`NavigationState.escolha(de:)`), que pode
+    /// ser um id que NÃO existe nesta aba: é o que acontece numa aba ao vivo que
+    /// herdou `"chat"` de um escritor antigo. Nesse caso o ponto de partida é o
+    /// primeiro segmento — a mesma regra do getter do `Picker` da `ChromeDaAba`,
+    /// isto é, o que a usuária está VENDO destacado. Alternar a partir do valor
+    /// cru em vez do visível era justamente o no-op silencioso do card
+    /// `957a6ff8c71fcee0`.
+    ///
+    /// Devolve `nil` quando não há como alternar (0 ou 1 segmento): aí o chamador
+    /// não deve escrever nada, senão a chrome guardaria escolha para uma aba que
+    /// não tem seletor.
+    static func proximo(depoisDe escolha: String?, entre segmentos: [SegmentoDeChrome]) -> String? {
+        guard segmentos.count > 1 else { return nil }
+        let atual = escolha.flatMap { id in segmentos.firstIndex(where: { $0.id == id }) } ?? 0
+        return segmentos[(atual + 1) % segmentos.count].id
+    }
 }
 
 /// Ações disparadas por atalho de teclado que precisam do contexto de uma view
@@ -312,6 +332,38 @@ final class NavigationState: ObservableObject {
     func escolha(de chave: ChaveDeAba?) -> String? {
         guard let chave else { return nil }
         return escolhaPorAba[chave]
+    }
+
+    /// ⌘⇧T: avança para o próximo segmento da aba em foco — Terminal→Info numa
+    /// aba ao vivo, Chat→Terminal→Info numa de sessão com chat, Terminal→Arquivos
+    /// numa de máquina. Escreve pelo MESMO caminho da chrome (`escolher`), e é por
+    /// isso que os painéis reagem: `SessionDetailPane` e `MachineDetailView` têm
+    /// ambos um `.onChange(of: nav.escolha(de:))`.
+    ///
+    /// [13/08/2026] Antes o atalho fazia, no `CutuqueCommands`,
+    /// `nav.paneMode = nav.paneMode == .chat ? .terminal : .chat`. Numa aba AO VIVO
+    /// (segmentos Terminal↔Info, sem chat) isso escrevia `.chat`, o painel clampava
+    /// de volta para `.terminal` na renderização (`modoValido`) e **o atalho não
+    /// fazia nada, sem nenhum sinal** — card `957a6ff8c71fcee0`. E deixava a
+    /// escolha da chrome valendo `"chat"`, um id que não existe entre os segmentos
+    /// daquela aba: o "seletor mentindo sobre o conteúdo" que `definirPaneMode`
+    /// existe para evitar.
+    ///
+    /// Perguntar os segmentos à aba, em vez de codificar dois modos aqui, é o que
+    /// faz o atalho servir a aba de máquina de graça — e continuar certo quando
+    /// alguém acrescentar um segmento novo.
+    func alternarSegmento() {
+        guard let chave = abaEmFoco else {
+            // iPhone (e qualquer leitor sem aba): não há chrome nem segmentos
+            // declarados, então segue valendo o alterna de sempre entre os dois
+            // painéis que existem ali.
+            paneMode = paneMode == .chat ? .terminal : .chat
+            return
+        }
+        guard let proximo = SegmentoDeChrome.proximo(
+            depoisDe: escolha(de: chave), entre: segmentos(de: chave)
+        ) else { return }
+        escolher(proximo, de: chave)
     }
 
     /// Esquece o chrome de UMA aba — usado quando o conteúdo dela muda de

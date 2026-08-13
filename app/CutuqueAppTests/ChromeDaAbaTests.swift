@@ -134,4 +134,107 @@ final class ChromeDaAbaTests: XCTestCase {
         XCTAssertFalse(TabConteudo.pendente.declaraChrome)
         XCTAssertFalse(TabConteudo.morta.declaraChrome)
     }
+
+    // MARK: - ⌘⇧T (próximo segmento)
+
+    /// Aba AO VIVO: só Terminal e Info, nunca Chat — é a combinação em que o
+    /// atalho era um no-op silencioso (card `957a6ff8c71fcee0`).
+    private let doisAoVivo = [
+        SegmentoDeChrome(id: "terminal", titulo: "Terminal", simbolo: "apple.terminal"),
+        SegmentoDeChrome(id: "info", titulo: "Info", simbolo: "info.circle"),
+    ]
+
+    private let doisDaMaquina = [
+        SegmentoDeChrome(id: "terminal", titulo: "Terminal", simbolo: "apple.terminal"),
+        SegmentoDeChrome(id: "files", titulo: "Arquivos", simbolo: "folder"),
+    ]
+
+    /// Cicla na ordem DECLARADA e volta ao começo — não é alfabético nem
+    /// `PaneMode.allCases`.
+    func testProximoCiclaNaOrdemDeclarada() {
+        XCTAssertEqual(SegmentoDeChrome.proximo(depoisDe: "chat", entre: tresDaSessao), "terminal")
+        XCTAssertEqual(SegmentoDeChrome.proximo(depoisDe: "terminal", entre: tresDaSessao), "info")
+        XCTAssertEqual(SegmentoDeChrome.proximo(depoisDe: "info", entre: tresDaSessao), "chat")
+    }
+
+    /// O CORAÇÃO do conserto: a escolha guardada pode ser um id que não existe
+    /// nesta aba (aba ao vivo que herdou `"chat"` de um escritor antigo). Aí o
+    /// ponto de partida é o primeiro segmento — o que a usuária está VENDO
+    /// destacado, mesma regra do getter do `Picker` da `ChromeDaAba`. Avançar a
+    /// partir do valor cru era o no-op.
+    func testProximoIgnoraEscolhaQueNaoExisteNaAba() {
+        XCTAssertEqual(SegmentoDeChrome.proximo(depoisDe: "chat", entre: doisAoVivo), "info")
+        XCTAssertEqual(SegmentoDeChrome.proximo(depoisDe: nil, entre: doisAoVivo), "info")
+    }
+
+    /// Zero ou um segmento não é escolha nenhuma (a chrome não desenha seletor).
+    /// `nil` para o chamador não escrever escolha numa aba que não tem seletor.
+    func testProximoNaoAlternaSemSeletor() {
+        XCTAssertNil(SegmentoDeChrome.proximo(depoisDe: nil, entre: []))
+        XCTAssertNil(SegmentoDeChrome.proximo(depoisDe: "terminal", entre: [doisAoVivo[0]]))
+    }
+
+    /// A regressão do card, ponta a ponta: numa aba ao vivo o ⌘⇧T tem de SAIR do
+    /// Terminal. Antes ele escrevia `.chat`, o painel clampava de volta para
+    /// `.terminal` ao renderizar e nada acontecia na tela.
+    func testAlternarNaAbaAoVivoVaiDoTerminalPraInfoEVolta() {
+        let nav = NavigationState()
+        nav.abaEmFoco = sessao
+        nav.definirSegmentos(doisAoVivo, de: sessao)
+        nav.escolher("terminal", de: sessao)
+
+        nav.alternarSegmento()
+        XCTAssertEqual(nav.escolha(de: sessao), "info")
+        nav.alternarSegmento()
+        XCTAssertEqual(nav.escolha(de: sessao), "terminal")
+    }
+
+    /// Aba ao vivo que já tinha `"chat"` guardado — o estado que o
+    /// `definirPaneMode` do ⌘⇧T antigo deixava. O atalho tem de sair dele para
+    /// um segmento que EXISTE, não repetir o valor impossível.
+    func testAlternarSaiDaEscolhaHerdadaImpossivel() {
+        let nav = NavigationState()
+        nav.abaEmFoco = sessao
+        nav.definirSegmentos(doisAoVivo, de: sessao)
+        nav.escolher("chat", de: sessao)
+
+        nav.alternarSegmento()
+        XCTAssertEqual(nav.escolha(de: sessao), "info")
+    }
+
+    /// De graça: o atalho serve a aba de máquina porque pergunta os segmentos à
+    /// aba em vez de codificar Chat/Terminal.
+    func testAlternarServeAAbaDeMaquina() {
+        let nav = NavigationState()
+        nav.abaEmFoco = maquina
+        nav.definirSegmentos(doisDaMaquina, de: maquina)
+        nav.escolher("terminal", de: maquina)
+
+        nav.alternarSegmento()
+        XCTAssertEqual(nav.escolha(de: maquina), "files")
+    }
+
+    /// Aba em foco sem seletor (0 ou 1 segmento): não pode gravar escolha, senão
+    /// a chrome guardaria seleção de uma aba que não tem Picker.
+    func testAlternarNaoEscreveEmAbaSemSeletor() {
+        let nav = NavigationState()
+        nav.abaEmFoco = sessao
+        nav.definirSegmentos([doisAoVivo[0]], de: sessao)
+
+        nav.alternarSegmento()
+        XCTAssertNil(nav.escolha(de: sessao), "aba de um segmento não tem o que alternar")
+    }
+
+    /// iPhone: não usa abas, então `abaEmFoco` é `nil` e segue valendo o alterna
+    /// entre os dois painéis que existem lá.
+    func testAlternarSemAbaEmFocoAlternaChatETerminal() {
+        let nav = NavigationState()
+        XCTAssertNil(nav.abaEmFoco)
+        XCTAssertEqual(nav.paneMode, .chat)
+
+        nav.alternarSegmento()
+        XCTAssertEqual(nav.paneMode, .terminal)
+        nav.alternarSegmento()
+        XCTAssertEqual(nav.paneMode, .chat)
+    }
 }
