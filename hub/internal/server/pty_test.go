@@ -3,9 +3,15 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -150,6 +156,227 @@ func pedePTY(t *testing.T, f *fakeLauncher) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	Router(cfg, reg, f).ServeHTTP(rec, req)
 	return rec
+}
+
+// MARK: - O shell sobrevive à conexão? (card 2a1ee8d8193cb9df)
+
+// shellQueAvisaOPid roda `sh` gravando o próprio pid em `arquivo` antes de
+// virar o processo de longa vida. É o stand-in do `ssh -tt`: o número no
+// arquivo é o pid do processo que SOBRA se a limpeza falhar.
+//
+// `exec` no fim não é enfeite — sem ele o pid gravado seria o do `sh`, que
+// morreria de qualquer jeito ao fim do script, e o teste passaria sem provar
+// nada sobre o processo que interessa.
+func shellQueAvisaOPid(arquivo string) *fakeLauncher {
+	return &fakeLauncher{shellProg: "sh", shellArgs: []string{"-c",
+		"echo $$ > " + arquivo + "; exec sleep 300"}}
+}
+
+// pidGravado espera o shell fake dizer quem ele é. Sem isto o teste correria
+// contra o `fork`/`exec` e leria arquivo vazio.
+func pidGravado(t *testing.T, arquivo string) int {
+	t.Helper()
+	limite := time.Now().Add(5 * time.Second)
+	for time.Now().Before(limite) {
+		if b, err := os.ReadFile(arquivo); err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && pid > 0 {
+				return pid
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("o shell fake não gravou o pid em %s", arquivo)
+	return 0
+}
+
+// vivo pergunta ao kernel se o pid ainda existe. `signal 0` não entrega sinal
+// nenhum, só valida o destino.
+//
+// ATENÇÃO ao que isto significa aqui: o shell fake é filho DIRETO do processo de
+// teste, então enquanto ninguém colher o `Wait` ele fica zumbi — e zumbi aceita
+// o sinal 0. Ou seja: `!vivo(pid)` prova as duas metades da limpeza juntas,
+// morto E colhido, que é exatamente o que o `encerraShell` promete.
+func vivo(pid int) bool {
+	return syscall.Kill(pid, 0) == nil
+}
+
+// esperaMorrer devolve quanto tempo o processo levou para sumir, ou falha o
+// teste no prazo — é a MEDIÇÃO que o card pede, não só a asserção.
+func esperaMorrer(t *testing.T, pid int, prazo time.Duration) time.Duration {
+	t.Helper()
+	inicio := time.Now()
+	limite := inicio.Add(prazo)
+	for time.Now().Before(limite) {
+		if !vivo(pid) {
+			return time.Since(inicio)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("o shell (pid %d) seguia vivo depois de %s — é o vazamento do card 2a1ee8d8193cb9df. ps: %s",
+		pid, prazo, estadoDoProcesso(pid))
+	return 0
+}
+
+// estadoDoProcesso é só para a mensagem de falha, e ganha o teste inteiro: "Z"
+// (zumbi) significa processo MORTO e não colhido — problema de `Wait` — enquanto
+// "S"/"R" significa `ssh` de pé de verdade, segurando a sessão do outro lado.
+// Sem esta linha as duas falham igual e a investigação começa do zero.
+func estadoDoProcesso(pid int) string {
+	out, err := exec.Command("ps", "-o", "stat=,command=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return "(ps falhou: " + err.Error() + ")"
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// Cliente que vai embora SEM close frame (o `kill -9` no cliente da repro
+// mínima do card): o `CloseNow` fecha o TCP na cara do hub, sem handshake.
+//
+// [13/08/2026] Este teste nasceu porque o doc do `PTYHandler` afirma "fechou o
+// socket, o `ssh` morre junto" e havia evidência de produção do contrário —
+// cinco `ssh -tt` vivos dentro do container depois de cinco sessões de teste.
+// A cadeia que precisa rodar é `Read` falha → `close(clienteCaiu)` → `f.Close()`
+// → `bombeiaSaida` retorna → `encerraShell`.
+func TestPTYQuedaAbruptaDoClienteMataOShell(t *testing.T) {
+	arquivo := filepath.Join(t.TempDir(), "pid")
+	c, _ := abrePTY(t, shellQueAvisaOPid(arquivo))
+	pid := pidGravado(t, arquivo)
+
+	c.CloseNow() // sem close frame, de propósito
+
+	t.Logf("shell morto e colhido em %s depois da queda abrupta", esperaMorrer(t, pid, 10*time.Second))
+}
+
+// Cliente que fecha LIMPO (código 1000). Está aqui porque a segunda evidência
+// do card corrigiu a premissa da primeira: ela fechou o socket direito e vazou
+// igual, então o fechamento limpo precisa de asserção própria — não é o caminho
+// "sem problema" que o nome do card sugeria.
+func TestPTYFechamentoLimpoTambemMataOShell(t *testing.T) {
+	arquivo := filepath.Join(t.TempDir(), "pid")
+	c, _ := abrePTY(t, shellQueAvisaOPid(arquivo))
+	pid := pidGravado(t, arquivo)
+
+	if err := c.Close(websocket.StatusNormalClosure, ""); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	t.Logf("shell morto e colhido em %s depois do fechamento limpo", esperaMorrer(t, pid, 10*time.Second))
+}
+
+// Hipótese 2 do card: o shell IGNORA o SIGHUP que fechar o PTY manda. É para
+// isso que existe o `ptyKillGrace` — passado o prazo, vem o `Kill`. Sem esta
+// prova, o `select` com `time.After` no `encerraShell` é fé.
+func TestPTYShellQueIgnoraSIGHUPMorreNoKill(t *testing.T) {
+	arquivo := filepath.Join(t.TempDir(), "pid")
+	// Sem `exec` aqui de propósito: o `trap` tem de sobreviver, e é o próprio
+	// `sh` que precisa ficar vivo ignorando o sinal.
+	c, _ := abrePTY(t, &fakeLauncher{shellProg: "sh", shellArgs: []string{"-c",
+		"trap '' HUP; echo $$ > " + arquivo + "; while :; do sleep 1; done"}})
+	pid := pidGravado(t, arquivo)
+
+	c.CloseNow()
+
+	levou := esperaMorrer(t, pid, 4*ptyKillGrace)
+	if levou < ptyKillGrace {
+		t.Errorf("morreu em %s, antes do prazo de %s — o SIGHUP pegou, então este teste não está mais provando o Kill", levou, ptyKillGrace)
+	}
+	t.Logf("shell surdo a SIGHUP morto em %s (ptyKillGrace = %s)", levou, ptyKillGrace)
+}
+
+// O caso que o `vigiaCliente` existe para pegar, e que nenhum teste cobria: o
+// celular que dormiu ou trocou de rede. O socket do hub segue ABERTO, o `Read`
+// fica pendurado para sempre, e a ÚNICA coisa que pode perceber é o ping sem
+// pong. Prova as duas metades: com o cliente vivo, vários pings passam e nada é
+// derrubado; congelado, o shell morre.
+func TestPTYClienteCongeladoCaiNoPingSemPong(t *testing.T) {
+	salvoPing, salvoEscrita := wsPingInterval, wsWriteTimeout
+	wsPingInterval, wsWriteTimeout = 50*time.Millisecond, 300*time.Millisecond
+	defer func() { wsPingInterval, wsWriteTimeout = salvoPing, salvoEscrita }()
+
+	arquivo := filepath.Join(t.TempDir(), "pid")
+	cfg, reg := testDeps()
+	srv := httptest.NewServer(Router(cfg, reg, shellQueAvisaOPid(arquivo)))
+	defer srv.Close()
+
+	endereco, congelar := proxyCongelavel(t, strings.TrimPrefix(srv.URL, "http://"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	c, _, err := websocket.Dial(ctx, "ws://"+endereco+"/machines/vps/pty?token=secret&cols=100&rows=40", nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.CloseNow()
+
+	// O coder/websocket só responde ping DENTRO de um Read — sem esta goroutine
+	// o teste passaria por motivo errado (nenhum pong chega nem com o cliente
+	// saudável, e não haveria o que congelar).
+	go func() {
+		for {
+			if _, _, err := c.Read(ctx); err != nil {
+				return
+			}
+		}
+	}()
+
+	pid := pidGravado(t, arquivo)
+	time.Sleep(6 * wsPingInterval)
+	if !vivo(pid) {
+		t.Fatalf("o shell morreu com o cliente SAUDÁVEL — o ping está derrubando conexão boa")
+	}
+
+	congelar()
+	t.Logf("shell morto e colhido em %s depois de o cliente congelar (ping %s, prazo do pong %s)",
+		esperaMorrer(t, pid, 20*time.Second), wsPingInterval, wsWriteTimeout)
+}
+
+// proxyCongelavel é um proxy TCP que, ao congelar, PARA de repassar bytes sem
+// fechar nada — é o celular que dormiu: as duas pontas seguem com socket aberto
+// e o hub não recebe FIN nenhum para o `Read` notar.
+func proxyCongelavel(t *testing.T, destino string) (endereco string, congelar func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	parado := make(chan struct{})
+	go func() {
+		conexao, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		acima, err := net.Dial("tcp", destino)
+		if err != nil {
+			conexao.Close()
+			return
+		}
+		t.Cleanup(func() { conexao.Close(); acima.Close() })
+
+		copia := func(dst, src net.Conn) {
+			buf := make([]byte, 32*1024)
+			for {
+				n, err := src.Read(buf)
+				select {
+				case <-parado:
+					return // congelado: engole o que leu e não fecha nada
+				default:
+				}
+				if n > 0 {
+					if _, werr := dst.Write(buf[:n]); werr != nil {
+						return
+					}
+				}
+				if err != nil {
+					return
+				}
+			}
+		}
+		go copia(acima, conexao)
+		go copia(conexao, acima)
+	}()
+	return ln.Addr().String(), func() { close(parado) }
 }
 
 // O tamanho vem de fora (query param, mensagem do app): valor ausente, zero ou

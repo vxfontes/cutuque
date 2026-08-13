@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
@@ -151,10 +152,13 @@ func PTYHandler(lch Launcher) http.HandlerFunc {
 			}
 		}
 
-		// Chegar aqui com o shell vivo significa que quem caiu foi o cliente:
-		// fechar o PTY solta a goroutine, que encerra o `ssh` e limpa tudo.
+		// Chegar aqui com o shell vivo significa que quem caiu foi o cliente. Até
+		// 2026-08-13 esta parte dizia "fechar o PTY solta a goroutine, que
+		// encerra o `ssh`" — era falso, e o `ssh` vazava por isso (card
+		// 2a1ee8d8193cb9df). O sinal sai explícito no derrubaShell; quem fecha o
+		// mestre e faz o Wait continua sendo a goroutine da saída.
 		close(clienteCaiu)
-		_ = f.Close()
+		derrubaShell(cmd, saidaAcabou)
 		<-saidaAcabou
 	}
 }
@@ -234,9 +238,64 @@ func dentroDaFaixa(raw string, min, max, padrao int) int {
 	return n
 }
 
-// encerraShell garante que o `ssh` não sobrevive à conexão, e devolve com que
-// código ele saiu. Fechar o PTY manda SIGHUP e resolve o caso normal; o kill é
-// para o que ignorar o sinal.
+// derrubaShell mata o shell quando quem foi embora foi o CLIENTE.
+//
+// Existe porque fechar o mestre do PTY NÃO derruba o shell — ao contrário do
+// que este arquivo afirmou até 2026-08-13 (card 2a1ee8d8193cb9df). O `os.File`
+// do mestre não é pollável pelo runtime do Go, então o `Close` não tem como
+// desalojar um `Read` já pendurado: ele só marca o fd como fechado, o
+// `close(2)` de verdade fica esperando o `Read` voltar, o `Read` espera o filho
+// falar e o filho espera para sempre. Medido: `bombeiaSaida` nunca voltava,
+// `encerraShell` nunca rodava, o handler dormia no `<-saidaAcabou`, o `cancel()`
+// adiado nunca disparava e o `ssh` seguia vivo com PPID 1. Valia até para o
+// fechamento limpo do socket, que era o mais confuso do sintoma.
+//
+// SIGHUP primeiro por dois motivos: é o sinal que o pendurar do tty deveria ter
+// mandado, e o cliente ssh trata SIGHUP derrubando a conexão de forma ordenada
+// — é o que dá chance de a sessão do sshd no destino ir embora junto, em vez de
+// só o kernel resetar o TCP. SIGKILL fica para quem ignora o sinal.
+//
+// Ao GRUPO, e não ao processo: hangup de tty de verdade acorda o grupo de
+// primeiro plano inteiro, e um neto segurando o escravo mantém o mestre sem EOF
+// pelo mesmo motivo de sempre.
+func derrubaShell(cmd *exec.Cmd, saidaAcabou <-chan struct{}) {
+	select {
+	case <-saidaAcabou:
+		// O shell já acabou por conta própria (`exit`, host caiu): o Wait do
+		// encerraShell já rodou, o pid pode ter sido reciclado e sinal nenhum
+		// pode sair daqui.
+		return
+	default:
+	}
+	sinaliza(cmd.Process, syscall.SIGHUP)
+	select {
+	case <-saidaAcabou:
+	case <-time.After(ptyKillGrace):
+		sinaliza(cmd.Process, syscall.SIGKILL)
+	}
+}
+
+// sinaliza manda o sinal ao grupo do processo, caindo no processo sozinho
+// quando não dá.
+//
+// A checagem `pgid == pid` não é paranoia: ela confirma que o filho é o LÍDER
+// do próprio grupo (o pty.Start pede Setsid). Sem ela, um filho que tivesse
+// herdado o grupo do hub faria o hub matar a si mesmo.
+func sinaliza(p *os.Process, sig syscall.Signal) {
+	if pgid, err := syscall.Getpgid(p.Pid); err == nil && pgid == p.Pid {
+		if syscall.Kill(-pgid, sig) == nil {
+			return
+		}
+	}
+	_ = p.Signal(sig)
+}
+
+// encerraShell fecha o mestre, espera o `ssh` sair e devolve com que código ele
+// saiu. O Close aqui é o que solta o fd de verdade: o `Read` já voltou (é o que
+// trouxe a goroutine da saída até esta linha), então não há mais ninguém
+// pendurado para adiar o `close(2)` — ver derrubaShell para o que acontecia
+// quando se fechava com um Read pendurado. O kill continua como rede: "a saída
+// acabou" não é prova de que o processo morreu.
 func encerraShell(cmd *exec.Cmd, f io.Closer) int {
 	_ = f.Close()
 	saiu := make(chan struct{})
