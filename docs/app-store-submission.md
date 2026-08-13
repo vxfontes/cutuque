@@ -5,10 +5,33 @@ enviar o build pelo App Store Connect.
 
 ## Estado atual (já pronto no repo)
 
-- [x] **Versão / build:** `CFBundleShortVersionString 2.5.0`, `CFBundleVersion 18`
+- [x] **Versão / build:** `CFBundleShortVersionString 2.7.0`, `CFBundleVersion 20`
       (iOS, watchOS e widget alinhados — ver `app/project.yml`). Lembrete: subir o
       `CFBundleVersion` a cada upload novo ao TestFlight — o número precisa ser
       único **dentro do trem daquela versão curta**, não globalmente.
+      **2.7.0 aberta em 2026-08-13**, no `master` (`65fd9df`): consertos dos **seis
+      apontamentos** dela depois de rodar a 2.6.0/19 no iPad, com três raízes —
+      `Color.accentColor` ignorando o `.tint()` (por isso trocar a cor não pegava em
+      tudo), N painéis montados disputando a **mesma** navigation bar (por isso o
+      seletor Chat/Terminal/Info sumia e a aba parecia substituir a anterior) e a
+      carga das sessões vivas sequencial publicando só no fim (por isso o "puxar pra
+      baixo" era obrigatório). **Revoga a aba de passagem** — abrir nunca mais
+      substitui. Minor e não patch pelo mesmo critério da 2.6.0: junto com os
+      consertos vêm **capacidades novas e visíveis** — escolher **ícone e tema da
+      máquina** na personalização (com seletor de ícone novo) e **tela cheia** nas
+      abas de board e máquinas. Suíte 520/520, e o build com o app do relógio
+      verificado (`generic/platform=iOS`). O hub **não** foi tocado nesta versão:
+      serve a mesma imagem da 2.6.0, não precisa de deploy.
+      **2.6.0 aberta em 2026-08-12** (registrada aqui em 13/08, retroativa — o bump
+      da época não passou por este arquivo), no `master`: 99 commits desde a 2.5.0 e
+      três levas de feature — **abas globais no iPad** (Board, máquina e card
+      arquivado viram aba), **copiar conteúdo do app** (chat, espelho tmux e terminal
+      ssh) e o **preview de arquivos da máquina** (QuickLook, markdown renderizado,
+      JSON formatado, realce de sintaxe e cauda de arquivo grande). 479/479 na época.
+      ⚠️ Ela **gerou o archive** desta e rodou no iPad — foi de lá que saíram os seis
+      apontamentos que viraram a 2.7.0. Se esse build 19 subiu ao ASC/TestFlight, não
+      está registrado em lugar nenhum do repo: **confirmar no App Store Connect**
+      antes de assumir que o trem 2.6.0 está livre.
       **2.5.0 aberta em 2026-08-04**, no `master`: máquina já cadastrada passa a ter
       **tela de edição**. Sheet **Informações** com host, porta, identidade, sistema,
       impressão digital e origem em leitura, mais **tema do terminal** e **grade de
