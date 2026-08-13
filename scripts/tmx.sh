@@ -177,13 +177,16 @@ case "$cmd" in
     ;;
 
   gk)
-    # [13/08/2026] igual ao cc/oc, mas roda o grok (xAI) na pasta atual.
+    # [13/08/2026] igual ao cx, mas roda o grok (xAI) na pasta atual.
     # 3º arg = grupo (servidor -L); senão usa $TMX_SRV / 'main'.
     #
-    # SEM flag, como o cc e o oc: o grok pede aprovação de cada ferramenta. Ele
-    # TEM um `--always-approve` (o equivalente ao `--sandbox
-    # danger-full-access` do cx), de propósito não usado aqui — auto-aprovar
-    # tudo é decisão da Vanessa, não default do atalho.
+    # `--always-approve` = "Auto-approve all tool executions", o equivalente ao
+    # `--sandbox danger-full-access` do cx. [Reescrito em 13/08/2026, no mesmo
+    # dia] Este bloco nasceu com o grok pelado e o comentário dizia que
+    # auto-aprovar era decisão da Vanessa, não default do atalho. A premissa
+    # segue certa — e ela decidiu: "pode botar o --always-approve no grok".
+    # Então o `gk` agora é irmão do `cx`, não do `cc`/`oc`: NÃO para pedindo
+    # permissão de ferramenta.
     #
     # Ressalva de visibilidade, diferente dos outros três: o hub reconhece
     # agente pelo NOME na árvore de processos ('claude'|'codex'|'opencode', ver
@@ -196,7 +199,7 @@ case "$cmd" in
       name="$(basename "$PWD" | tr ' ' '_' | tr '.' '_')"
     fi
     [ -n "$arg3" ] && SRV="$arg3"
-    TM new-session -A -s "$name" -c "$PWD" 'grok'
+    TM new-session -A -s "$name" -c "$PWD" 'grok --always-approve'
     ;;
 
   *)
@@ -217,7 +220,7 @@ Comandos:
   cc [sessao] [grupo]   cria/entra na sessão JÁ rodando o claude; grupo = servidor -L
   cx [sessao] [grupo]   cria/entra na sessão JÁ rodando o codex (--sandbox danger-full-access); grupo = servidor -L
   oc [sessao] [grupo]   cria/entra na sessão JÁ rodando o opencode; grupo = servidor -L
-  gk [sessao] [grupo]   cria/entra na sessão JÁ rodando o grok; grupo = servidor -L
+  gk [sessao] [grupo]   cria/entra na sessão JÁ rodando o grok (--always-approve); grupo = servidor -L
 
 Grupo via env:  TMX_SRV=defender tmx cc command
 Grupo via arg:  tmx cc command defender
