@@ -13,10 +13,18 @@ configFiles:
 # cursor, o que basta para o espelho do tmux (que já chega como tela pronta) mas
 # não para o fluxo de bytes cru do terminal livre, onde posicionar o cursor É o
 # conteúdo. MIT, compatível com a AGPL-3.0 do projeto.
+# O piso é 1.18.0 e NÃO pode baixar: `TerminalView.selection` (e o tipo
+# `SelectionService`) só viraram `public` nessa tag — commit b4b78a3 do SwiftTerm,
+# "Make SelectionService and TerminalView.selection public". Em 1.15.0 os dois são
+# internal e `PTYTerminalView.selecionado()` não compila.
+# 13/08/2026: estava `from: 1.15.0` desde a leva do copiar. Passava porque cada
+# árvore resolvia 1.18.0 por conta própria (o `Package.resolved` mora DENTRO do
+# .xcodeproj, que não é versionado — este piso é a única trava que existe). O
+# checkout da Vanessa tinha 1.15.0 pinado de antes e o archive quebrou.
 packages:
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
-    from: 1.15.0
+    from: 1.18.0
 targets:
   CutuqueApp:
     type: application
