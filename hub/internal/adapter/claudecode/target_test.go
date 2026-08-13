@@ -545,3 +545,47 @@ func TestModelEffortFlags(t *testing.T) {
 		t.Errorf("valores inválidos deviam ser rejeitados, got %v", f)
 	}
 }
+
+// MARK: ConnectTimeout por tipo de uso
+
+// A listagem de panes é POLLING: o app pede a cada 15s, ninguém está esperando
+// aquela resposta em particular. Com o ConnectTimeout de ação uma máquina
+// desligada pendurava o handler pelos 10s inteiros a cada rodada — medido em
+// produção, GET /machines/windows/tmux levava 10,016s com a máquina off.
+func TestListagemDePanesUsaConnectTimeoutCurto(t *testing.T) {
+	tgt := NewSSHTarget("windows", "vx@100.100.125.99")
+	args := tgt.tmuxListArgs()
+
+	if !slices.Contains(args, "ConnectTimeout="+connectTimeoutConsulta) {
+		t.Errorf("listagem sem o ConnectTimeout de consulta (%ss): %v", connectTimeoutConsulta, args)
+	}
+	if slices.Contains(args, "ConnectTimeout="+connectTimeoutAcao) {
+		t.Errorf("listagem ainda com o ConnectTimeout de ação (%ss): %v", connectTimeoutAcao, args)
+	}
+	// O resto das opções não muda: o timeout curto é a ÚNICA diferença.
+	for _, quero := range []string{"BatchMode=yes", "ServerAliveInterval=15", "-T"} {
+		if !slices.Contains(args, quero) {
+			t.Errorf("a listagem perdeu %q junto com o timeout: %v", quero, args)
+		}
+	}
+	if args[len(args)-3] != "--" || args[len(args)-2] != tgt.dest {
+		t.Errorf("esperava [..., \"--\", dest, script]; got %v", args)
+	}
+}
+
+// O contrário do teste acima: onde o usuário mandou fazer e está olhando a tela,
+// os 10s ficam de propósito — um handshake lento (Tailscale acordando, host sob
+// carga) tem de ter chance de completar em vez de falhar na cara dele.
+func TestCaminhosDeAcaoMantemConnectTimeoutDeAcao(t *testing.T) {
+	tgt := NewSSHTarget("vps", "vx@192.0.2.50")
+	casos := map[string][]string{
+		"abertura de sessão":  sshClaudeArgs(tgt.dest, defaultRemoteClaudeCmd, "", ""),
+		"download de arquivo": tgt.downloadArgs("/tmp/x"),
+		"terminal livre":      tgt.ShellCommand(context.Background()).Args[1:],
+	}
+	for nome, args := range casos {
+		if !slices.Contains(args, "ConnectTimeout="+connectTimeoutAcao) {
+			t.Errorf("%s: perdeu o ConnectTimeout de ação (%ss): %v", nome, connectTimeoutAcao, args)
+		}
+	}
+}

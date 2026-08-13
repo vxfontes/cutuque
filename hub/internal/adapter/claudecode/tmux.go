@@ -155,8 +155,18 @@ func (t *SSHTarget) runSSHTmux(ctx context.Context, inner string) ([]byte, error
 	return cmd.Output()
 }
 
+// tmuxListArgs monta os args do ssh da listagem. Separado do TmuxList para o
+// teste poder afirmar as opções sem subir um ssh de verdade (mesmo padrão do
+// downloadArgs).
+func (t *SSHTarget) tmuxListArgs() []string {
+	return append(t.sshOptsDeConsulta(), "--", t.dest, "python3 -")
+}
+
+// TmuxList lista os panes da máquina. É a ÚNICA chamada ssh deste pacote com
+// ConnectTimeout curto: o app faz este poll a cada 15s e o handler não deve
+// ficar 10s pendurado numa máquina desligada (ver connectTimeoutConsulta).
 func (t *SSHTarget) TmuxList(ctx context.Context) ([]TmuxPane, error) {
-	args := append(t.sshOpts(), "--", t.dest, "python3 -")
+	args := t.tmuxListArgs()
 	cmd := exec.CommandContext(ctx, t.prog, args...)
 	cmd.Env = childEnv()
 	cmd.Stdin = strings.NewReader(tmuxListScript)

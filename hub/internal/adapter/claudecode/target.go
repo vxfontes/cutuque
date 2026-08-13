@@ -188,6 +188,12 @@ func (t *SSHTarget) sshOpts() []string {
 	return agent.WithIdentity(t.identity, sshBaseOpts())
 }
 
+// sshOptsDeConsulta são as opções deste alvo para uma LEITURA repetida (hoje a
+// listagem de panes): iguais às normais, com ConnectTimeout curto.
+func (t *SSHTarget) sshOptsDeConsulta() []string {
+	return agent.WithIdentity(t.identity, sshBaseOptsConsulta())
+}
+
 // Name identifica o alvo remoto (vira o campo Machine da sessão).
 func (t *SSHTarget) Name() string { return t.name }
 
@@ -281,13 +287,35 @@ func sendInitialPrompt(h *Handle, prompt string) error {
 	return nil
 }
 
+// ConnectTimeout do ssh, em segundos, em dois sabores — a distinção é entre
+// AÇÃO (o usuário pediu e está esperando) e CONSULTA (polling de fundo).
+//
+// [13/08/2026] Antes havia só o valor de ação, usado por tudo. Com a máquina
+// desligada, `GET /machines/windows/tmux` levava os 10s inteiros até o
+// connect() estourar — e o app faz esse poll a cada 15s, então uma máquina
+// off deixava o handler ocupado ~2/3 do tempo, de graça. A consulta desiste
+// em 3s: se a máquina está de pé na LAN/Tailscale o TCP fecha em milissegundos,
+// e se não está o resultado é o mesmo, só mais cedo. A abertura de sessão
+// segue com 10s de propósito: ali o usuário mandou abrir, um handshake lento
+// (VPN acordando, host sob carga) tem que ter chance de completar em vez de
+// falhar na cara dele.
+const (
+	connectTimeoutAcao     = "10"
+	connectTimeoutConsulta = "3"
+)
+
 // sshOptsComuns são as opções que valem para QUALQUER uso de ssh — em lote ou
 // interativo. Ficam separadas do `-T` porque o terminal livre precisa do
 // oposto dele, e é a única diferença entre os dois usos.
 func sshOptsComuns() []string {
+	return sshOptsComunsCom(connectTimeoutAcao)
+}
+
+// sshOptsComunsCom é sshOptsComuns com o ConnectTimeout escolhido pelo caller.
+func sshOptsComunsCom(connectTimeout string) []string {
 	return []string{
 		"-o", "BatchMode=yes",
-		"-o", "ConnectTimeout=10",
+		"-o", "ConnectTimeout=" + connectTimeout,
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
 		"-o", "StrictHostKeyChecking=accept-new",
@@ -298,6 +326,12 @@ func sshOptsComuns() []string {
 // claude e a descoberta). Compartilhar evita divergência entre os dois.
 func sshBaseOpts() []string {
 	return append(sshOptsComuns(), "-T")
+}
+
+// sshBaseOptsConsulta é sshBaseOpts com o ConnectTimeout de consulta. Só para
+// leitura repetida de fundo — nunca para abrir ou pilotar sessão.
+func sshBaseOptsConsulta() []string {
+	return append(sshOptsComunsCom(connectTimeoutConsulta), "-T")
 }
 
 // sshClaudeArgs monta os args do `ssh` local para rodar o claude remoto. As
