@@ -40,6 +40,7 @@ final class OpenTabsStore: ObservableObject {
 /// `NavigationSplitView` reintroduz o bug que a #19 existe para impedir.
 struct TabBar: View {
     @ObservedObject var store: OpenTabsStore
+    @Environment(\.corDeDestaque) private var destaque
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -51,7 +52,10 @@ struct TabBar: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
         }
-        .background(.bar)
+        // [13/08/2026] Ver o comentário completo da decisão em `botao(_:)`, no
+        // ponto onde a aba escolhida troca de cor — este `.background` é a
+        // metade "faixa" da mesma mudança.
+        .background(Color(.secondarySystemBackground))
         .overlay(alignment: .bottom) { Divider() }
     }
 
@@ -75,8 +79,6 @@ struct TabBar: View {
                     .font(.caption2)
                 Text(aba.titulo)
                     .lineLimit(1)
-                    // Itálico é a marca da aba de passagem, como no VS Code.
-                    .italic(aba.estilo == .passagem)
                 Button {
                     store.mutar { $0.fechar(aba.chave) }
                 } label: {
@@ -88,12 +90,19 @@ struct TabBar: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .frame(maxWidth: 200)
-            .background(escolhida ? AnyShapeStyle(.selection) : AnyShapeStyle(.clear),
+            // [13/08/2026] Comportamento de navegador, como a Vanessa pediu: a aba
+            // escolhida é a FOLHA DA FRENTE — fundo branco no claro, quase-preto no
+            // escuro (`.systemBackground`) — e o nome e o ✕ ficam na cor de destaque
+            // dela. Antes a faixa era `.background(.bar)` e a aba escolhida
+            // `.selection`: material e cinza de sistema, que não veem a preferência
+            // de cor ("a cor da aba ta um cinza estranho"). `.orange` do aviso de
+            // sessão morta NÃO muda: é semântico.
+            .background(escolhida ? AnyShapeStyle(Color(.systemBackground)) : AnyShapeStyle(.clear),
                         in: RoundedRectangle(cornerRadius: 6))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(escolhida ? .primary : .secondary)
+        .foregroundStyle(escolhida ? destaque : Color.secondary)
         // D6: toque longo abre o menu. `contextMenu` é o toque longo do iPadOS —
         // não inventar gesto próprio, que brigaria com a rolagem da barra.
         .contextMenu {

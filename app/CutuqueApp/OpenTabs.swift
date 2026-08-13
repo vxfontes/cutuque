@@ -61,13 +61,6 @@ enum TabConteudo: Equatable {
     case morta
 }
 
-/// `passagem` é a aba de preview do VS Code: existe no máximo uma, e a próxima
-/// coisa aberta toma o lugar dela. `fixa` é ortogonal (G3) — protege de "fechar
-/// outras"/"fechar todas".
-enum EstiloDeAba {
-    case passagem, normal
-}
-
 /// O que vai pro disco: chave, título e se é fixa. Conteúdo NÃO vai — é ele que
 /// envelhece, e recriá-lo do disco significaria abrir pane de tmux no boot.
 struct AbaPersistida: Codable, Equatable {
@@ -79,7 +72,6 @@ struct AbaPersistida: Codable, Equatable {
 struct AbaAberta: Identifiable, Equatable {
     let chave: ChaveDeAba
     var titulo: String
-    var estilo: EstiloDeAba
     var fixa: Bool
     var conteudo: TabConteudo
     /// Contador monotônico de foco, não relógio: dá MRU testável sem injetar
@@ -96,26 +88,26 @@ struct OpenTabs: Equatable {
 
     // MARK: abrir e selecionar
 
-    mutating func abrir(chave: ChaveDeAba, titulo: String, conteudo: TabConteudo,
-                        estilo: EstiloDeAba = .passagem) {
+    /// [13/08/2026] Modelo de navegador: abrir NUNCA substitui aba nenhuma. Antes
+    /// existia a "aba de passagem" (preview do VS Code), única, que a próxima
+    /// abertura tomava — decisão minha de 12/08, revogada pela Vanessa: "ao invés de
+    /// funcionar como um navegador que vai abrindo uma ao lado da outra, so se fixar
+    /// funciona". O teto de `maxVivas` continua sendo o que segura o custo: abas
+    /// acumulam na barra e as menos recentes DORMEM (ver `vivas`).
+    mutating func abrir(chave: ChaveDeAba, titulo: String, conteudo: TabConteudo) {
         contadorDeFoco += 1
 
         if let i = abas.firstIndex(where: { $0.chave == chave }) {
-            // Já aberta: foca, atualiza o título e PROMOVE. Nunca duplica, e
-            // nunca rebaixa um conteúdo resolvido de volta a `pendente`.
+            // Já aberta: foca e atualiza o título. Nunca duplica, e nunca
+            // rebaixa um conteúdo resolvido de volta a `pendente`.
             abas[i].titulo = titulo
-            abas[i].estilo = .normal
             abas[i].ordemDeFoco = contadorDeFoco
             if conteudo != .pendente { abas[i].conteudo = conteudo }
             selecionada = chave
             return
         }
 
-        if estilo == .passagem, let i = abas.firstIndex(where: { $0.estilo == .passagem && !$0.fixa }) {
-            abas.remove(at: i)
-        }
-
-        abas.append(AbaAberta(chave: chave, titulo: titulo, estilo: estilo,
+        abas.append(AbaAberta(chave: chave, titulo: titulo,
                               fixa: false, conteudo: conteudo, ordemDeFoco: contadorDeFoco))
         selecionada = chave
     }
@@ -159,7 +151,6 @@ struct OpenTabs: Equatable {
     mutating func fixar(_ chave: ChaveDeAba) {
         guard let i = abas.firstIndex(where: { $0.chave == chave }) else { return }
         abas[i].fixa = true
-        abas[i].estilo = .normal
     }
 
     mutating func desafixar(_ chave: ChaveDeAba) {
@@ -209,7 +200,7 @@ struct OpenTabs: Equatable {
     static func restaurando(_ salvas: [AbaPersistida]) -> OpenTabs {
         var t = OpenTabs()
         for (i, s) in salvas.enumerated() {
-            t.abas.append(AbaAberta(chave: s.chave, titulo: s.titulo, estilo: .normal,
+            t.abas.append(AbaAberta(chave: s.chave, titulo: s.titulo,
                                     fixa: s.fixa, conteudo: Self.conteudoInicial(s.chave),
                                     ordemDeFoco: salvas.count - i))
         }
