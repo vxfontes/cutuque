@@ -32,14 +32,23 @@ struct VisualizadorDeTexto: View {
     /// mesma pista, então as duas metades da tela nunca discordam.
     private var tipo: TipoDeArquivo { TipoDeArquivo.de(nome: entry.name) }
 
-    private var modo: ModoDeTexto { RoteadorDeTexto.modo(para: tipo, verFonte: verFonte) }
+    /// `ehCauda` entra aqui — não só em `mostraFaixaDeCauda` — porque a cauda
+    /// de um `.md` também muda QUAL modo é seguro mostrar, não só se há
+    /// faixa de aviso. Ver o comentário em `RoteadorDeTexto.modo`.
+    private var modo: ModoDeTexto {
+        RoteadorDeTexto.modo(para: tipo, verFonte: verFonte, ehCauda: content.ehCauda)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if Self.mostraFaixaDeCauda(content) {
                 faixaDeCauda
             }
-            if tipo == .markdown {
+            // Cauda de markdown não tem o que alternar: `modo` já força fonte
+            // (achado de revisão, 12/08/2026 — ver `RoteadorDeTexto.modo`), e
+            // mostrar um botão "ver renderizado" que não faz nada seria pior
+            // do que não mostrar botão nenhum.
+            if tipo == .markdown && !content.ehCauda {
                 alternadorDeFonte
             }
             corpo
@@ -140,7 +149,20 @@ enum RoteadorDeTexto {
     /// `verFonte` só muda alguma coisa para markdown: nos demais tipos não
     /// existe alternância — não tem "fonte" e "renderizado" separados para um
     /// `.ts` ou um `.log`, então o parâmetro não é nem consultado fora do `.md`.
-    static func modo(para tipo: TipoDeArquivo, verFonte: Bool) -> ModoDeTexto {
+    ///
+    /// `ehCauda` **sempre vence** `verFonte` para markdown (achado de revisão
+    /// de 12/08/2026): a cauda é "os últimos ~200 KiB depois da primeira
+    /// quebra de linha" — um corte cego, sem noção nenhuma de estrutura de
+    /// markdown. Ela pode cair no meio de uma cerca de código (```) sem par
+    /// ou de uma ênfase (`*`/`**`) sem fechamento vinda do trecho anterior que
+    /// foi descartado, e o `MarkdownText` então interpreta o resto do
+    /// arquivo como código ou engole parágrafos inteiros numa ênfase mal
+    /// formada — um desenho bem diferente do fim real do arquivo, sem aviso
+    /// nenhum além da faixa genérica de cauda. Mostrar sempre o fonte
+    /// colorido evita esse resultado; a faixa de cauda já deixa claro que é
+    /// um recorte, então o fonte é a leitura fiel disponível.
+    static func modo(para tipo: TipoDeArquivo, verFonte: Bool, ehCauda: Bool = false) -> ModoDeTexto {
+        if tipo == .markdown && ehCauda { return .fonte(.markdown) }
         if tipo == .markdown && !verFonte { return .markdownRenderizado }
         return .fonte(tipo.linguagemDoFonte)
     }
@@ -155,15 +177,117 @@ enum IndentadorDeJSON {
     /// exceção — então volta como veio, cru, em vez de travar a tela com um
     /// aviso. Quem julga se o JSON malformado é grave é a usuária lendo, não
     /// esta função.
+    ///
+    /// **Validar e formatar são dois passos separados, de propósito** — achado
+    /// de revisão de 12/08/2026: a versão anterior desta função usava
+    /// `JSONSerialization` para as DUAS coisas (`jsonObject` pra virar
+    /// `[String: Any]`/`NSDictionary`, depois `data(withJSONObject:)` pra
+    /// reserializar). A ordem de iteração de um `Dictionary`/`NSDictionary` do
+    /// Foundation **não é** a ordem do texto original — varia com o seed de
+    /// hash de `String` do processo — então um `package.json` real saía com
+    /// as chaves do topo (e as de dentro de `"scripts"`) em outra ordem a
+    /// cada abertura. Reserializar também reescrevia número: `19.90` virava
+    /// `19.899999999999999` (artefato de ponto flutuante), `0.0` virava `0`.
+    /// Aqui `JSONSerialization` entra só para **validar** ("isto é JSON de
+    /// verdade?"); quem formata é `reindentado(_:)`, que caminha sobre o
+    /// TEXTO original — cada string, número e literal sai byte a byte como
+    /// entrou, só com quebra de linha e indentação ao redor da pontuação
+    /// estrutural (`{ } [ ] : ,`).
     static func indentar(_ texto: String) -> String {
         guard let dados = texto.data(using: .utf8),
-              let objeto = try? JSONSerialization.jsonObject(with: dados, options: [.fragmentsAllowed]),
-              let saida = try? JSONSerialization.data(
-                withJSONObject: objeto,
-                options: [.prettyPrinted, .fragmentsAllowed]
-              ),
-              let indentado = String(data: saida, encoding: .utf8)
+              (try? JSONSerialization.jsonObject(with: dados, options: [.fragmentsAllowed])) != nil
         else { return texto }
-        return indentado
+        return reindentado(texto) ?? texto
+    }
+
+    /// Reformata um JSON já validado por `indentar`, preservando ordem de
+    /// chave e a grafia literal de número (ver o comentário lá em cima).
+    /// Caminha caractere a caractere sabendo só duas coisas: se está dentro
+    /// de uma string — pra copiar o conteúdo sem reinterpretar, e pra não
+    /// confundir um `{`/`:`/`,` que é DADO dentro da string com pontuação
+    /// estrutural — e a profundidade de aninhamento, pra saber quantos
+    /// espaços usar. Nunca reconstrói o valor: só reemite os mesmos
+    /// caracteres ao redor da pontuação estrutural. Mesma filosofia do
+    /// tokenizador do `RealceDeSintaxe`: dado, não reinterpretação.
+    ///
+    /// Devolve `nil` só se a profundidade fechar errado (mais `}`/`]` do que
+    /// `{`/`[` abertos) — não deveria acontecer com texto que
+    /// `JSONSerialization` já validou como JSON, mas é uma rede de segurança:
+    /// melhor cair de volta pro texto cru (mesma regra do JSON inválido) do
+    /// que arriscar uma indentação incoerente.
+    private static func reindentado(_ texto: String) -> String? {
+        let caracteres = Array(texto)
+        let n = caracteres.count
+        var saida = ""
+        saida.reserveCapacity(n + n / 3)
+        var profundidade = 0
+        var i = 0
+
+        func novaLinha(_ nivel: Int) {
+            saida.append("\n")
+            if nivel > 0 { saida.append(String(repeating: "  ", count: nivel)) }
+        }
+
+        while i < n {
+            let c = caracteres[i]
+            if c.isWhitespace {
+                // Espaço/quebra de linha do texto original é ruído aqui — a
+                // formatação inteira (onde quebra, quantos espaços) é
+                // decidida por esta função, não herdada do arquivo de entrada.
+                i += 1
+                continue
+            }
+            switch c {
+            case "\"":
+                // Copia a string inteira, aspas incluídas, sem olhar pro que
+                // tem dentro — é dado. `\` escapa o próximo caractere,
+                // inclusive uma aspa, então uma aspa escapada nunca fecha a
+                // string por engano.
+                saida.append(c)
+                i += 1
+                var escapando = false
+                while i < n {
+                    let dentro = caracteres[i]
+                    saida.append(dentro)
+                    i += 1
+                    if escapando { escapando = false; continue }
+                    if dentro == "\\" { escapando = true; continue }
+                    if dentro == "\"" { break }
+                }
+            case "{", "[":
+                let fechamento: Character = (c == "{") ? "}" : "]"
+                var j = i + 1
+                while j < n, caracteres[j].isWhitespace { j += 1 }
+                saida.append(c)
+                if j < n, caracteres[j] == fechamento {
+                    // Vazio: "{}" ou "[]" sem quebra de linha no meio.
+                    saida.append(fechamento)
+                    i = j + 1
+                } else {
+                    profundidade += 1
+                    novaLinha(profundidade)
+                    i += 1
+                }
+            case "}", "]":
+                profundidade -= 1
+                if profundidade < 0 { return nil }
+                novaLinha(profundidade)
+                saida.append(c)
+                i += 1
+            case ":":
+                saida.append(": ")
+                i += 1
+            case ",":
+                saida.append(",")
+                novaLinha(profundidade)
+                i += 1
+            default:
+                // Dígito de número, letra de true/false/null — sai como
+                // veio, sem reformatar. É a garantia de "mesma grafia".
+                saida.append(c)
+                i += 1
+            }
+        }
+        return profundidade == 0 ? saida : nil
     }
 }

@@ -44,21 +44,93 @@ final class VisualizadorDeTextoTests: XCTestCase {
         XCTAssertEqual(RoteadorDeTexto.modo(para: tipo, verFonte: true), .fonte(.typescript))
     }
 
+    /// Cauda de `.md` nunca vira `markdownRenderizado`, nem com `verFonte`
+    /// no padrão (`false`) — achado de revisão de 12/08/2026: o corte da
+    /// cauda é cego (depois da primeira quebra de linha, sem noção de
+    /// estrutura), pode cair no meio de uma cerca de código ou ênfase sem
+    /// fechamento, e renderizar isso como markdown desenharia algo bem
+    /// diferente do fim real do arquivo.
+    func testCaudaDeMarkdownForcaModoFonteMesmoComVerFonteNoPadrao() {
+        let tipo = TipoDeArquivo.de(nome: "CHANGELOG.md")
+        XCTAssertEqual(
+            RoteadorDeTexto.modo(para: tipo, verFonte: false, ehCauda: true),
+            .fonte(.markdown)
+        )
+    }
+
+    /// A mudança acima não pode vazar pro caso comum: markdown sem cauda
+    /// continua renderizado por padrão.
+    func testMarkdownSemCaudaContinuaRenderizadoPorPadrao() {
+        let tipo = TipoDeArquivo.de(nome: "README.md")
+        XCTAssertEqual(
+            RoteadorDeTexto.modo(para: tipo, verFonte: false, ehCauda: false),
+            .markdownRenderizado
+        )
+    }
+
     // MARK: - Indentação de JSON (função pura)
 
+    /// Comparar só valor por chave (como esta asserção fazia antes) não pega
+    /// embaralhamento de ordem nem reescrita de número — achado de revisão de
+    /// 12/08/2026: a versão anterior de `indentar` passava por
+    /// `JSONSerialization` pra reserializar, o que reordenava as chaves
+    /// (ordem de iteração de `Dictionary` não é a do texto) e reescrevia
+    /// número (`19.90` virava `19.899999999999999`). Por isso as chaves aqui
+    /// estão de propósito fora de ordem alfabética (zebra, abacaxi, meio) e
+    /// os números são exatamente os que a versão antiga corrompia — e a
+    /// asserção agora é a STRING INTEIRA, não só os valores.
     func testJsonValidoSaiIndentadoEContinuaOMesmoDado() throws {
-        let compacto = #"{"nome":"cutuque","versao":2,"tags":["a","b"]}"#
+        let compacto = #"{"zebra":19.90,"abacaxi":0.0,"meio":-1.5e10,"lista":["b","a"]}"#
         let indentado = IndentadorDeJSON.indentar(compacto)
 
         XCTAssertNotEqual(indentado, compacto, "indentar tem que mudar alguma coisa, senão não fez nada")
         XCTAssertTrue(indentado.contains("\n"), "indentado tem quebra de linha")
 
-        // Continua sendo o MESMO dado — só formatado para leitura.
-        let original = try JSONSerialization.jsonObject(with: Data(compacto.utf8)) as? [String: Any]
-        let reformatado = try JSONSerialization.jsonObject(with: Data(indentado.utf8)) as? [String: Any]
-        XCTAssertEqual(original?["nome"] as? String, reformatado?["nome"] as? String)
-        XCTAssertEqual(original?["versao"] as? Int, reformatado?["versao"] as? Int)
-        XCTAssertEqual(original?["tags"] as? [String], reformatado?["tags"] as? [String])
+        // Continua sendo o MESMO dado — só formatado para leitura: mesma
+        // ordem de chave, mesma grafia de número, caractere por caractere.
+        let esperado = """
+        {
+          "zebra": 19.90,
+          "abacaxi": 0.0,
+          "meio": -1.5e10,
+          "lista": [
+            "b",
+            "a"
+          ]
+        }
+        """
+        XCTAssertEqual(indentado, esperado)
+    }
+
+    /// Objeto aninhado tem ordem própria também, não só o nível de cima —
+    /// achado de revisão de 12/08/2026: um `package.json` real saía com a
+    /// ordem de `"scripts"` embaralhada, não só a do topo.
+    func testJsonValidoPreservaOrdemDeChaveEmObjetoAninhado() {
+        let compacto = #"{"scripts":{"build":"tsc","start":"node ."},"nome":"cutuque"}"#
+        let esperado = """
+        {
+          "scripts": {
+            "build": "tsc",
+            "start": "node ."
+          },
+          "nome": "cutuque"
+        }
+        """
+        XCTAssertEqual(IndentadorDeJSON.indentar(compacto), esperado)
+    }
+
+    /// Objeto/array vazio não pode abrir uma quebra de linha vazia no meio —
+    /// caso de borda do pretty-printer que caminha sobre o texto (em vez de
+    /// reserializar), então tem teste próprio.
+    func testJsonComObjetoEArrayVaziosSaiSemQuebraDeLinhaNoMeio() {
+        let compacto = #"{"vazio":{},"lista":[]}"#
+        let esperado = """
+        {
+          "vazio": {},
+          "lista": []
+        }
+        """
+        XCTAssertEqual(IndentadorDeJSON.indentar(compacto), esperado)
     }
 
     /// JSON quebrado (chave sem fechar) é o caso normal de um arquivo em
