@@ -249,6 +249,10 @@ struct SessionDetailView: View {
     /// passa nada aqui.
     var ownsNavigationTitle: Bool = true
     @State private var draft = ""
+    /// Marca de uso ÚNICO: o `.onKeyPress` vê o ⇧⏎ antes de o TextField inserir a
+    /// quebra, e é só assim que o `.onChange` seguinte sabe distinguir "quebra
+    /// pedida de propósito" de "Enter para enviar" — ver ComposerEnter.
+    @State private var quebraIntencional = false
     @State private var showScrollToBottom = false
     @State private var renaming = false
     @State private var renameText = ""
@@ -620,6 +624,44 @@ struct SessionDetailView: View {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.actionInProgress
     }
 
+    /// Caminho ÚNICO de envio do rascunho — botão e ⏎ passam os dois por aqui, para
+    /// não existir uma via com guarda e outra sem. Quando as guardas não passam, o
+    /// texto VOLTA pro campo (⏎ durante uma ação em voo não pode engolir o que ela
+    /// digitou).
+    ///
+    /// O ⏎ NUNCA cai no "parar" que o botão vira com a sessão rodando: tecla que
+    /// interrompe agente sem confirmação é exatamente o que o card
+    /// 6b74500a1fd9a1f2 evitou no botão. Com a sessão rodando o ⏎ envia texto ao
+    /// agente, que é o que os quick replies já fazem nesse mesmo estado.
+    private func enviarDraft(_ texto: String) {
+        guard !texto.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !model.actionInProgress
+        else {
+            draft = texto
+            return
+        }
+        // Tira JÁ a quebra que disparou o envio. O campo só se limpa quando o envio
+        // dá certo (linha de baixo), e sem isto uma falha deixaria o texto de volta
+        // com um `\n` pendurado no fim.
+        draft = texto
+        Task {
+            if model.recapUnavailable {
+                // Sessão morta (encerrou sem transcript): não dá pra retomar.
+                // "Continuar" = começar uma tarefa nova na mesma máquina e
+                // navegar até ela.
+                if let novo = await model.launchNew(texto) {
+                    draft = ""
+                    router.openSession(novo.id)
+                }
+            } else if await model.sendInput(texto) {
+                // Viva → responde ao agente em andamento; encerrada com
+                // transcript → o hub retoma (claude --resume) e a resposta chega
+                // nesta mesma tela via WS.
+                draft = ""
+            }
+        }
+    }
+
     /// Sessão tmux-adotada (TUI de verdade por trás do pane, `pane` não
     /// vazio) — o interrupt manda só Esc ao pane e a sessão CONTINUA
     /// rodando (hub: `Launcher.Interrupt`, `InterruptEffectPaused`). Sem pane
@@ -731,6 +773,27 @@ struct SessionDetailView: View {
             .padding(.vertical, 11)
             .background(Color(.secondarySystemGroupedBackground), in: Capsule())
             .focused($inputFocused)
+            // ⇧⏎ é quebra de linha: deixa o TextField inserir o `\n` e avisa o
+            // onChange para NÃO tratar essa quebra como envio.
+            .onKeyPress(phases: .down) { press in
+                if ComposerEnter.ehQuebraIntencional(key: press.key, modifiers: press.modifiers) {
+                    quebraIntencional = true
+                }
+                return .ignored
+            }
+            // ⏎ envia. Não dá para usar onSubmit: o campo é multilinha
+            // (axis: .vertical) e nesse modo o Return só insere `\n` e nunca
+            // dispara onSubmit. Reconhecer o `\n` cobre os DOIS teclados — o de
+            // tela do iPad não passa por onKeyPress nenhum.
+            .onChange(of: draft) { anterior, novo in
+                switch ComposerEnter.acao(anterior: anterior, novo: novo,
+                                          quebraIntencional: quebraIntencional) {
+                case .nada: break
+                case .limpar: draft = ""
+                case .enviar(let texto): enviarDraft(texto)
+                }
+                quebraIntencional = false
+            }
 
             Button {
                 // Rodando: o botão circular vira "parar" (card 6b74500a1fd9a1f2)
@@ -739,23 +802,7 @@ struct SessionDetailView: View {
                     confirmingInterrupt = true
                     return
                 }
-                let text = draft
-                Task {
-                    if model.recapUnavailable {
-                        // Sessão morta (encerrou sem transcript): não dá pra
-                        // retomar. "Continuar" = começar uma tarefa nova na
-                        // mesma máquina e navegar até ela.
-                        if let novo = await model.launchNew(text) {
-                            draft = ""
-                            router.openSession(novo.id)
-                        }
-                    } else if await model.sendInput(text) {
-                        // Viva → responde ao agente em andamento; encerrada com
-                        // transcript → o hub retoma (claude --resume) e a
-                        // resposta chega nesta mesma tela via WS.
-                        draft = ""
-                    }
-                }
+                enviarDraft(draft)
             } label: {
                 Group {
                     if model.actionInProgress {

@@ -192,6 +192,10 @@ struct TerminalMirrorView: View {
     @Environment(\.corDeDestaque) private var destaque
     @State private var input = ""
     @State private var confirmingKill = false
+    /// Marca de uso ÚNICO: o `.onKeyPress` vê o ⇧⏎ antes de o TextField inserir a
+    /// quebra, e é só assim que o `.onChange` seguinte sabe distinguir "quebra
+    /// pedida de propósito" de "Enter para enviar" — ver ComposerEnter.
+    @State private var quebraIntencional = false
     @FocusState private var inputFocused: Bool
     @AppStorage("cutuque.terminalTheme") private var themeRaw = TerminalTheme.dark.rawValue
     private var theme: TerminalTheme { TerminalTheme(rawValue: themeRaw) ?? .dark }
@@ -604,17 +608,34 @@ struct TerminalMirrorView: View {
                 // elemento focável desta tela, então mover (em vez de duplicar)
                 // não perde nenhum caso que já funcionava.
                 .onKeyPress(phases: .down) { press in
+                    // ⇧⏎ é quebra de linha: deixa o TextField inserir o `\n` e
+                    // avisa o onChange para NÃO tratar essa quebra como envio.
+                    if ComposerEnter.ehQuebraIntencional(key: press.key, modifiers: press.modifiers) {
+                        quebraIntencional = true
+                        return .ignored
+                    }
                     guard let key = TerminalKeyboard.tmuxKey(for: press.key.character,
                                                              modifiers: press.modifiers)
                     else { return .ignored }
                     Task { await model.sendKey(key) }
                     return .handled
                 }
+                // ⏎ envia. Não dá para usar onSubmit: o campo é multilinha
+                // (axis: .vertical) e nesse modo o Return só insere `\n` e nunca
+                // dispara onSubmit. Reconhecer o `\n` cobre os DOIS teclados — o
+                // de tela do iPad não passa por onKeyPress nenhum.
+                .onChange(of: input) { anterior, novo in
+                    switch ComposerEnter.acao(anterior: anterior, novo: novo,
+                                              quebraIntencional: quebraIntencional) {
+                    case .nada: break
+                    case .limpar: input = ""
+                    case .enviar(let texto): enviarInput(texto)
+                    }
+                    quebraIntencional = false
+                }
 
             Button {
-                let text = input
-                input = ""
-                Task { await model.send(text) }
+                enviarInput(input)
             } label: {
                 if model.sending {
                     ProgressView().tint(.white).frame(width: 34, height: 34)
@@ -632,6 +653,19 @@ struct TerminalMirrorView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
+    }
+
+    /// Caminho ÚNICO de envio da linha — botão, ⌘⏎ e ⏎ passam todos por aqui, para
+    /// não existir uma via com guarda e outra sem. As guardas são as mesmas que
+    /// desabilitam o botão; quando não passam, o texto VOLTA pro campo (⏎ durante
+    /// um envio em voo não pode engolir o que ela digitou).
+    private func enviarInput(_ texto: String) {
+        guard !texto.trimmingCharacters(in: .whitespaces).isEmpty, !model.sending else {
+            input = texto
+            return
+        }
+        input = ""
+        Task { await model.send(texto) }
     }
 }
 
