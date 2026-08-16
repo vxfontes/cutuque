@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 	_ "time/tzdata" // tz embutida: LoadLocation("America/Sao_Paulo") funciona no container alpine
@@ -197,7 +198,7 @@ func main() {
 	for _, w := range machineWarns {
 		logger.Warn("CUTUQUE_SSH_TARGETS", "aviso", w)
 	}
-	targets := buildTargets(machines)
+	targets := buildTargets(machines, localShellLigado())
 	lch := launcher.New(eng, reg, targets)
 	lch.SetMaxSessions(cfg.MaxSessions) // SEC-007: teto de sessões concorrentes
 
@@ -328,13 +329,25 @@ func main() {
 // (mesmo comportamento de antes da Fase 5). Não-vazia: cada entrada vira um
 // SSHTarget — nenhum LocalTarget implícito é adicionado, então quem quiser o
 // macbook local precisa listá-lo explicitamente (ele deixa de ser "grátis").
-func buildTargets(machines []machine.Machine) map[string]map[string]claudecode.Target {
+func buildTargets(machines []machine.Machine, localShell bool) map[string]map[string]claudecode.Target {
 	// Cada máquina roda os dois agentes (claude-code + codex). O mapa é
 	// máquina → agente (t.Kind()) → alvo; o Launcher escolhe pelo agente pedido.
 	if len(machines) == 0 {
+		// [16/08/2026] localShell troca SÓ o alvo do claude-code por um que
+		// abre terminal dentro do container (ver claudecode.LocalShellTarget).
+		// Basta esse: Launcher.anyTarget — que é quem o terminal usa — prefere
+		// o claude-code deterministicamente, então é sempre ele o escolhido.
+		//
+		// Afeta apenas ESTE ramo, o do fallback sem CUTUQUE_SSH_TARGETS. Com
+		// máquinas configuradas os alvos são SSHTargets, que já têm shell de
+		// verdade, e a env não muda nada.
+		var cc claudecode.Target = claudecode.NewLocalTarget("macbook")
+		if localShell {
+			cc = claudecode.NewLocalShellTarget("macbook")
+		}
 		return map[string]map[string]claudecode.Target{
 			"macbook": agentMap(
-				claudecode.NewLocalTarget("macbook"),
+				cc,
 				codex.NewLocalTarget("macbook"),
 				opencode.NewLocalTarget("macbook"),
 			),
@@ -415,6 +428,25 @@ func machinesForRegistry(ms []machine.Machine) []machine.Machine {
 }
 
 // agentMap indexa alvos pelo agente que cada um representa (t.Kind()).
+// localShellLigado [16/08/2026] lê CUTUQUE_LOCAL_SHELL, a chave que libera o
+// terminal DENTRO do container do hub (ver claudecode.LocalShellTarget).
+//
+// Existe para a caixa pública de demonstração do review da App Store, onde não
+// há máquina nenhuma do outro lado de um ssh e o revisor ainda assim precisa
+// abrir um terminal. NÃO ligue no hub de casa: lá o terminal deve ser a máquina
+// de verdade, e um shell no container passando por macbook seria mentira.
+//
+// Desligado por omissão e por qualquer valor que não seja um "sim" explícito —
+// uma env var que liga sozinha por estar presente e vazia é o tipo de coisa que
+// liga sem ninguém ter pedido.
+func localShellLigado() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CUTUQUE_LOCAL_SHELL"))) {
+	case "1", "true", "yes", "on", "sim":
+		return true
+	}
+	return false
+}
+
 func agentMap(ts ...claudecode.Target) map[string]claudecode.Target {
 	m := make(map[string]claudecode.Target, len(ts))
 	for _, t := range ts {

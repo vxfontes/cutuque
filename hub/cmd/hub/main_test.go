@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"testing"
 	"time"
 
@@ -50,7 +51,7 @@ func TestMachinesForRegistryNaoMexeQuandoHaEnv(t *testing.T) {
 // pedida na Fase 5: sem CUTUQUE_SSH_TARGETS, o comportamento é o de antes
 // (LocalTarget "macbook").
 func TestBuildTargetsFallsBackToLocalMacbookWhenEmpty(t *testing.T) {
-	targets := buildTargets(nil)
+	targets := buildTargets(nil, false)
 	if len(targets) != 1 {
 		t.Fatalf("targets = %v, quero só o macbook local", targets)
 	}
@@ -66,6 +67,73 @@ func TestBuildTargetsFallsBackToLocalMacbookWhenEmpty(t *testing.T) {
 	}
 }
 
+// TestBuildTargetsLocalShellSoTrocaOClaudeCode [16/08/2026]: com
+// CUTUQUE_LOCAL_SHELL ligado, o alvo do claude-code vira o que abre terminal
+// dentro do container (caixa pública do review da App Store). Só ele: é o
+// claude-code que o Launcher.anyTarget escolhe deterministicamente, e trocar os
+// outros seria mexer onde não precisa.
+func TestBuildTargetsLocalShellSoTrocaOClaudeCode(t *testing.T) {
+	byAgent := buildTargets(nil, true)["macbook"]
+
+	tgt, ok := byAgent["claude-code"].(*claudecode.LocalShellTarget)
+	if !ok {
+		t.Fatalf("targets[\"macbook\"][claude-code] = %T, quero *claudecode.LocalShellTarget", byAgent["claude-code"])
+	}
+	if tgt.Name() != "macbook" {
+		t.Errorf("Name() = %q, quero \"macbook\" — se mudar, /machines e o Launcher deixam de se encontrar", tgt.Name())
+	}
+	if _, isCodex := byAgent["codex"].(*codex.LocalTarget); !isCodex {
+		t.Errorf("targets[\"macbook\"][codex] = %T, quero o *codex.LocalTarget de sempre", byAgent["codex"])
+	}
+}
+
+// TestBuildTargetsLocalShellNaoMexeQuandoHaMaquinas: a chave só governa o ramo
+// do fallback. Com CUTUQUE_SSH_TARGETS configurado os alvos são SSHTargets, que
+// já têm shell de verdade — ligar a env aí não pode transformar máquina remota
+// em shell de container.
+func TestBuildTargetsLocalShellNaoMexeQuandoHaMaquinas(t *testing.T) {
+	targets := buildTargets([]machine.Machine{
+		{Name: "macbook", Dest: "user@192.0.2.20", Port: 22, Source: machine.SourceEnv},
+	}, true)
+
+	if _, isSSH := targets["macbook"]["claude-code"].(*claudecode.SSHTarget); !isSSH {
+		t.Errorf("targets[\"macbook\"][claude-code] = %T, quero *claudecode.SSHTarget mesmo com localShell ligado", targets["macbook"]["claude-code"])
+	}
+}
+
+// TestLocalShellLigado: a chave abre um terminal dentro do container, então o
+// default tem que ser "não" e o "sim" tem que ser explícito. Em especial env var
+// PRESENTE porém vazia (o jeito clássico de um compose "desligar" algo) não pode
+// ligar nada.
+func TestLocalShellLigado(t *testing.T) {
+	casos := map[string]bool{
+		"1": true, "true": true, "yes": true, "on": true, "sim": true,
+		"TRUE": true, " sim ": true, // maiúscula e espaço sobrando não deveriam decidir nada
+		"":       false,
+		"0":      false,
+		"false":  false,
+		"no":     false,
+		"nao":    false,
+		"talvez": false, // valor sem sentido → desligado, nunca "presente logo ligado"
+	}
+	for valor, quero := range casos {
+		t.Run("valor="+valor, func(t *testing.T) {
+			t.Setenv("CUTUQUE_LOCAL_SHELL", valor)
+			if got := localShellLigado(); got != quero {
+				t.Errorf("localShellLigado() com %q = %v, quero %v", valor, got, quero)
+			}
+		})
+	}
+
+	t.Run("env ausente", func(t *testing.T) {
+		t.Setenv("CUTUQUE_LOCAL_SHELL", "irrelevante") // só para o cleanup restaurar
+		os.Unsetenv("CUTUQUE_LOCAL_SHELL")
+		if localShellLigado() {
+			t.Error("sem a env var o terminal local ligou sozinho")
+		}
+	})
+}
+
 // TestBuildTargetsUsesSSHTargetsWhenConfigured cobre a Fase 5: com a env var
 // setada, os alvos viram SSHTarget (hub numa máquina, claude noutra via ssh) —
 // nenhum LocalTarget implícito é adicionado.
@@ -73,7 +141,7 @@ func TestBuildTargetsUsesSSHTargetsWhenConfigured(t *testing.T) {
 	targets := buildTargets([]machine.Machine{
 		{Name: "macbook", Dest: "user@192.0.2.20", Port: 22, Source: machine.SourceEnv},
 		{Name: "macmini", Dest: "remote-host", Port: 22, Source: machine.SourceEnv},
-	})
+	}, false)
 	if len(targets) != 2 {
 		t.Fatalf("targets = %v, quero 2 entradas", targets)
 	}

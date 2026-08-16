@@ -2,6 +2,7 @@ package claudecode
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -133,6 +134,78 @@ func (t *LocalTarget) Start(ctx context.Context, resumeID, cwd, model, effort, _
 		return nil, err
 	}
 	return h, nil
+}
+
+// LocalShellTarget [16/08/2026] é um LocalTarget que TAMBÉM abre um shell
+// dentro do próprio hub. Existe para UM caso só: a caixa pública de
+// demonstração do review da App Store, onde o revisor precisa de um terminal de
+// verdade mas não há (nem pode haver) máquina nenhuma do outro lado de um ssh.
+//
+// É um TIPO SEPARADO, e não um campo bool no LocalTarget, de propósito. A
+// invariante que o hub mantém é "máquina local não tem shell" (ver ShellDialer
+// em agent/target.go e Launcher.ShellCommand, que devolve ErrNoShell para ela) —
+// e quem decide isso é uma type assertion. Um bool faria o LocalTarget satisfazer
+// ShellDialer ESTATICAMENTE: a assertion passaria sempre, o ErrNoShell nunca mais
+// aconteceria e a invariante morreria em produção junto. Com um tipo à parte, o
+// LocalTarget de produção continua sem shell e nada no caminho de sempre muda.
+//
+// Só o main.go constrói isto, e só quando CUTUQUE_LOCAL_SHELL está ligado.
+type LocalShellTarget struct {
+	*LocalTarget
+}
+
+// NewLocalShellTarget cria o alvo local COM terminal. Ver LocalShellTarget para
+// por que isto não é uma flag do NewLocalTarget.
+func NewLocalShellTarget(name string) *LocalShellTarget {
+	return &LocalShellTarget{LocalTarget: NewLocalTarget(name)}
+}
+
+// ShellCommand monta o shell interativo dentro do container do hub — o análogo
+// local do SSHTarget.ShellCommand, e a única razão deste tipo existir.
+//
+// Três decisões, e o porquê de cada uma:
+//
+// `-i` e NÃO `-l`: um login shell serviria para carregar o PATH do perfil do
+// usuário, mas aqui não precisa — o ShellEnv já carrega o PATH do próprio hub
+// (ver agent.ChildEnv), que num container é o PATH bom. E `-l` teria custo: a
+// imagem final é alpine, cujo /bin/sh é o busybox, e depender de uma flag que
+// pode não existir lá trocaria um problema resolvido por um risco de runtime.
+// `-i` é POSIX, todo shell aceita.
+//
+// ShellEnv e não childEnv: sem ele o TERM vai `dumb` e o SwiftTerm do app
+// recebe um terminal que não sabe se limpar — a mesma armadilha documentada no
+// SSHTarget.ShellCommand, que aqui morde igual.
+//
+// Sem cmd.Dir: o shell abre onde o hub roda. Apontar para o HOME parece mais
+// simpático, mas HOME pode não existir no container, e Dir inexistente faz o
+// exec falhar inteiro — um terminal que não abre é pior que um terminal que
+// abre no diretório errado, e `cd` resolve o segundo.
+//
+// CUIDADO ao montar a imagem: `-i` faz o shell LER OS RC FILES (~/.bashrc, ou
+// $ENV no busybox). O ambiente do processo está protegido pela allowlist do
+// ShellEnv — verificado rodando o hub e pedindo o CUTUQUE_TOKEN pelo terminal,
+// que voltou vazio —, mas o que estiver EXPORTADO num rc dentro da imagem
+// aparece para quem digita. Numa alpine limpa não há rc nenhum; a imagem da
+// caixa de demonstração precisa continuar assim.
+func (t *LocalShellTarget) ShellCommand(ctx context.Context) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, localShellProg(), "-i")
+	cmd.Env = shellEnv()
+	return cmd
+}
+
+// localShellProg escolhe o shell do terminal local: o do usuário se declarado,
+// senão bash se instalado, senão /bin/sh — que sempre existe, inclusive no
+// alpine (busybox). Resolvido a cada chamada e não no boot: a checagem é barata
+// perto de subir um pty, e assim a imagem pode ganhar um bash sem o hub precisar
+// reiniciar para enxergá-lo.
+func localShellProg() string {
+	if sh := os.Getenv("SHELL"); sh != "" {
+		return sh
+	}
+	if p, err := exec.LookPath("bash"); err == nil {
+		return p
+	}
+	return "/bin/sh"
 }
 
 // defaultRemoteClaudeCmd é o comando/caminho do claude remoto quando nada é

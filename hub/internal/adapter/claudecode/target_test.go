@@ -362,6 +362,112 @@ func TestShellCommandDeclaraTerminalDeVerdade(t *testing.T) {
 	}
 }
 
+// TestLocalTargetNaoTemShell guarda a invariante que o hub inteiro assume:
+// máquina "local" É o próprio hub, e abrir um shell dentro do container não é
+// entrar numa máquina. Quem decide isso é a type assertion do
+// Launcher.ShellCommand, que sem ShellDialer devolve ErrNoShell — este teste
+// existe para que ninguém "conserte" isso dando um ShellCommand ao LocalTarget e
+// mate a distinção sem perceber.
+func TestLocalTargetNaoTemShell(t *testing.T) {
+	var tgt Target = NewLocalTarget("macbook")
+	if _, temShell := tgt.(ShellDialer); temShell {
+		t.Fatal("LocalTarget virou ShellDialer: o terminal passaria a abrir DENTRO do container do hub achando que é a máquina da usuária")
+	}
+}
+
+// TestLocalShellTargetTemShellEContinuaSendoAlvo: o tipo da caixa de
+// demonstração precisa das DUAS coisas ao mesmo tempo — abrir terminal e seguir
+// sendo um Target normal (o embed do *LocalTarget é que garante a segunda; sem
+// ela o alvo não lançaria sessão nenhuma e o hub de demo só teria terminal).
+func TestLocalShellTargetTemShellEContinuaSendoAlvo(t *testing.T) {
+	var tgt Target = NewLocalShellTarget("macbook")
+
+	if _, temShell := tgt.(ShellDialer); !temShell {
+		t.Fatal("LocalShellTarget não é ShellDialer: o terminal da caixa de demonstração não abriria")
+	}
+	if tgt.Name() != "macbook" {
+		t.Errorf("Name() = %q, quero %q (veio do LocalTarget embutido)", tgt.Name(), "macbook")
+	}
+	if tgt.Kind() != agentKind {
+		t.Errorf("Kind() = %q, quero %q — se mudar, o agentMap o registra na chave errada", tgt.Kind(), agentKind)
+	}
+}
+
+// TestLocalShellCommandAbreShellInterativo: sem `-i` o shell pode decidir que
+// não é interativo, e o revisor da Apple receberia um terminal mudo — sem
+// prompt, sem histórico. E `-l` fica DE FORA de propósito: a imagem final é
+// alpine (busybox), o PATH já vem pelo ShellEnv, e depender de uma flag que o
+// busybox pode não aceitar trocaria um problema resolvido por um risco de
+// runtime.
+func TestLocalShellCommandAbreShellInterativo(t *testing.T) {
+	args := NewLocalShellTarget("macbook").ShellCommand(context.Background()).Args
+
+	if len(args) != 2 {
+		t.Fatalf("Args = %v, quero exatamente [shell -i] — nenhum comando a executar, senão o shell roda e sai", args)
+	}
+	if args[1] != "-i" {
+		t.Errorf("Args[1] = %q, quero \"-i\"", args[1])
+	}
+	if slices.Contains(args, "-l") {
+		t.Error("apareceu -l: login shell não é necessário (o PATH vem do ShellEnv) e o busybox do alpine pode não aceitar")
+	}
+}
+
+// TestLocalShellCommandDeclaraTerminalDeVerdade é o irmão local do teste do
+// SSHTarget: a armadilha do TERM=dumb morde igual aqui. O hub é um container sem
+// tty, então não há TERM para a allowlist copiar, e quem desenha a tela é o
+// SwiftTerm do app.
+func TestLocalShellCommandDeclaraTerminalDeVerdade(t *testing.T) {
+	t.Setenv("TERM", "xterm-ghostty") // terminfo exótico do terminal de quem subiu o hub
+
+	env := NewLocalShellTarget("macbook").ShellCommand(context.Background()).Env
+
+	var terms []string
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "TERM=") {
+			terms = append(terms, kv)
+		}
+	}
+	// UMA entrada só, mesmo motivo do SSHTarget: getenv lê a PRIMEIRA.
+	if len(terms) != 1 {
+		t.Fatalf("quero exatamente um TERM no ambiente, tenho %v (env: %v)", terms, env)
+	}
+	if terms[0] != "TERM="+agent.TerminalTERM {
+		t.Errorf("TERM do terminal local é %q, quero %q", terms[0], "TERM="+agent.TerminalTERM)
+	}
+}
+
+// TestLocalShellCommandNaoVazaAmbienteDoHub: a allowlist do ChildEnv (SEC-006)
+// vale aqui MAIS que em qualquer lugar. Este shell roda dentro do container e
+// vai para a mão de um revisor desconhecido; herdar os.Environ() entregaria o
+// CUTUQUE_TOKEN e as credenciais APNs num `env`.
+func TestLocalShellCommandNaoVazaAmbienteDoHub(t *testing.T) {
+	t.Setenv("CUTUQUE_TOKEN", "segredo-do-hub")
+
+	env := NewLocalShellTarget("macbook").ShellCommand(context.Background()).Env
+
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "CUTUQUE_") {
+			t.Errorf("o ambiente do hub vazou para o terminal do revisor: %q (env: %v)", kv, env)
+		}
+	}
+}
+
+// TestLocalShellProgPrefereOShellDoUsuario: a escolha do shell é por queda —
+// $SHELL, senão bash, senão /bin/sh. O último degrau é o que importa em
+// produção, porque no alpine não há bash e $SHELL costuma vir vazio.
+func TestLocalShellProgPrefereOShellDoUsuario(t *testing.T) {
+	t.Setenv("SHELL", "/usr/bin/fish")
+	if got := localShellProg(); got != "/usr/bin/fish" {
+		t.Errorf("localShellProg() = %q, quero o $SHELL declarado", got)
+	}
+
+	t.Setenv("SHELL", "")
+	if got := localShellProg(); got == "" {
+		t.Fatal("localShellProg() vazio: o exec falharia sem sequer dizer o que faltou")
+	}
+}
+
 // primeiroStrict devolve o valor da PRIMEIRA opção StrictHostKeyChecking — a
 // única que o ssh leva em conta.
 func primeiroStrict(args []string) string {
