@@ -109,15 +109,15 @@ func TestWSNewSessionBroadcasts(t *testing.T) {
 // Garante que o heartbeat de ping não quebra o stream: com um intervalo curto,
 // vários pings disparam e o cliente ainda recebe session_updated normalmente.
 func TestWSSurvivesPingTicks(t *testing.T) {
-	saved := wsPingInterval
-	wsPingInterval = 20 * time.Millisecond
-	defer func() { wsPingInterval = saved }()
-
+	// [16/08/2026] Isto reatribuía a global do intervalo de ping
+	// (save/overwrite/defer-restore) — mesmo padrão do pty_test.go que corria
+	// com a goroutine de produção e cegava o `-race` do pacote (ver comentário
+	// em ws.go). O prazo curto agora vai por injeção (WithWSTimeouts).
 	cfg, reg := testDeps()
 	base := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
 	reg.Add(session.Session{ID: "a", Machine: "macbook", Agent: "claude-code", Title: "t1", State: session.StateRunning, CreatedAt: base, UpdatedAt: base})
 
-	srv := httptest.NewServer(Router(cfg, reg, nil))
+	srv := httptest.NewServer(Router(cfg, reg, nil, WithWSTimeouts(20*time.Millisecond, 10*time.Second)))
 	defer srv.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

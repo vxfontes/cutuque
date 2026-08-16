@@ -289,13 +289,18 @@ func TestPTYShellQueIgnoraSIGHUPMorreNoKill(t *testing.T) {
 // pong. Prova as duas metades: com o cliente vivo, vários pings passam e nada é
 // derrubado; congelado, o shell morre.
 func TestPTYClienteCongeladoCaiNoPingSemPong(t *testing.T) {
-	salvoPing, salvoEscrita := wsPingInterval, wsWriteTimeout
-	wsPingInterval, wsWriteTimeout = 50*time.Millisecond, 300*time.Millisecond
-	defer func() { wsPingInterval, wsWriteTimeout = salvoPing, salvoEscrita }()
+	// [16/08/2026] Isto reatribuía as duas globais de ping/escrita do
+	// WebSocket (save/overwrite/defer-restore) para encurtar o teste. Corria
+	// com a goroutine de produção que lê essas mesmas variáveis —
+	// httptest.Server.Close() não espera a goroutine "hijacked" terminar,
+	// então não há happens-before entre o defer-restore e a leitura em
+	// produção. `go test -race` pegava a race de verdade. Agora os prazos
+	// curtos vão por injeção (WithWSTimeouts), sem tocar em global nenhuma.
+	ping, escrita := 50*time.Millisecond, 300*time.Millisecond
 
 	arquivo := filepath.Join(t.TempDir(), "pid")
 	cfg, reg := testDeps()
-	srv := httptest.NewServer(Router(cfg, reg, shellQueAvisaOPid(arquivo)))
+	srv := httptest.NewServer(Router(cfg, reg, shellQueAvisaOPid(arquivo), WithWSTimeouts(ping, escrita)))
 	defer srv.Close()
 
 	endereco, congelar := proxyCongelavel(t, strings.TrimPrefix(srv.URL, "http://"))
@@ -320,14 +325,14 @@ func TestPTYClienteCongeladoCaiNoPingSemPong(t *testing.T) {
 	}()
 
 	pid := pidGravado(t, arquivo)
-	time.Sleep(6 * wsPingInterval)
+	time.Sleep(6 * ping)
 	if !vivo(pid) {
 		t.Fatalf("o shell morreu com o cliente SAUDÁVEL — o ping está derrubando conexão boa")
 	}
 
 	congelar()
 	t.Logf("shell morto e colhido em %s depois de o cliente congelar (ping %s, prazo do pong %s)",
-		esperaMorrer(t, pid, 20*time.Second), wsPingInterval, wsWriteTimeout)
+		esperaMorrer(t, pid, 20*time.Second), ping, escrita)
 }
 
 // proxyCongelavel é um proxy TCP que, ao congelar, PARA de repassar bytes sem

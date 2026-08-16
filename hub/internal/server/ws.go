@@ -17,10 +17,27 @@ import (
 // troca de rede) prenderia a goroutine, a Subscription e o buffer do canal
 // indefinidamente (ver review/security.md, item bloqueante #2). O ping
 // periódico detecta a queda; o timeout por escrita evita bloqueio longo.
-var (
-	wsPingInterval = 30 * time.Second
-	wsWriteTimeout = 10 * time.Second
-)
+//
+// [16/08/2026] Isto já foi um `var` de pacote reatribuído por teste
+// (save/overwrite/defer-restore) para encurtar os prazos. O problema: a
+// goroutine de produção (vigiaCliente/WSHandler) lê essa mesma variável, e
+// httptest.Server.Close() NÃO espera a goroutine da conexão "hijacked"
+// terminar — não há happens-before entre o defer que restaura e a leitura em
+// produção. Resultado: `go test -race` pegava DATA RACE de verdade, não em
+// código de produção (que nunca reatribui isto fora do init), mas o bastante
+// para cegar o detector no pacote inteiro. Virou um tipo não-exportado
+// passado por injeção (RouterOption WithWSTimeouts em server.go) — teste
+// encurta o valor que RECEBE, nunca reatribui o que produção lê.
+type prazosWS struct {
+	ping    time.Duration
+	escrita time.Duration
+}
+
+// prazosWSPadrao é o valor de produção: o mesmo que já era o default antes
+// desta virar injeção (ver comentário acima).
+func prazosWSPadrao() prazosWS {
+	return prazosWS{ping: 30 * time.Second, escrita: 10 * time.Second}
+}
 
 // snapshotMessage é enviada ao conectar: o estado atual de todas as sessões.
 type snapshotMessage struct {
@@ -72,7 +89,7 @@ type boardRemovedMessage struct {
 // Se bd não for nil, também transmite o estado do quadro Kanban (Cutuque
 // Board): um snapshot inicial e uma mensagem por mudança no store. Se bd for
 // nil, o handler funciona exatamente como antes (aditivo/seguro).
-func WSHandler(reg *registry.Registry, bd board.Store) http.HandlerFunc {
+func WSHandler(reg *registry.Registry, bd board.Store, prazos prazosWS) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, nil)
 		if err != nil {
@@ -110,18 +127,18 @@ func WSHandler(reg *registry.Registry, bd board.Store) http.HandlerFunc {
 		ctx := c.CloseRead(r.Context())
 
 		snap := snapshotMessage{Type: "snapshot", Sessions: reg.List()}
-		if err := writeJSON(ctx, c, snap); err != nil {
+		if err := writeJSON(ctx, c, snap, prazos.escrita); err != nil {
 			return
 		}
 
 		if bd != nil {
 			boardSnap := boardSnapshotMessage{Type: "board_snapshot", Tasks: bd.List()}
-			if err := writeJSON(ctx, c, boardSnap); err != nil {
+			if err := writeJSON(ctx, c, boardSnap, prazos.escrita); err != nil {
 				return
 			}
 		}
 
-		ping := time.NewTicker(wsPingInterval)
+		ping := time.NewTicker(prazos.ping)
 		defer ping.Stop()
 
 		for {
@@ -131,7 +148,7 @@ func WSHandler(reg *registry.Registry, bd board.Store) http.HandlerFunc {
 			case <-ping.C:
 				// Ping com timeout: se a conexão morreu, encerra e libera a
 				// subscription/goroutine pelos defers acima.
-				pctx, cancel := context.WithTimeout(ctx, wsWriteTimeout)
+				pctx, cancel := context.WithTimeout(ctx, prazos.escrita)
 				err := c.Ping(pctx)
 				cancel()
 				if err != nil {
@@ -142,7 +159,7 @@ func WSHandler(reg *registry.Registry, bd board.Store) http.HandlerFunc {
 					return // registry encerrou a assinatura
 				}
 				msg := updatedMessage{Type: "session_updated", Session: s}
-				if err := writeJSON(ctx, c, msg); err != nil {
+				if err := writeJSON(ctx, c, msg, prazos.escrita); err != nil {
 					return
 				}
 			case o, ok := <-outSub.C:
@@ -150,7 +167,7 @@ func WSHandler(reg *registry.Registry, bd board.Store) http.HandlerFunc {
 					return
 				}
 				msg := outputMessage{Type: "output_chunk", SessionID: o.SessionID, Kind: o.Kind, Data: o.Text}
-				if err := writeJSON(ctx, c, msg); err != nil {
+				if err := writeJSON(ctx, c, msg, prazos.escrita); err != nil {
 					return
 				}
 			case id, ok := <-sub.Removed:
@@ -158,7 +175,7 @@ func WSHandler(reg *registry.Registry, bd board.Store) http.HandlerFunc {
 					return
 				}
 				msg := removedMessage{Type: "session_removed", SessionID: id}
-				if err := writeJSON(ctx, c, msg); err != nil {
+				if err := writeJSON(ctx, c, msg, prazos.escrita); err != nil {
 					return
 				}
 			case t, ok := <-boardCh:
@@ -166,7 +183,7 @@ func WSHandler(reg *registry.Registry, bd board.Store) http.HandlerFunc {
 					return
 				}
 				msg := boardUpdatedMessage{Type: "board_updated", Task: t}
-				if err := writeJSON(ctx, c, msg); err != nil {
+				if err := writeJSON(ctx, c, msg, prazos.escrita); err != nil {
 					return
 				}
 			case id, ok := <-boardRemovedCh:
@@ -174,7 +191,7 @@ func WSHandler(reg *registry.Registry, bd board.Store) http.HandlerFunc {
 					return
 				}
 				msg := boardRemovedMessage{Type: "board_removed", ID: id}
-				if err := writeJSON(ctx, c, msg); err != nil {
+				if err := writeJSON(ctx, c, msg, prazos.escrita); err != nil {
 					return
 				}
 			}
@@ -183,9 +200,10 @@ func WSHandler(reg *registry.Registry, bd board.Store) http.HandlerFunc {
 }
 
 // writeJSON serializa v para o cliente com um timeout de escrita, para nunca
-// bloquear indefinidamente numa conexão travada.
-func writeJSON(ctx context.Context, c *websocket.Conn, v any) error {
-	wctx, cancel := context.WithTimeout(ctx, wsWriteTimeout)
+// bloquear indefinidamente numa conexão travada. escrita vem de prazosWS
+// (ver comentário acima) — nunca de global mutável.
+func writeJSON(ctx context.Context, c *websocket.Conn, v any, escrita time.Duration) error {
+	wctx, cancel := context.WithTimeout(ctx, escrita)
 	defer cancel()
 	return wsjson.Write(wctx, c, v)
 }

@@ -74,7 +74,7 @@ type ptyEvent struct {
 //	→ binário: bytes do terminal, nos dois sentidos
 //	→ texto (app→hub):  {"type":"resize","cols","rows"}
 //	→ texto (hub→app):  {"type":"exit","code"} | {"type":"error","message"}
-func PTYHandler(lch Launcher) http.HandlerFunc {
+func PTYHandler(lch Launcher, prazos prazosWS) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// O comando é montado ANTES do upgrade: máquina desconhecida tem que
 		// virar 404 de HTTP mesmo, não um WebSocket que abre e fecha na cara.
@@ -106,7 +106,7 @@ func PTYHandler(lch Launcher) http.HandlerFunc {
 		if err != nil {
 			// O ssh nem subiu (binário sumido, sem pty no container): a causa
 			// vai por extenso, é o único jeito de a usuária saber o que houve.
-			_ = writeJSON(ctx, c, ptyEvent{Type: "error", Message: err.Error()})
+			_ = writeJSON(ctx, c, ptyEvent{Type: "error", Message: err.Error()}, prazos.escrita)
 			_ = c.Close(websocket.StatusInternalError, "pty")
 			return
 		}
@@ -116,21 +116,21 @@ func PTYHandler(lch Launcher) http.HandlerFunc {
 		saidaAcabou := make(chan struct{})
 		clienteCaiu := make(chan struct{})
 
-		vigiaCliente(ctx, c)
+		vigiaCliente(ctx, c, prazos)
 
 		// PTY → WebSocket. Esta goroutine é a DONA do processo depois que a
 		// saída acaba: ela encerra e ela relata. Um Wait só no Cmd — dois
 		// concorrentes é corrida de verdade.
 		go func() {
 			defer close(saidaAcabou)
-			bombeiaSaida(ctx, c, f)
+			bombeiaSaida(ctx, c, f, prazos.escrita)
 			code := encerraShell(cmd, f)
 			// "Você digitou exit" e "o host recusou a conexão" não podem chegar
 			// iguais no app. Se quem caiu foi o cliente, não há a quem contar.
 			select {
 			case <-clienteCaiu:
 			default:
-				relataSaida(c, code)
+				relataSaida(c, code, prazos.escrita)
 			}
 		}()
 
@@ -166,16 +166,16 @@ func PTYHandler(lch Launcher) http.HandlerFunc {
 // vigiaCliente pinga o app de tempos em tempos e derruba a conexão quando ele
 // para de responder. Sem isso, um celular que dormiu ou trocou de rede sem
 // fechar o socket deixaria o Read pendurado e o `ssh` vivo para sempre.
-func vigiaCliente(ctx context.Context, c *websocket.Conn) {
+func vigiaCliente(ctx context.Context, c *websocket.Conn, prazos prazosWS) {
 	go func() {
-		tick := time.NewTicker(wsPingInterval)
+		tick := time.NewTicker(prazos.ping)
 		defer tick.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-				pctx, pcancel := context.WithTimeout(ctx, wsWriteTimeout)
+				pctx, pcancel := context.WithTimeout(ctx, prazos.escrita)
 				err := c.Ping(pctx)
 				pcancel()
 				if err != nil {
@@ -190,12 +190,12 @@ func vigiaCliente(ctx context.Context, c *websocket.Conn) {
 
 // bombeiaSaida joga tudo que o terminal produz no socket, sem esperar encher
 // buffer: latência de eco é o que faz um terminal parecer vivo.
-func bombeiaSaida(ctx context.Context, c *websocket.Conn, f io.Reader) {
+func bombeiaSaida(ctx context.Context, c *websocket.Conn, f io.Reader, escrita time.Duration) {
 	buf := make([]byte, ptyChunk)
 	for {
 		n, err := f.Read(buf)
 		if n > 0 {
-			wctx, wcancel := context.WithTimeout(ctx, wsWriteTimeout)
+			wctx, wcancel := context.WithTimeout(ctx, escrita)
 			werr := c.Write(wctx, websocket.MessageBinary, buf[:n])
 			wcancel()
 			if werr != nil {
@@ -311,11 +311,11 @@ func encerraShell(cmd *exec.Cmd, f io.Closer) int {
 
 // relataSaida conta ao app por que o terminal acabou, antes de fechar. Sem
 // isso, sair com `exit` e cair a rede chegariam iguais: socket fechado.
-func relataSaida(c *websocket.Conn, code int) {
+func relataSaida(c *websocket.Conn, code int, escrita time.Duration) {
 	// Contexto próprio: o da conexão já morreu junto com o shell, e é
 	// justamente depois dele que esta mensagem precisa sair.
-	ctx, cancel := context.WithTimeout(context.Background(), wsWriteTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), escrita)
 	defer cancel()
-	_ = writeJSON(ctx, c, ptyEvent{Type: "exit", Code: code})
+	_ = writeJSON(ctx, c, ptyEvent{Type: "exit", Code: code}, escrita)
 	_ = c.Close(websocket.StatusNormalClosure, "")
 }

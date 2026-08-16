@@ -26,6 +26,7 @@ type routerConfig struct {
 	machineTgts MachineTargets
 	identities  Identities
 	engine      *engine.Engine
+	wsTimeouts  prazosWS
 }
 
 // RouterOption configura dependências opcionais do Router.
@@ -105,11 +106,20 @@ func WithEngine(eng *engine.Engine) RouterOption {
 	return func(rc *routerConfig) { rc.engine = eng }
 }
 
+// WithWSTimeouts [16/08/2026] substitui os prazos de ping/escrita do WebSocket
+// (WS e PTY) pelos dados. Existe para TESTE encurtar esses prazos sem
+// reatribuir uma global mutável — ver o comentário em ws.go sobre a race que
+// isso causava contra a goroutine de produção. Produção nunca chama esta
+// opção; usa o default de prazosWSPadrao().
+func WithWSTimeouts(ping, escrita time.Duration) RouterOption {
+	return func(rc *routerConfig) { rc.wsTimeouts = prazosWS{ping: ping, escrita: escrita} }
+}
+
 // Router registra as rotas do hub. As rotas protegidas passam pelo middleware
 // de token; /health fica aberto para healthcheck. lch pode ser nil quando os
 // comandos de lançamento/aprovação não são necessários (ex.: alguns testes).
 func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...RouterOption) *http.ServeMux {
-	var rc routerConfig
+	rc := routerConfig{wsTimeouts: prazosWSPadrao()}
 	for _, opt := range opts {
 		opt(&rc)
 	}
@@ -147,7 +157,7 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 	// Protegidas por token.
 	mux.Handle("GET /sessions", requireAuth(cfg.Token, SessionsHandler(reg)))
 	mux.Handle("GET /sessions/{id}/output", requireAuth(cfg.Token, SessionOutputHandler(reg)))
-	mux.Handle("GET /ws", requireAuth(cfg.Token, WSHandler(reg, rc.board)))
+	mux.Handle("GET /ws", requireAuth(cfg.Token, WSHandler(reg, rc.board, rc.wsTimeouts)))
 	mux.Handle("POST /hooks/claude", requireAuth(cfg.Token, HookHandler(eng)))
 
 	// Comandos (Fase 3): lançar, aprovar/negar e enviar texto.
@@ -186,7 +196,7 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		mux.Handle("PUT /machines/{machine}/fs/write", requireAuth(cfg.Token, FileWriteHandler(lch)))
 		mux.Handle("GET /machines/{machine}/fs/download", requireAuth(cfg.Token, FileDownloadHandler(lch)))
 		// Terminal livre: WebSocket, bytes crus nos dois sentidos.
-		mux.Handle("GET /machines/{machine}/pty", requireAuth(cfg.Token, PTYHandler(lch)))
+		mux.Handle("GET /machines/{machine}/pty", requireAuth(cfg.Token, PTYHandler(lch, rc.wsTimeouts)))
 		mux.Handle("POST /machines/{machine}/adopt", requireAuth(cfg.Token, AdoptHandler(lch)))
 		// Ponte tmux: observar (screen) e digitar (keys) em sessões de terminal.
 		mux.Handle("GET /machines/{machine}/tmux", requireAuth(cfg.Token, TmuxListHandler(lch)))
