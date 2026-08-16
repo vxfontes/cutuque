@@ -1124,6 +1124,121 @@ func (f *tmuxFakeTarget) TmuxKillServer(_ context.Context, _ string) error      
 
 // TestInterruptUnknownSession cobre o card 6b74500a1fd9a1f2: id desconhecido
 // devolve ErrUnknownSession, mesma convenção de Approve/Deny/Answer.
+// TestResolveUnknownSession cobre sessão inexistente: o CAS falha (id não
+// está no Registry) e o Get de desempate confirma que ela não existe →
+// ErrUnknownSession (sentinel, sem mudança de comportamento).
+func TestResolveUnknownSession(t *testing.T) {
+	l, _ := newTestLauncher(nil)
+	if err := l.Resolve("fantasma"); err != ErrUnknownSession {
+		t.Errorf("err = %v, quero ErrUnknownSession", err)
+	}
+}
+
+// TestResolveSuccess cobre o caminho feliz: sessão em needs_you, o CAS
+// (UpdateStateIfCurrent(id, needs_you, done)) acerta de primeira.
+func TestResolveSuccess(t *testing.T) {
+	l, reg := newTestLauncher(nil)
+	const id = "needsyou-sess-0001"
+	reg.AddIfAbsent(session.Session{ID: id, Machine: "macbook", Agent: "claude-code", State: session.StateNeedsYou})
+
+	if err := l.Resolve(id); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	got, _ := reg.Get(id)
+	if got.State != session.StateDone {
+		t.Errorf("State = %q, quero StateDone", got.State)
+	}
+}
+
+// TestResolve_LosesCASAgainstConcurrentStateChange_ReturnsStaleStateWithWinner
+// cobre o call site C ([16/08/2026], launcher.go): a perda do CAS de Resolve,
+// de forma DETERMINÍSTICA (sem concorrência) — força o estado da sessão para
+// algo que NÃO é needs_you (simula uma transição concorrente do Engine tendo
+// vencido a corrida: a sessão virou error/done/idle/running por conta própria
+// entre o swipe da usuária e a chegada do Resolve), chama Resolve, e confere
+// que (a) o estado forçado NÃO foi sobrescrito com done e (b) o erro devolvido
+// é *StaleStateError carregando exatamente esse estado vencedor — Opção 2 da
+// dona do projeto (16/08, "falha e conta"): a escrita perdedora nunca
+// sobrescreve em silêncio, e quem chamou fica sabendo o que de fato ganhou.
+func TestResolve_LosesCASAgainstConcurrentStateChange_ReturnsStaleStateWithWinner(t *testing.T) {
+	cases := []struct {
+		name  string
+		state session.State
+	}{
+		// done NÃO entra aqui: virou no-op idempotente em [16/08/2026] —
+		// cobertura própria em TestResolveJaConcluidaEhNoOpIdempotente.
+		{"venceu error", session.StateError},
+		{"venceu idle", session.StateIdle},
+		{"venceu running", session.StateRunning},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			l, reg := newTestLauncher(nil)
+			const id = "stale-sess-0001"
+			// Força o estado: a sessão NÃO está (mais) em needs_you quando o
+			// Resolve chega — como se outra escrita já tivesse vencido a corrida.
+			reg.AddIfAbsent(session.Session{ID: id, Machine: "macbook", Agent: "claude-code", State: c.state})
+
+			err := l.Resolve(id)
+
+			var stale *StaleStateError
+			if !errors.As(err, &stale) {
+				t.Fatalf("err = %v (%T), quero *StaleStateError", err, err)
+			}
+			if stale.Current != c.state {
+				t.Errorf("StaleStateError.Current = %q, quero %q (o estado vencedor)", stale.Current, c.state)
+			}
+			// errors.Is continua funcionando para quem só checa o sentinel
+			// (mesmo contrato de Approve/Deny/Answer/Interrupt).
+			if !errors.Is(err, ErrStaleState) {
+				t.Errorf("errors.Is(err, ErrStaleState) = false, quero true (Unwrap precisa preservar o sentinel)")
+			}
+
+			got, _ := reg.Get(id)
+			if got.State != c.state {
+				t.Errorf("State = %q após Resolve perder o CAS, quero %q preservado (não pode virar done)", got.State, c.state)
+			}
+		})
+	}
+}
+
+// TestResolveJaConcluidaEhNoOpIdempotente cobre a exceção que a dona do projeto
+// pediu em [16/08/2026] depois de ver o 409 na prática: sessão JÁ em done leva
+// nil (sucesso), não *StaleStateError. Concluir o que já está concluído é no-op,
+// não conflito — e é o gesto mais banal do dia (arrastar "Concluir" pra limpar
+// uma linha encerrada da lista), então recusá-lo enchia a tela de aviso inútil.
+//
+// O teste prova as DUAS metades, porque só a primeira seria satisfeita por um
+// `return nil` preguiçoso em qualquer estado:
+//   - devolve nil (o app não mostra aviso e a linha some);
+//   - NÃO reescreve o estado, ou seja, não passa por UpdateStateIfCurrent de
+//     novo — done→done ali dentro bumpa UpdatedAt e dispara broadcast
+//     (registry.go:346), gerando tráfego e re-render por um gesto que não mudou
+//     nada. UpdatedAt intacto é a assinatura observável de "ninguém escreveu".
+func TestResolveJaConcluidaEhNoOpIdempotente(t *testing.T) {
+	l, reg := newTestLauncher(nil)
+	const id = "ja-concluida-0001"
+	carimbo := time.Now().Add(-time.Hour).UTC()
+	reg.AddIfAbsent(session.Session{
+		ID: id, Machine: "macbook", Agent: "claude-code",
+		State: session.StateDone, UpdatedAt: carimbo,
+	})
+	antes, _ := reg.Get(id)
+
+	if err := l.Resolve(id); err != nil {
+		t.Fatalf("Resolve numa sessão já done = %v, quero nil (no-op idempotente)", err)
+	}
+
+	depois, _ := reg.Get(id)
+	if depois.State != session.StateDone {
+		t.Errorf("State = %q, quero StateDone preservado", depois.State)
+	}
+	if !depois.UpdatedAt.Equal(antes.UpdatedAt) {
+		t.Errorf("UpdatedAt mudou (%v → %v): o no-op não pode escrever no Registry nem disparar broadcast",
+			antes.UpdatedAt, depois.UpdatedAt)
+	}
+}
+
 func TestInterruptUnknownSession(t *testing.T) {
 	l, _ := newTestLauncher(nil)
 	if _, err := l.Interrupt("fantasma"); err != ErrUnknownSession {

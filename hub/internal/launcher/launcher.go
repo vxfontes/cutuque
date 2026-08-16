@@ -4,10 +4,28 @@
 //
 // O Launcher decora o State Engine como um Applier: intercepta os eventos do
 // Runner para guardar o pedido de permissão pendente (o request_id nativo e o
-// input original da ferramenta), mas delega SEMPRE ao Engine — que segue o
-// único escritor do Registry. Aprovar/negar exige que a sessão esteja mesmo em
-// needs_you (rejeita ação obsoleta) e nunca aprova sem que o app tenha exibido
-// o texto do pedido (invariante de segurança do docs/03).
+// input original da ferramenta), e delega ao Engine no caminho de
+// aprovar/negar — que segue o único escritor do Registry ali. Aprovar/negar
+// exige que a sessão esteja mesmo em needs_you (rejeita ação obsoleta) e nunca
+// aprova sem que o app tenha exibido o texto do pedido (invariante de
+// segurança do docs/03).
+//
+// Revisado em 2026-08-16: "SEMPRE" delegar ao Engine não é absoluto neste
+// arquivo — três métodos escrevem direto no Registry, sem passar pelo Engine
+// (logo, sem virar histórico via e.record()): Interrupt (~linha 927,
+// UpdateStateIfCurrent — tem CAS), Adopt (~linha 583, AddIfAbsent — atômico) e
+// Resolve (~linha 807, UpdateStateIfCurrent — tem CAS, [16/08/2026] deixou de
+// ser o único caso sem proteção: a escrita perdedora agora falha com
+// *StaleStateError, carregando o estado vencedor, em vez de sobrescrever um
+// veredito concorrente em silêncio). São bypasses conhecidos do contrato "só
+// o Engine escreve estado de sessão" (engine.go:1-3, reforçado no comentário
+// de Remove em registry.go:551 — [16/08/2026] linha atualizada: um bug irmão
+// achado na mesma revisão, PendingQuestions não limpo na evicção do SetPane,
+// deslocou esse comentário 8 linhas), não bugs escondidos — os três já têm
+// proteção atômica contra sobrescrita silenciosa; o que fica deliberadamente
+// fora de escopo é ROTEAR Resolve pelo Engine (o bypass em si — o CAS só o
+// torna SEGURO, não o elimina), ver docs/02-arquitetura.md (seção "Bypasses
+// conhecidos do contrato").
 package launcher
 
 import (
@@ -791,12 +809,64 @@ func (l *Launcher) ShellCommand(ctx context.Context, machine string) (*exec.Cmd,
 // apagá-la — usado pelo swipe "Concluir" no app quando a usuária já respondeu no
 // terminal. Não marca como dismissed: a sessão pode voltar a precisar de você e
 // cutucar de novo. ErrUnknownSession se não existir.
+//
+// [16/08/2026] CAS (Registry.UpdateStateIfCurrent) em vez de escrita cega —
+// decisão da dona do projeto (16/08, Opção 2 "falha e conta"): perder a
+// corrida contra uma transição concorrente do Engine (ex.: a sessão virou
+// error no mesmo instante, via o stream do agente) não pode mais sobrescrever
+// esse veredito em silêncio. Diferente de Interrupt/Apply, o `from` aqui é um
+// literal fixo (StateNeedsYou é o próprio contrato do método: "tira uma sessão
+// de needs_you") — não um snapshot lido cedo demais — então não precisa de
+// loop de releitura, um CAS de tiro único já é completo e correto.
+//
+// A escrita perdedora devolve *StaleStateError com o estado VENCEDOR, para o
+// app dar refresh e mostrar o que de fato ganhou em vez de confiar cegamente
+// no optimistic update que já fez na lista. UpdateStateIfCurrent só devolve
+// bool (não distingue "sessão não existe" de "existe mas não estava em
+// needs_you") — resolvido com um Get de desempate após o CAS falhar (mesma
+// looseness aceitável do Interrupt, que também faz Get-então-decide: há uma
+// janela pequena entre o CAS falhar e este Get em que a sessão pode ser
+// removida, caindo em ErrUnknownSession mesmo tendo existido um instante
+// antes — aceitável, não é regressão nova).
+//
+// [16/08/2026] Sessão JÁ em done devolve nil (sucesso), não StaleStateError —
+// decisão da dona (16/08) depois de ver o 409 na prática. Concluir o que já
+// está concluído é no-op, não conflito: o efeito desejado pelo gesto já vale.
+// Recusar isso enchia a tela de aviso no caso mais banal do dia (arrastar
+// "Concluir" pra limpar uma linha já encerrada) e gastava a atenção dela num
+// alerta que não pedia decisão nenhuma — barulho que faria ela ignorar também
+// o aviso que IMPORTA (error/running, onde concluir apagaria um veredito).
+// Idempotência aqui é de graça: o CAS acima já garantiu que ninguém
+// escreveu done por cima de outra coisa; done→done não muda estado, então
+// devolver nil não reintroduz a sobrescrita que esta leva veio consertar.
 func (l *Launcher) Resolve(id string) error {
-	if err := l.reg.UpdateState(id, session.StateDone); err != nil {
+	if l.reg.UpdateStateIfCurrent(id, session.StateNeedsYou, session.StateDone) {
+		return nil
+	}
+	cur, exists := l.reg.Get(id)
+	if !exists {
 		return ErrUnknownSession
 	}
-	return nil
+	if cur.State == session.StateDone {
+		return nil
+	}
+	return &StaleStateError{Current: cur.State}
 }
+
+// StaleStateError enriquece o sentinel ErrStaleState (já usado por
+// Approve/Deny/Answer/Interrupt) com o estado que REALMENTE está gravado no
+// Registry no momento em que o CAS de Resolve perdeu a corrida. Unwrap
+// preserva errors.Is(err, ErrStaleState) para quem só quer o código; um
+// handler HTTP que queira o estado vencedor usa errors.As para extraí-lo.
+type StaleStateError struct {
+	Current session.State
+}
+
+func (e *StaleStateError) Error() string {
+	return fmt.Sprintf("launcher: estado obsoleto (atual: %s)", e.Current)
+}
+
+func (e *StaleStateError) Unwrap() error { return ErrStaleState }
 
 // Machines devolve os nomes dos alvos registrados, ordenados.
 func (l *Launcher) Machines() []string {

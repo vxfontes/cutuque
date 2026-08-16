@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -32,6 +33,7 @@ type fakeLauncher struct {
 	machines     []string
 	reachability []launcher.Reachability
 	removeErr    error
+	resolveErr   error
 	historyErr   error
 	dirListing   session.DirListing
 	dirsErr      error
@@ -73,6 +75,7 @@ type fakeLauncher struct {
 	gotApproveID, gotDenyID                 string
 	gotInputID, gotInputText                string
 	gotRemoveID                             string
+	gotResolveID                            string
 	gotHistoryID                            string
 	gotDirsMachine, gotDirsPath             string
 	gotFsMachine, gotFsPath                 string
@@ -100,8 +103,8 @@ func (f *fakeLauncher) Remove(id string) error {
 	return f.removeErr
 }
 func (f *fakeLauncher) Resolve(id string) error {
-	f.gotRemoveID = id
-	return f.removeErr
+	f.gotResolveID = id
+	return f.resolveErr
 }
 func (f *fakeLauncher) ImportHistory(id string) error {
 	f.gotHistoryID = id
@@ -593,6 +596,76 @@ func TestDeleteSessionNotFound(t *testing.T) {
 	rec := do(t, f, http.MethodDelete, "/sessions/ghost", "")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, quero 404", rec.Code)
+	}
+}
+
+// TestResolveOK cobre o caminho feliz de POST /sessions/{id}/resolve: o CAS
+// do Launcher venceu, a sessão saiu de needs_you → done.
+func TestResolveOK(t *testing.T) {
+	f := &fakeLauncher{}
+	rec := do(t, f, http.MethodPost, "/sessions/abc/resolve", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, quero 200 (corpo: %s)", rec.Code, rec.Body.String())
+	}
+	if f.gotResolveID != "abc" {
+		t.Errorf("Resolve recebeu id=%q, quero \"abc\"", f.gotResolveID)
+	}
+}
+
+// TestResolveUnknownSession cobre sessão inexistente: 404 unknown_session,
+// distinto do 409 de perda de CAS — a usuária precisa saber a diferença entre
+// "a sessão sumiu" e "só perdeu a corrida".
+func TestResolveUnknownSession(t *testing.T) {
+	f := &fakeLauncher{resolveErr: launcher.ErrUnknownSession}
+	rec := do(t, f, http.MethodPost, "/sessions/ghost/resolve", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, quero 404 (corpo: %s)", rec.Code, rec.Body.String())
+	}
+	assertErrorCode(t, rec.Body.Bytes(), "unknown_session")
+}
+
+// TestResolveStaleStateReturnsWinner cobre a perda do CAS (Opção 2, "falha e
+// conta" — decisão de 16/08): 409 stale_state carregando o estado VENCEDOR,
+// para o app dar refresh e mostrar o que de fato ganhou em vez do optimistic
+// update que já fez na lista.
+func TestResolveStaleStateReturnsWinner(t *testing.T) {
+	cases := []struct {
+		name    string
+		current session.State
+	}{
+		// Sem caso "done": desde [16/08/2026] o Launcher trata sessão já
+		// concluída como no-op idempotente (200), então done nunca chega aqui
+		// como vencedor de stale — ver TestResolveJaConcluidaEhNoOpIdempotente.
+		{"perdeu para error", session.StateError},
+		{"perdeu para running", session.StateRunning},
+		{"perdeu para idle", session.StateIdle},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := &fakeLauncher{resolveErr: &launcher.StaleStateError{Current: c.current}}
+			rec := do(t, f, http.MethodPost, "/sessions/abc/resolve", "")
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("status = %d, quero 409 (corpo: %s)", rec.Code, rec.Body.String())
+			}
+			var resp struct {
+				Error        string `json:"error"`
+				CurrentState string `json:"current_state"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("corpo inválido: %v (%s)", err, rec.Body.String())
+			}
+			if resp.Error != "stale_state" {
+				t.Errorf("error = %q, quero \"stale_state\"", resp.Error)
+			}
+			if resp.CurrentState != string(c.current) {
+				t.Errorf("current_state = %q, quero %q", resp.CurrentState, c.current)
+			}
+			// errors.Is(err, ErrStaleState) tem que continuar funcionando para
+			// quem só olha o sentinel (Unwrap preserva a compatibilidade).
+			if !errors.Is(f.resolveErr, launcher.ErrStaleState) {
+				t.Errorf("StaleStateError não desembrulha para ErrStaleState")
+			}
+		})
 	}
 }
 

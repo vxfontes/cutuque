@@ -421,16 +421,51 @@ func TargetsHandler(lch Launcher) http.HandlerFunc {
 	}
 }
 
+// staleStateResponse é o corpo de erro de 409 quando o CAS de Resolve perde a
+// corrida contra uma transição concorrente do Engine. [16/08/2026] Estende o
+// envelope {"error":code} de writeJSONError com current_state — decisão da
+// dona do projeto (Opção 2, "falha e conta"): a escrita perdedora não some em
+// silêncio, ela devolve o estado VENCEDOR para o app dar refresh e mostrar o
+// que de fato ganhou, em vez de confiar no optimistic update que já fez na
+// lista. Só o Resolve carrega current_state hoje — os outros 409 de
+// stale_state (Approve/Deny/Answer/Interrupt) continuam sem estado extra; é
+// uma inconsistência aceita para esta leva (ver riscos no desenho), não um
+// esquecimento.
+type staleStateResponse struct {
+	Error        string       `json:"error"`
+	CurrentState session.State `json:"current_state"`
+}
+
 // ResolveHandler tira a sessão de needs_you (marca concluída) sem apagá-la.
 //
-//	200 {"ok":true} | 404 unknown_session
+// [16/08/2026] Launcher.Resolve agora usa CAS (Registry.UpdateStateIfCurrent):
+// perder a corrida contra uma transição concorrente do Engine devolve
+// *launcher.StaleStateError em vez de sobrescrever o veredito em silêncio.
+// errors.As extrai o estado vencedor para o 409; sessão inexistente continua
+// distinguível como 404 (dois casos diferentes, dois status diferentes — a
+// usuária precisa saber se a sessão sumiu ou se só perdeu a corrida).
+//
+//	200 {"ok":true} | 404 {"error":"unknown_session"} |
+//	409 {"error":"stale_state","current_state":"<estado vencedor>"}
 func ResolveHandler(lch Launcher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := lch.Resolve(r.PathValue("id")); err != nil {
+		err := lch.Resolve(r.PathValue("id"))
+		var stale *launcher.StaleStateError
+		switch {
+		case err == nil:
+			writeOK(w)
+		case errors.Is(err, launcher.ErrUnknownSession):
 			writeJSONError(w, http.StatusNotFound, "unknown_session")
-			return
+		case errors.As(err, &stale):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(staleStateResponse{Error: "stale_state", CurrentState: stale.Current})
+		default:
+			// Qualquer outro erro inesperado: mesma convenção de fallback do
+			// decideHandler (Approve/Deny) — 409 stale_state genérico em vez
+			// de vazar detalhe interno.
+			writeJSONError(w, http.StatusConflict, "stale_state")
 		}
-		writeOK(w)
 	}
 }
 
