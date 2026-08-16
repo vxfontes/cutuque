@@ -237,6 +237,13 @@
      digitar num pane externo pelo canal errado criaria um agente paralelo
      (ver launcher.SendText). */
   .session-modal { max-width: 720px; display: flex; flex-direction: column; max-height: 88vh; }
+  /* [16/08/2026] Pseudo-tela-cheia do terminal (botão na .term-toolbar, ver
+     renderTerminalBody): classe .term-full alternada via JS, NÃO a Fullscreen
+     API real do browser — suporte inconsistente em Safari iOS pra elemento
+     arbitrário, e a API real dispara seu próprio Esc nativo por fora do
+     keydown listener abaixo, correndo com a cascata confirmModal > cardModal
+     > sessionModal. CSS puro dá controle total do Esc (ver handler). */
+  .session-modal.term-full { max-width: min(1400px, 96vw); max-height: 96vh; }
   .sess-tags { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 4px; }
   .sess-tags .state-tag { color: var(--tc, var(--text)); border-color: color-mix(in srgb, var(--tc, var(--border)) 40%, transparent); background: color-mix(in srgb, var(--tc, transparent) 14%, transparent); }
   .sess-pending { margin-top: 10px; }
@@ -274,9 +281,28 @@
     border-radius: 9px; border: 1px solid var(--border); padding: 10px 12px;
     font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre;
   }
+  /* [16/08/2026] 46vh não é arbitrário: dentro do orçamento de 88vh do modal
+     (96vh em .term-full), o que sobra pro .sess-body é dividido com o
+     cabeçalho (h2/tags/subtitle), o bloco de pendência (sess-pending, que
+     PRECISA continuar visível — aprovar/negar às cegas é o que a invariante
+     de segurança do hub proíbe) e, abaixo do termScreen, a barra de teclas +
+     linha de digitação. Em tela cheia (.term-full) o modal ganha bem mais
+     altura (96vh) mas o cabeçalho/pendente/barra de baixo não encolhem, então
+     só o miolo pode crescer -> max-height: none aqui, e o flex:1 já herdado
+     de .term-screen ocupa o espaço que sobrar sem tirar o pendente de vista. */
+  .session-modal.term-full .term-screen { max-height: none; }
+  /* Alternador de quebra de linha (botão da .term-toolbar). Padrão continua
+     white-space: pre (ver escopoLayout no card): diffs/tabelas de TUI
+     dependem de coluna fixa. .wrap é opt-in, pra quando a pessoa preferir ver
+     a linha inteira sem rolar de lado, ao custo do alinhamento. */
+  .term-screen.wrap { white-space: pre-wrap; word-break: break-word; }
+  .term-toolbar { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
   .term-keys { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
   .term-key { background: var(--panel2); border: 1px solid var(--border); color: var(--muted); border-radius: 7px; padding: 5px 9px; font: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer; }
   .term-key:hover { color: var(--text); border-color: var(--faint); }
+  /* Estado "ligado" dos botões de tela cheia/quebrar linha — mesmo idioma
+     visual de .m-move-btn.current, reaplicado aqui em vez de inventado. */
+  .term-key.active { background: color-mix(in srgb, var(--running) 20%, transparent); color: var(--text); border-color: var(--running); }
 
   /* Modal de confirmação */
   .confirm { position: relative; width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 22px; }
@@ -499,7 +525,7 @@
   </div>
 
   <div id="sessionModal" class="modal-overlay" hidden>
-    <div class="modal session-modal" role="dialog" aria-modal="true">
+    <div class="modal session-modal" id="sessionModalPanel" role="dialog" aria-modal="true">
       <button class="modal-close" id="sessionModalClose" aria-label="Fechar">✕</button>
       <div id="sessionModalBody"></div>
     </div>
@@ -658,7 +684,13 @@
     if (s < 86400) return `${(s / 3600) | 0}h`;
     return `${(s / 86400) | 0}d`;
   }
-  const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  // [16/08/2026] A aspa simples entrou na lista. Hoje nenhum uso de esc() cai
+  // dentro de atributo delimitado por aspa simples (conferidas as ~30 chamadas),
+  // então isto não corrige brecha aberta — é defesa em profundidade: o parser
+  // ANSI abaixo passou a alimentar innerHTML com texto de terminal de TERCEIRO,
+  // e a próxima pessoa que montar um atributo com esc() não deve depender de
+  // lembrar qual delimitador é seguro.
+  const esc = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   // Destaca @menções (opera sobre texto JÁ escapado).
   const mentionize = (s) => s.replace(/(^|[\s(])@([\w.-]+)/g, '$1<span class="mention">@$2</span>');
 
@@ -735,6 +767,7 @@
   // documentado no card de investigação). É a separação Chat x Espelho do app.
   const $sessionModal = document.getElementById('sessionModal');
   const $sessionModalBody = document.getElementById('sessionModalBody');
+  const $sessionModalPanel = document.getElementById('sessionModalPanel'); // .session-modal — alvo da classe .term-full
   let openSessionId = null;
   let openSessionMode = null; // 'chat' | 'tmux' | null (nada aberto)
   const authHeader = () => ({ Authorization: 'Bearer ' + TOKEN });
@@ -773,6 +806,10 @@
     openSessionId = null;
     openSessionMode = null;
     $sessionModal.hidden = true;
+    // [16/08/2026] .term-full vive no painel (fora do sessBody, que é
+    // remontado a cada abertura) — se não zerasse aqui, a PRÓXIMA sessão
+    // aberta (mesmo em chat) herdaria o modal ampliado sem o botão bater.
+    setTermFull(false);
   }
   document.getElementById('sessionModalClose').addEventListener('click', closeSessionModal);
   $sessionModal.addEventListener('click', (e) => { if (e.target === $sessionModal) closeSessionModal(); });
@@ -807,7 +844,12 @@
       openSessionMode = mode;
       stopScreenPoll();
       if (isTmux) { renderTerminalBody(s); startScreenPoll(s.machine, s.pane); }
-      else { renderChatBody(); loadTranscript(s.id); }
+      // [16/08/2026] `setTermFull(false)` ao cair pro chat: a classe .term-full
+      // mora no PAINEL (sobrevive ao remount do corpo), e o toolbar que a
+      // desliga só existe no corpo de terminal. Se o pane morresse com a tela
+      // cheia ligada, o chat renderizava esticado em 1400px/96vh sem nenhum
+      // botão visível pra voltar — só um Esc "extra" resolvia.
+      else { setTermFull(false); renderChatBody(); loadTranscript(s.id); }
     }
   }
 
@@ -925,8 +967,255 @@
   }
 
   // --- Terminal (sessão com pane do tmux) ---
+  // [16/08/2026] Parser ANSI/SGR inline. Antes disso o dashboard não tratava
+  // ESC (0x1B) nenhum: o byte some no HTML e sobra só o CORPO da sequência
+  // como texto puro ("[38;5;246m", "[39m", "[1m"...) — o defeito reportado
+  // ("tá bem zicado o view"). O hub já roda `tmux capture-pane -e`, então o
+  // que chega aqui é a GRADE JÁ RESOLVIDA pelo tmux (cursor, scroll, apagar
+  // tela, alt-buffer — tudo isso o tmux já tratou do lado do servidor); o que
+  // sobra pra tratar aqui é só: (1) SGR de cor/estilo célula a célula, (2) o
+  // texto visível de hyperlink OSC 8, (3) descartar qualquer outra sequência
+  // de controle pela GRAMÁTICA dela (CSI/OSC/ESC), não por uma lista fechada
+  // de finals conhecidos — é exatamente essa lista fechada que faltava antes
+  // e deixava sequência não catalogada vazar como texto cru.
+  // Bloco isolado entre os marcadores ANSI_PARSER_START/END de propósito:
+  // `dashboard_ansi_test.js` (mesma pasta) extrai só este trecho por regex e o
+  // roda fora do browser, porque a função é PURA — não toca DOM/document.
+  // NÃO REMOVA OS MARCADORES nem introduza referência a document/window aqui
+  // dentro: o teste deixa de achar o bloco (falha em voz alta) ou passa a
+  // precisar de um DOM falso. Ele roda junto com `go test ./...` via
+  // dashboard_ansi_test.go.
+  // ANSI_PARSER_START
+
+  // Paleta ANSI de 16 cores (0-7 básicas, 8-15 "bright"). Valores fixos do
+  // tema padrão do VS Code/xterm — escolhidos porque têm contraste conhecido
+  // sobre fundo escuro tipo terminal. Nunca vem de fora: é uma tabela local.
+  const ANSI_PALETTE16 = [
+    '#000000', '#cd3131', '#0dbc79', '#e5e510', '#2472c8', '#bc3fbc', '#11a8cd', '#e5e5e5',
+    '#666666', '#f14c4c', '#23d18b', '#f5f543', '#3b8eea', '#d670d6', '#29b8db', '#ffffff',
+  ];
+  // Tabela de 256 cores (16 base + cubo 6x6x6 + 24 tons de cinza), gerada uma
+  // vez por fórmula — não é dado vindo do terminal, é constante local.
+  function buildAnsiPalette256() {
+    const levels = [0, 95, 135, 175, 215, 255];
+    const hex2 = (n) => n.toString(16).padStart(2, '0');
+    const pal = ANSI_PALETTE16.slice();
+    for (let i = 0; i < 216; i++) {
+      const r = levels[Math.floor(i / 36) % 6];
+      const g = levels[Math.floor(i / 6) % 6];
+      const b = levels[i % 6];
+      pal.push(`#${hex2(r)}${hex2(g)}${hex2(b)}`);
+    }
+    for (let i = 0; i < 24; i++) { const v = 8 + i * 10; const h = hex2(v); pal.push(`#${h}${h}${h}`); }
+    return pal;
+  }
+  const ANSI_PALETTE256 = buildAnsiPalette256();
+  // Mesmos valores hoje fixos em .term-screen (bg #05070b, texto #c9d1d9).
+  // Fundo do terminal continua FIXO nos dois temas de propósito: a paleta
+  // acima foi desenhada por terceiros (CLIs tipo Claude Code/Codex) assumindo
+  // fundo escuro estilo xterm — cor clara real da amostra (38;5;231, quase-
+  // branco) ficaria ilegível num fundo claro. Só a MOLDURA ao redor (borda,
+  // padding) segue o tema; o miolo do terminal, não.
+  const ANSI_DEFAULT_FG = '#c9d1d9';
+  const ANSI_DEFAULT_BG = '#05070b';
+
+  // Converte texto cru de captura tmux (com sequências ANSI/SGR/OSC) em HTML
+  // seguro. Função PURA (sem DOM): só string entra, só string sai — dá pra
+  // testar fora do navegador (ver dashboard_ansi_test.js, na mesma pasta).
+  //
+  // GARANTIA ANTI-XSS (substitui o textContent de antes, mesmo CONTRATO):
+  // nenhum byte vindo do terminal chega ao DOM sem tratamento. Todo trecho de
+  // TEXTO (incluindo o texto visível de um link OSC 8, incluindo qualquer
+  // coisa que pareça HTML impressa por um agente remoto, tipo
+  // "<img src=x onerror=alert(1)>") passa por esc() antes de entrar em
+  // qualquer <span>. As ÚNICAS tags emitidas são <span> criadas por ESTA
+  // função, com atributos montados inteiramente a partir de números JÁ
+  // validados: um código SGR vira estado (bold/dim/italic/underline/inverse,
+  // booleans) OU um índice de cor validado como inteiro 0-255 usado pra
+  // indexar ANSI_PALETTE16/256 (nunca uma string do terminal vira classe,
+  // valor de style ou parte de url()); truecolor (38;2;R;G;B) só produz
+  // rgb(R,G,B) depois de checar que R,G,B são inteiros 0-255 — se qualquer
+  // parâmetro não for numérico, estiver fora de faixa, ou a sequência estiver
+  // malformada/truncada, o atributo é descartado (SGR ignorado) e o parser
+  // segue em frente, nunca lança exceção nem repassa string crua pro style.
+  // Link OSC 8 nunca vira <a href> de verdade (fora de escopo por decisão) —
+  // elimina de saída a URL do terminal virar atributo href/javascript: URI.
+  function parseAnsiToHtml(raw) {
+    const text = String(raw ?? '');
+    const len = text.length;
+    let out = '', buf = '', i = 0;
+    let bold = false, dim = false, italic = false, underline = false, inverse = false;
+    let fg = null, bg = null; // null = cor padrão do terminal (sem override)
+
+    function flush() {
+      if (!buf) return;
+      const escaped = esc(buf);
+      buf = '';
+      const parts = [];
+      if (bold) parts.push('font-weight:700');
+      if (dim) parts.push('opacity:.65');
+      if (italic) parts.push('font-style:italic');
+      if (underline) parts.push('text-decoration:underline');
+      let fgOut = fg, bgOut = bg;
+      if (inverse) { fgOut = bg || ANSI_DEFAULT_BG; bgOut = fg || ANSI_DEFAULT_FG; }
+      if (fgOut) parts.push(`color:${fgOut}`);
+      if (bgOut) parts.push(`background:${bgOut}`);
+      if (!parts.length) { out += escaped; return; }
+      // Único ponto que emite <span>: todo valor em `parts` veio de boolean
+      // interno ou de ANSI_PALETTE16/256[idxValidado]/rgb(intValidado,...) —
+      // nunca de uma string bruta do terminal.
+      out += `<span style="${parts.join(';')}">${escaped}</span>`;
+    }
+    function resetAll() { bold = dim = italic = underline = inverse = false; fg = null; bg = null; }
+
+    // Um código SGR (ex. 38 ou 48) pode consumir os tokens SEGUINTES do MESMO
+    // ';' (38;5;N = um atributo de 3 parâmetros, 38;2;R;G;B = um de 5) — por
+    // isso o loop usa índice mutável em vez de tratar cada pedaço entre ';'
+    // como um SGR independente (o erro clássico: "1;38;5;231" tratado como
+    // 1, 38, 5, 231 soltos faria "231" virar outro código sem sentido).
+    function applySgr(paramStr) {
+      let tokens = paramStr.split(/[;:]/);
+      if (tokens.length === 1 && tokens[0] === '') tokens = ['0']; // ESC[m == reset
+      const isNum = (t) => /^\d+$/.test(t || '');
+      let k = 0;
+      while (k < tokens.length) {
+        const tok = tokens[k];
+        if (!isNum(tok)) { k++; continue; } // parâmetro não numérico: descartado, não quebra o parser
+        const n = parseInt(tok, 10);
+        if (n === 0) resetAll();
+        else if (n === 1) bold = true;
+        else if (n === 2) dim = true;
+        else if (n === 3) italic = true;
+        else if (n === 4) underline = true;
+        else if (n === 7) inverse = true;
+        else if (n === 22) { bold = false; dim = false; }
+        else if (n === 23) italic = false;
+        else if (n === 24) underline = false;
+        else if (n === 27) inverse = false;
+        else if (n >= 30 && n <= 37) fg = ANSI_PALETTE16[n - 30];
+        else if (n === 39) fg = null;
+        else if (n >= 40 && n <= 47) bg = ANSI_PALETTE16[n - 40];
+        else if (n === 49) bg = null;
+        else if (n >= 90 && n <= 97) fg = ANSI_PALETTE16[n - 90 + 8];
+        else if (n >= 100 && n <= 107) bg = ANSI_PALETTE16[n - 100 + 8];
+        else if (n === 38 || n === 48) {
+          const isFg = n === 38;
+          const mode = tokens[k + 1];
+          if (mode === '5') {
+            const idxTok = tokens[k + 2];
+            k += 2; // consome '5' + índice, validados ou não — nunca sobra pedaço solto
+            if (isNum(idxTok)) {
+              const idx = parseInt(idxTok, 10);
+              if (idx >= 0 && idx <= 255) { const col = ANSI_PALETTE256[idx]; if (isFg) fg = col; else bg = col; }
+            }
+            // índice ausente/não numérico/fora de 0-255: atributo descartado, sem aplicar cor
+          } else if (mode === '2') {
+            const rt = tokens[k + 2], gt = tokens[k + 3], bt = tokens[k + 4];
+            k += 4; // consome '2' + R,G,B, validados ou não
+            if (isNum(rt) && isNum(gt) && isNum(bt)) {
+              const r = parseInt(rt, 10), g = parseInt(gt, 10), b = parseInt(bt, 10);
+              if (r <= 255 && g <= 255 && b <= 255) { const col = `rgb(${r},${g},${b})`; if (isFg) fg = col; else bg = col; }
+            }
+          } else if (mode !== undefined) {
+            // [16/08/2026] Modo presente mas não reconhecido (ex.: ESC[38;4;200m):
+            // consome o token do modo mesmo assim. Sem isto, o '4' voltava ao laço
+            // como se fosse um SGR independente e virava SUBLINHADO — uma sequência
+            // malformada acabava PINTANDO a tela em vez de ser ignorada. Quantos
+            // parâmetros ela pediria continua indecidível; consumir só o modo é o
+            // mínimo que impede o efeito colateral.
+            k += 1;
+          }
+          // 38/48 sem modo nenhum (fim dos tokens): nada a fazer.
+        }
+        // qualquer outro código (5=blink, 8=oculto, 9=riscado, etc.): sem efeito aqui, ignorado.
+        k++;
+      }
+    }
+
+    while (i < len) {
+      const ch = text[i];
+      if (ch === '\x1b') { // ESC
+        const next = text[i + 1];
+        if (next === '[') { // CSI: ESC [ params intermediários final(@-~)
+          let j = i + 2;
+          while (j < len) {
+            const code = text.charCodeAt(j);
+            if (code >= 0x40 && code <= 0x7e) break;
+            j++;
+          }
+          if (j >= len) { i = len; break; } // CSI truncado no fim do buffer (poll cortou no meio): descarta o resto, não quebra
+          const finalByte = text[j];
+          // [16/08/2026] Final 'm' NÃO basta pra ser SGR: um byte de parâmetro
+          // privado (< = > ?, faixa 0x3c-0x3f) logo após o CSI marca sequência
+          // privada, e algumas delas terminam em 'm' — ESC[>4;2m (XTMODKEYS, o
+          // modifyOtherKeys do xterm/kitty) é a comum. Sem esta checagem, '>4;2'
+          // ia pro applySgr, o '>4' não casava com nada e o '2' virava DIM: uma
+          // sequência de configuração de TECLADO acabava esmaecendo a tela.
+          // Achado pelo dashboard_ansi_test.js.
+          const c0 = text.charCodeAt(i + 2);
+          const privada = c0 >= 0x3c && c0 <= 0x3f;
+          if (finalByte === 'm' && !privada) { flush(); applySgr(text.slice(i + 2, j)); }
+          // qualquer outro final byte (cursor H/A/B/C/D, apagar J/K, modo DEC
+          // ?1049h/l, etc.) é descartado PELA FORMA da sequência, não por uma
+          // lista fechada — é exatamente essa lista fechada que faltava antes.
+          i = j + 1;
+          continue;
+        }
+        if (next === ']') { // OSC: ESC ] ... terminado por BEL ou ST (ESC \)
+          let j = i + 2, termLen = 0;
+          while (j < len) {
+            if (text.charCodeAt(j) === 0x07) { termLen = 1; break; }
+            if (text[j] === '\x1b' && text[j + 1] === '\\') { termLen = 2; break; }
+            j++;
+          }
+          if (j >= len) { i = len; break; } // OSC sem terminador (truncado): descarta o resto
+          // O wrapper inteiro some sempre (título de janela OSC 0/1/2, ou a
+          // abertura/fechamento de um hyperlink OSC 8); o texto VISÍVEL de um
+          // link OSC 8 fica FORA deste bloco — é texto normal entre as duas
+          // sequências e já passa por esc() no fluxo comum abaixo.
+          i = j + termLen;
+          continue;
+        }
+        // Outras formas de ESC (seleção de charset ESC ( B, save/restore ESC 7/8, etc.): descartadas.
+        const c1 = text.charCodeAt(i + 1);
+        if (c1 >= 0x20 && c1 <= 0x2f) {
+          let j = i + 2;
+          while (j < len && text.charCodeAt(j) >= 0x20 && text.charCodeAt(j) <= 0x2f) j++;
+          i = (j < len) ? j + 1 : len;
+        } else if (i + 1 < len) { i += 2; } else { i = len; } // ESC sozinho no fim: descarta, não quebra
+        continue;
+      }
+      if (ch === '\x07') { i++; continue; } // BEL solto: descartado, sem efeito sonoro/visual
+      if (ch === '\r') { i++; continue; } // CR isolado: no-op (tmux -e já resolveu overwrite antes de chegar aqui)
+      buf += ch;
+      i++;
+    }
+    flush();
+    return out;
+  }
+  // ANSI_PARSER_END
+
+  // [16/08/2026] .term-full mora no painel do modal (sobrevive ao remount do
+  // #sessBody a cada troca de sessão/modo), por isso vive como função
+  // top-level em vez de fechada dentro de renderTerminalBody — tanto o botão
+  // (recriado a cada render) quanto o handler global de Esc (que não sabe se
+  // há botão na tela) chamam a MESMA função pra nunca dessincronizar classe
+  // do painel x aparência do botão.
+  function setTermFull(on) {
+    $sessionModalPanel.classList.toggle('term-full', on);
+    const btn = document.getElementById('termFullBtn');
+    if (!btn) return;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', String(on));
+    btn.textContent = on ? 'Sair da tela cheia' : 'Tela cheia';
+  }
+
   function renderTerminalBody(s) {
     document.getElementById('sessBody').innerHTML = `
+      <div class="term-toolbar" id="termToolbar">
+        <button type="button" class="term-key" id="termFullBtn" title="Alternar tela cheia do terminal" aria-label="Alternar tela cheia do terminal" aria-pressed="false">Tela cheia</button>
+        <button type="button" class="term-key" id="termWrapBtn" title="Alternar quebra de linha" aria-label="Alternar quebra de linha automática" aria-pressed="false">Quebrar linha</button>
+      </div>
       <pre class="term-screen" id="termScreen">Carregando tela…</pre>
       <div class="term-keys" id="termKeys">${TERM_KEYS.map(([label, key]) => `<button type="button" class="term-key" data-key="${esc(key)}">${esc(label)}</button>`).join('')}</div>
       <form class="chat-compose" id="termForm">
@@ -934,6 +1223,19 @@
         <button type="submit">Enviar</button>
       </form>
     `;
+    // Cada renderTerminalBody recria o toolbar do zero -> .term-full do
+    // painel (que persiste) pode estar ligado de uma sessão anterior; sincroniza
+    // a aparência do botão novo sem mexer na classe (senão fechava a tela cheia
+    // sozinho ao só trocar de aba/sessão).
+    setTermFull($sessionModalPanel.classList.contains('term-full'));
+    document.getElementById('termFullBtn').addEventListener('click', () => {
+      setTermFull(!$sessionModalPanel.classList.contains('term-full'));
+    });
+    document.getElementById('termWrapBtn').addEventListener('click', (e) => {
+      const on = document.getElementById('termScreen').classList.toggle('wrap');
+      e.currentTarget.classList.toggle('active', on);
+      e.currentTarget.setAttribute('aria-pressed', String(on));
+    });
     document.getElementById('termKeys').addEventListener('click', (e) => {
       const b = e.target.closest('.term-key'); if (!b || !openSessionId) return;
       sendTmuxKey(s.machine, s.pane, b.dataset.key);
@@ -947,12 +1249,18 @@
       sendTmuxText(s.machine, s.pane, v);
     });
   }
-  // textContent (não innerHTML+esc): é uma tela de terminal de terceiro, e
-  // textContent nunca interpreta o que escreve como HTML — mesma garantia do
-  // esc(), sem precisar preservar espaços/quebras via entidades.
+  // [16/08/2026] Era textContent (nunca interpreta o que escreve como HTML) —
+  // seguro, mas cru: sequência ANSI vazava como texto ("[38;5;246m" etc.),
+  // porque textContent não entende ESC, só imprime o byte-fantasma seguido do
+  // resto da sequência. Agora é innerHTML + parseAnsiToHtml(), que MANTÉM a
+  // mesma garantia por outro caminho: todo texto do terminal passa por esc()
+  // dentro do parser antes de virar HTML (ver comentário na função, acima) —
+  // é uma tela de terminal de TERCEIRO, e as únicas tags no resultado são
+  // <span> que o próprio parser cria a partir de SGR já validado, nunca uma
+  // tag/atributo refletindo bytes crus do terminal.
   function renderScreen(text) {
     const el = document.getElementById('termScreen'); if (!el) return;
-    el.textContent = text;
+    el.innerHTML = parseAnsiToHtml(text);
     el.scrollTop = el.scrollHeight;
   }
   let screenPollTimer = null;
@@ -1426,6 +1734,12 @@
     if (e.key !== 'Escape') return;
     if (!$confirmModal.hidden) closeConfirm();
     else if (!$cardModal.hidden) closeCard();
+    // [16/08/2026] Tela cheia do terminal é pseudo-fullscreen via classe, não
+    // a Fullscreen API real (ver comentário em .session-modal.term-full) —
+    // por isso o PRÓPRIO Esc do dashboard, e não um listener nativo do
+    // browser, decide: 1º Esc em tela cheia só sai da tela cheia (return,
+    // preserva a cascata); só um Esc seguinte, já fora dela, fecha o modal.
+    else if (!$sessionModal.hidden && $sessionModalPanel.classList.contains('term-full')) setTermFull(false);
     else if (!$sessionModal.hidden) closeSessionModal();
   });
 
