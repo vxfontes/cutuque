@@ -467,6 +467,22 @@ struct APIClient {
         let machines: [Machine]
     }
 
+    /// Alcance de cada máquina cadastrada como alvo. `GET /machines/reachability`.
+    ///
+    /// Barata de propósito: o hub responde SEMPRE do cache e nunca abre ssh na
+    /// hora do request — uma máquina desligada custava 10 s de `ConnectTimeout` a
+    /// quem só queria LER a lista (medido em produção, 13/08/2026). Por isso dá
+    /// para chamar em laço curto sem medo; quem paga a sondagem é a rodada de
+    /// fundo do hub, em paralelo e com timeout de consulta (3 s).
+    func reachability() async throws -> [MachineReachability] {
+        let envelope: ReachabilityEnvelope = try await getJSON(["machines", "reachability"])
+        return envelope.machines
+    }
+
+    private struct ReachabilityEnvelope: Decodable {
+        let machines: [MachineReachability]
+    }
+
     // MARK: - Cadastro de máquinas (aba Máquinas)
 
     /// Cadastra uma máquina nova associada a uma identidade JÁ existente. O hub

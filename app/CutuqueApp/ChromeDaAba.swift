@@ -27,9 +27,31 @@ struct ChromeDaAba: View {
     @EnvironmentObject private var nav: NavigationState
     @Environment(\.corDeDestaque) private var corDeDestaque
 
+    /// Quanto o seletor centralizado deixa livre em CADA borda para o ⤡ nunca
+    /// ficar por cima dele. 44 é o alvo de toque mínimo da Apple, que é também o
+    /// espaço que um botão de barra ocupa na prática — vale dos dois lados
+    /// porque o seletor só fica no centro de verdade se as duas margens forem
+    /// iguais.
+    private let larguraDaPistaDoBotao: CGFloat = 44
+
     var body: some View {
         let segmentos = nav.segmentos(de: chave)
-        HStack(spacing: 12) {
+        // [16/08/2026] "centralize o terminal | info, tá na esquerda". Antes era
+        // um `HStack` com o seletor, um `Spacer` e o ⤡ — o que alinha o seletor
+        // à ESQUERDA, não ao centro.
+        //
+        // O conserto NÃO é pôr um `Spacer` também antes: com o ⤡ no fluxo, o
+        // "centro" passa a ser o centro do que SOBRA à esquerda dele, e o
+        // seletor fica meio botão fora do eixo. E também não é espelhar o botão
+        // escondido do outro lado, que é o truque usual: `botaoTelaCheia` carrega
+        // o ÚNICO ⌘⌃F do app (ver o comentário dele), e uma segunda cópia — mesmo
+        // com `.hidden()` — registra o atalho duas vezes, que é exatamente o
+        // "atalho duplicado em N views é sorteio de qual responde" que esta
+        // chrome nasceu para acabar.
+        //
+        // Então o ⤡ sai do cálculo do centro: ele vira uma camada por cima, e o
+        // seletor se centraliza na faixa INTEIRA.
+        ZStack {
             if !segmentos.isEmpty {
                 Picker("Painel", selection: escolhaBinding(segmentos)) {
                     ForEach(segmentos) { segmento in
@@ -42,9 +64,16 @@ struct ChromeDaAba: View {
                 // Segmentado ocupando a largura do iPad ficaria com botões
                 // gigantes e a faixa parecendo uma segunda barra de abas.
                 .frame(maxWidth: 340)
+                // Reserva a pista do ⤡ dos DOIS lados. Sem isto o seletor
+                // centralizado passaria por baixo do botão numa coluna estreita
+                // — o preço de tirar o botão do fluxo é que ele deixa de
+                // empurrar, então quem garante a folga é esta margem.
+                .padding(.horizontal, larguraDaPistaDoBotao)
             }
-            Spacer(minLength: 0)
-            botaoTelaCheia
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                botaoTelaCheia
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)

@@ -404,6 +404,83 @@ struct Machine: Decodable, Identifiable, Hashable {
     var displayIcon: String { MachineIcon.symbol(escolhido: icon, os: os) }
 }
 
+/// Alcance de uma máquina — o que `GET /machines/reachability` devolve, uma
+/// linha por máquina cadastrada como alvo.
+///
+/// É eixo SEPARADO de `needsTrust`: "o ssh respondeu" e "a impressão digital foi
+/// confirmada" são perguntas diferentes, e o hub de propósito não inventou um
+/// quarto estado para juntar as duas (host-key não confiável cai em
+/// `naoRespondeu` como qualquer outra falha). Quem mistura os dois na tela
+/// mente sobre um deles.
+struct MachineReachability: Decodable, Equatable {
+    let machine: String
+    let state: ReachState
+    /// Quando a última sondagem terminou. Ausente enquanto o estado é
+    /// `checando` — o hub omite o campo em vez de mandar um horário inventado,
+    /// então aqui ele é opcional de verdade, não um `Date()` de mentira.
+    let checkedAt: Date?
+}
+
+/// Os TRÊS estados de alcance, exatamente os do hub. `Decodable` por
+/// `rawValue`, com queda em `checando` para estado desconhecido: um hub mais
+/// novo que invente um quarto valor não pode fazer a lista inteira falhar de
+/// decodificar — "ainda não sei" é a degradação honesta.
+enum ReachState: String, Decodable, Equatable {
+    case checando
+    case pronto
+    case naoRespondeu = "nao_respondeu"
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ReachState(rawValue: raw) ?? .checando
+    }
+}
+
+/// O que a bolinha de alcance mostra na linha da máquina — ou se mostra alguma
+/// coisa. Função pura, longe da `View`, no mesmo molde de `CorDeStatus.para`.
+///
+/// Duas regras que não são óbvias e que valem o teste:
+///
+/// 1. **Cadastro pela metade não ganha bolinha.** `needsTrust` (impressão
+///    digital não confirmada) já tem o escudo laranja da linha, e essa máquina
+///    o hub RECUSA conectar — bolinha vermelha ao lado do escudo diria "está
+///    fora do ar", que é diagnóstico errado: ela nem foi tentada. O que falta é
+///    confirmar, e é isso que o escudo já diz.
+/// 2. **Ausente da resposta não é "checando".** Máquina que o hub ainda não
+///    reportou (cadastrada agora, sondagem não passou por ela) fica SEM
+///    bolinha, e não com uma cinza para sempre — bolinha permanente de
+///    "checando" mente sobre haver uma sondagem em curso.
+///
+/// Alcance e confiança são eixos separados: um diz se responde, o outro se
+/// temos permissão de perguntar. Quem não tem o segundo nunca chega no primeiro.
+enum PontoDeAlcance {
+    /// Nil = não desenha bolinha nenhuma.
+    static func para(_ estado: ReachState?, needsTrust: Bool) -> Ponto? {
+        if needsTrust { return nil }
+        switch estado {
+        case .none:         return nil
+        case .pronto:       return Ponto(cor: .green, rotulo: "no ar")
+        case .naoRespondeu: return Ponto(cor: .red, rotulo: "não respondeu")
+        // Cinza, não âmbar: checar é estado NEUTRO e passageiro. Âmbar é a cor
+        // de aviso do app (o escudo do `needsTrust`), e gastá-la aqui faria
+        // toda abertura da aba piscar "atenção" antes da primeira resposta.
+        case .checando:     return Ponto(cor: .secondary, rotulo: "checando")
+        }
+    }
+
+    /// Cor e o texto que o leitor de tela fala. O rótulo não é decorativo: a
+    /// bolinha é a ÚNICA portadora dessa informação na linha, então sem ele o
+    /// VoiceOver não teria como anunciar o alcance.
+    ///
+    /// Verde/vermelho aqui são semânticos (respondeu / não respondeu) e por isso
+    /// NÃO seguem a cor de destaque, pela mesma regra que `CorDeStatus` aplica
+    /// aos estados semânticos de sessão.
+    struct Ponto: Equatable {
+        let cor: Color
+        let rotulo: String
+    }
+}
+
 extension Notification.Name {
     /// Alguma máquina mudou no hub por uma tela que não é a lista (hoje: a
     /// aparência, trocada no painel de detalhe). Existe porque no iPad a lista

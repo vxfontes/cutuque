@@ -4,8 +4,14 @@ import SwiftUI
 /// Aba Máquinas: lista os hosts que o hub conhece e cadastra os novos. Tocar
 /// num host abre o terminal livre e os arquivos dele (`MachineDetailView`).
 ///
-/// A lista NÃO testa a conexão de todas as máquinas ao abrir — seriam N
-/// handshakes SSH por refresh, e o alcance só importa quando se entra no host.
+/// [16/08/2026] A lista passou a mostrar alcance ("no ar" / "não respondeu")
+/// numa bolinha por linha. Isto ANTES era proibido, e o motivo continua valendo:
+/// abrir N handshakes SSH a cada refresh fazia uma máquina morta custar 10 s de
+/// `ConnectTimeout` a quem só queria LER a lista. O que mudou não foi a regra —
+/// foi o hub ganhar `GET /machines/reachability`, que responde SEMPRE do cache
+/// (TTL de 20 s) e sonda em background, em paralelo. Ler alcance hoje custa um
+/// lookup de mapa; a proibição de sondar na hora do request segue de pé, só
+/// mudou de lado do fio.
 struct MachineListView: View {
     /// Quando não-nil, a lista roda embutida na coluna `content` de uma
     /// `NavigationSplitView` (iPad): não cria `NavigationStack` própria e
@@ -27,6 +33,14 @@ struct MachineListView: View {
     /// — o envelope local que existia aqui só duplicava esses três casos.
     @State private var cadastro: NewMachineView.Modo?
     @State private var apagando: Machine?
+    /// Alcance por nome de máquina, do `GET /machines/reachability`. Dicionário
+    /// à parte, e não um campo na `Machine`: são coisas de ciclo diferente — o
+    /// cadastro só muda quando ela mexe, o alcance muda sozinho a cada sondagem.
+    /// Fundir os dois faria toda atualização de alcance reescrever os elementos
+    /// da lista, e no iPad a `List(selection:)` pisca a seleção quando isso
+    /// acontece.
+    @State private var alcance: [String: ReachState] = [:]
+    @State private var sondagem: Task<Void, Never>?
     private let api = APIClient()
 
     var body: some View {
@@ -78,9 +92,27 @@ struct MachineListView: View {
                 }
             }
         }
-        .refreshable { await load() }
+        .refreshable {
+            await load()
+            // Puxar pra baixo é pedido explícito de "confere agora": além do
+            // cadastro, uma passada de alcance fora do ritmo do laço.
+            await sondarUmaVez()
+        }
         .overlay { if loading && machines.isEmpty { ProgressView() } }
-        .task { await load() }
+        .task {
+            // Alcance começa ANTES do await do cadastro, não depois — senão a
+            // primeira sondagem só sairia quando `load()` terminasse (mesmo
+            // motivo do `startLivePolling()` antes do `refresh()` em
+            // `SessionListView`).
+            iniciarSondagem()
+            await load()
+        }
+        // `.onDisappear` e não um portão de "aba em foco": ao contrário dos
+        // painéis de sessão, esta lista DESMONTA de verdade ao trocar de seção
+        // — ela vive num `switch nav.destination` (`RootSplitView`), não no
+        // `ZStack` de abas montadas pra sempre da decisão #19. Mesmo padrão que
+        // `SessionListView` já usa pro polling dele de 15 s.
+        .onDisappear { pararSondagem() }
         // No iPad a lista fica visível ao lado do painel: ela não "reaparece"
         // quando a aparência muda no detalhe, e sem isto o ícone velho ficaria na
         // barra lateral até um pull-to-refresh.
@@ -169,6 +201,18 @@ struct MachineListView: View {
                     .labelStyle(.iconOnly)
                     .foregroundStyle(.orange)
                     .accessibilityLabel("falta confirmar a impressão digital")
+            } else if let ponto = PontoDeAlcance.para(alcance[machine.name], needsTrust: false) {
+                Spacer()
+                Circle()
+                    .fill(ponto.cor)
+                    .frame(width: 8, height: 8)
+                    // A cor sozinha não informa quem não distingue verde de
+                    // vermelho — nem o VoiceOver. O rótulo é o conteúdo de
+                    // verdade; a bolinha é só como ele aparece.
+                    .accessibilityLabel(ponto.rotulo)
+                    // Trocar de estado sem animação faz a bolinha "piscar" de
+                    // cor a cada sondagem; com isto ela dissolve.
+                    .animation(.easeInOut(duration: 0.2), value: ponto)
             }
         }
     }
@@ -181,6 +225,53 @@ struct MachineListView: View {
             error = nil
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    // MARK: - Sondagem de alcance
+
+    /// 15 s, o mesmo ritmo do polling da lista de sessões — alcance muda na
+    /// escala de "desliguei a máquina", não na de digitação, e cada passada
+    /// custa N handshakes SSH no hub.
+    private static let intervaloDaSondagem: Duration = .seconds(15)
+
+    private func iniciarSondagem() {
+        // A `.task` da lista dispara de novo quando a view reaparece; sem esta
+        // guarda dois laços ficariam sondando em paralelo.
+        guard sondagem == nil else { return }
+        sondagem = Task {
+            while !Task.isCancelled {
+                await sondarUmaVez()
+                try? await Task.sleep(for: Self.intervaloDaSondagem)
+            }
+        }
+    }
+
+    private func pararSondagem() {
+        sondagem?.cancel()
+        // Zerar a referência (e não só cancelar) é o que deixa `iniciarSondagem`
+        // ligar de novo quando a lista voltar — senão a guarda acima barraria
+        // para sempre e o alcance congelaria na segunda visita à aba.
+        sondagem = nil
+    }
+
+    private func sondarUmaVez() async {
+        do {
+            let linhas = try await api.reachability()
+            alcance = Dictionary(
+                linhas.map { ($0.machine, $0.state) },
+                // Nomes de máquina são únicos no hub; se algum dia vierem
+                // repetidos, ficar com o último é melhor que estourar.
+                uniquingKeysWith: { _, ultimo in ultimo }
+            )
+        } catch {
+            // De propósito silencioso: alcance é informação ACESSÓRIA da lista.
+            // Escrever em `error` aqui trocaria a lista inteira pela tela de
+            // "não deu para listar" só porque uma sondagem de fundo falhou —
+            // com o cadastro carregado e perfeitamente utilizável.
+            //
+            // O estado velho também fica: apagar tudo faria as bolinhas sumirem
+            // e voltarem a cada soluço de rede, o que pisca mais do que informa.
         }
     }
 
