@@ -678,3 +678,84 @@ func TestLiveActivityTokenInvalidoRemoveComLog(t *testing.T) {
 		t.Errorf("log sem o motivo da remoção:\n%s", spy.texto())
 	}
 }
+
+// TestPushAposEviccaoDePane prova o Achado 1 (correção 16/08/2026): uma sessão
+// externa em needs_you que perde a pane — reciclada por um claude novo no
+// mesmo terminal, via Registry.SetPane — precisa gerar o push de "done" que a
+// evicção representa. Antes da correção, este teste FALHAVA: a evicção mudava
+// o estado (needs_you→done) só dentro do SetPane, e o broadcast chegava ao
+// notifier com Pane=="" — indistinguível do subagente que nunca teve pane —
+// então o guard de "subagente sem pane não cutuca" (notifier.go) engolia
+// também essa transição, e a sessão evictada sumia do radar (sem push, sem
+// histórico) exatamente quando o app estava fechado, que é quando o push mais
+// importa.
+func TestPushAposEviccaoDePane(t *testing.T) {
+	eng, _, _, fake, _ := fixture(t)
+
+	startExternal(eng, "ext1")
+	eng.Apply(event.Event{SessionID: "ext1", Type: event.NeedsInput, Data: "posso rodar isso?", At: time.Now()})
+
+	// Drena o push de needs_you do ext1 — não é o que este teste prova.
+	p := recv(t, fake)
+	if !strings.Contains(string(p.payload), `"state":"needs_you"`) {
+		t.Fatalf("esperava push needs_you do ext1 antes da evicção: %s", p.payload)
+	}
+
+	// ext2 nasce na MESMA pane/machine de ext1: o SetPane dentro de
+	// ensureRunning evicta ext1 (perdeu o terminal para um processo novo).
+	eng.Apply(event.Event{
+		SessionID: "ext2", Type: event.SessionStarted,
+		Machine: "macbook", Agent: "claude-code", Title: "novo dono da pane",
+		External: true, Pane: "/tmp/tmux-501/main\t%0", At: time.Now(),
+	})
+
+	// A evicção precisa cutucar done do ext1 (depois do coalescing de done
+	// externo, doneDelay=50ms na fixture).
+	p2 := recv(t, fake)
+	body := string(p2.payload)
+	if !strings.Contains(body, `"session_id":"ext1"`) || !strings.Contains(body, `"state":"done"`) {
+		t.Fatalf("evicção de pane devia cutucar done do ext1, veio: %s", body)
+	}
+}
+
+// TestSubagenteSemPaneNaoRegridePosCorrecao é o guardião da regra que a
+// correção do Achado 1 (16/08/2026) NÃO pode enfraquecer: um subagente
+// External que NUNCA teve pane (ex.: sub-agente do maestri) continua sem
+// push, mesmo rodando em paralelo a uma evicção de pane real de OUTRA sessão.
+// PaneEvicted só é true no instante do evento de evicção (Registry.SetPane);
+// um subagente que nunca passou por lá nunca o carrega, então o guard
+// "External && Pane=='' && !PaneEvicted" continua intacto para ele.
+func TestSubagenteSemPaneNaoRegridePosCorrecao(t *testing.T) {
+	eng, _, _, fake, _ := fixture(t)
+
+	// Sessão externa que vai sofrer evicção de verdade (tem pane, perde depois).
+	startExternal(eng, "ext1")
+	eng.Apply(event.Event{SessionID: "ext1", Type: event.NeedsInput, Data: "posso?", At: time.Now()})
+	recv(t, fake) // drena o push de needs_you do ext1
+
+	// Subagente real: nasce, pede input e termina — SEM pane em momento algum.
+	eng.Apply(event.Event{
+		SessionID: "sub1", Type: event.SessionStarted,
+		Machine: "macbook", Agent: "claude-code", Title: "subagente",
+		External: true, At: time.Now(), // sem Pane
+	})
+	eng.Apply(event.Event{SessionID: "sub1", Type: event.NeedsInput, Data: "?", At: time.Now()})
+	eng.Apply(event.Event{SessionID: "sub1", Type: event.Finished, At: time.Now()})
+
+	// Evicta ext1 de fato: ext2 nasce na mesma pane/machine.
+	eng.Apply(event.Event{
+		SessionID: "ext2", Type: event.SessionStarted,
+		Machine: "macbook", Agent: "claude-code", Title: "novo dono da pane",
+		External: true, Pane: "/tmp/tmux-501/main\t%0", At: time.Now(),
+	})
+
+	// Só o push de done do ext1 evictado deve chegar.
+	p := recv(t, fake)
+	if !strings.Contains(string(p.payload), `"session_id":"ext1"`) {
+		t.Fatalf("esperava o push do ext1 evictado, veio: %s", p.payload)
+	}
+	// sub1 (subagente sem pane) não pode cutucar em nenhum momento.
+	if p2, got := tryRecv(fake, 200*time.Millisecond); got {
+		t.Fatalf("subagente sem pane não devia cutucar: %s", p2.payload)
+	}
+}

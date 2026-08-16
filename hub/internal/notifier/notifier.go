@@ -262,7 +262,17 @@ func (n *Notifier) handle(s session.Session) {
 	// terminal ao vivo) e fica "arquivada" na aba Subagentes — NÃO cutuca, senão
 	// os subagentes do maestri inundariam a usuária com push sem sentido. Só
 	// registra o estado (e encerra qualquer nudge/done pendente).
-	if s.External && s.Pane == "" {
+	//
+	// PaneEvicted (correção do Achado 1, 16/08/2026) distingue esse subagente
+	// legítimo (NUNCA teve pane) de uma sessão que TINHA pane e a perdeu agora
+	// mesmo (Registry.SetPane evictando-a para um claude novo no mesmo
+	// terminal): as duas chegavam aqui com Pane=="" e eram tratadas igual, então
+	// a evicção também sumia sem push e sem histórico (a sessão evictada nunca
+	// passa pelo Engine, então isso é só o push — o histórico no Postgres é
+	// tarefa separada, ver comentário de SetPane). A regra de negócio
+	// "subagente sem pane não cutuca" continua intacta: isto só deixa de
+	// capturar quem TINHA pane e perdeu.
+	if s.External && s.Pane == "" && !s.PaneEvicted {
 		n.stopNudge(s.ID)
 		n.cancelDonePush(s.ID)
 		n.setState(s.ID, s.State)

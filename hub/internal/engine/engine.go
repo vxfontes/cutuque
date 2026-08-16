@@ -1,6 +1,17 @@
 // Package engine é o State Engine: consome eventos normalizados e move cada
 // sessão pela máquina de estados (docs/03-modelo-de-estado.md), atualizando o
 // Registry. É a única peça que escreve o estado das sessões.
+//
+// [16/08/2026] Ressalva: esta frase é o contrato central do projeto, e não é
+// enfraquecida pelo que segue — mas hoje ela não é 100% literal. Existem
+// bypasses conhecidos que decidem/escrevem estado de sessão sem passar por
+// aqui (em internal/launcher/launcher.go — ver o comentário revisado no topo
+// daquele arquivo —, e também em internal/registry/registry.go SetPane e
+// internal/reaper/reaper.go), catalogados com linha, motivo e proteção na
+// tabela "Bypasses conhecidos do contrato" de docs/02-arquitetura.md. São
+// dívida técnica conhecida e indesejada, não permissão: o Engine continua
+// sendo a ÚNICA peça que DEVERIA escrever estado, e todo bypass novo deve
+// entrar naquela tabela, não crescer por fora dela em silêncio.
 package engine
 
 import (
@@ -30,6 +41,13 @@ const histBuffer = 2048
 // histWriteTimeout limita cada escrita no banco para uma conexão pendurada não
 // segurar a goroutine de histórico para sempre.
 const histWriteTimeout = 5 * time.Second
+
+// maxCASAttempts é o teto defensivo dos loops de releitura+CAS (Sequências A e
+// D, [16/08/2026]). Na prática só 2-3 escritores concorrentes são plausíveis
+// por sessão — o teto existe só para uma contenção patológica futura não
+// travar Apply/ensureRunning num loop indefinido; excedê-lo loga um Warn e
+// desiste (a mesma filosofia "falha e conta" da Opção 2, nunca um hang mudo).
+const maxCASAttempts = 8
 
 // Engine aplica eventos ao Registry.
 type Engine struct {
@@ -142,31 +160,64 @@ func (e *Engine) Apply(ev event.Event) {
 	if !ok {
 		return // tipo sem efeito de estado
 	}
-	cur, exists := e.reg.Get(ev.SessionID)
-	if !exists {
-		return // sessão desconhecida: ignora
+	// [16/08/2026] Sequência A (nota de memória "Backend — Corrida Lógica no
+	// Engine.Apply", ACHADO 2): ler o estado fora de lock e escrever cego com
+	// UpdateState é TOCTOU — um user_responded e um evento terminal concorrentes
+	// para a mesma sessão podiam se entrelaçar de forma que o terminal fosse
+	// sobrescrito de volta a "running". A troca ingênua para um CAS de TIRO
+	// ÚNICO (from = snapshot lido uma vez) só troca de metade do bug: se o
+	// user_responded escreve primeiro, é o CAS do evento terminal que perde (seu
+	// `from` ficou obsoleto) e o veredito terminal é descartado — mesmo sintoma,
+	// ordem espelhada. O loop abaixo RELÊ fresco a cada tentativa e reavalia as
+	// MESMAS guards com o valor fresco: eventos terminais não têm guard
+	// restritiva de origem, então a segunda tentativa deles sempre converge;
+	// user_responded tem (a linha logo abaixo), e desiste corretamente quando já
+	// não vale mais. Decisão da dona do projeto (16/08, opção 2 "falha e
+	// conta"): é evento de sistema, não há usuária para avisar — perde → não
+	// aplica, e o fato fica OBSERVÁVEL via slog.Debug, nunca engolido em
+	// silêncio (mas também sem fingir no histórico que uma transição ocorreu:
+	// e.record só roda depois do `break`, nunca dentro do loop).
+	for attempt := 0; ; attempt++ {
+		cur, exists := e.reg.Get(ev.SessionID)
+		if !exists {
+			return // sessão desconhecida: ignora
+		}
+		// user_responded só faz sentido saindo de needs_you (a usuária respondeu ao
+		// pedido). De qualquer outro estado é no-op: evita regredir done→running numa
+		// corrida entre a resposta (goroutine HTTP) e o evento terminal do stream
+		// (goroutine do Runner) — ambos chamam Apply.
+		if ev.Type == event.UserResponded && cur.State != session.StateNeedsYou {
+			return
+		}
+		// session_ended (o processo do agente saiu) só rebaixa uma sessão que o hub
+		// ainda achava ATIVA. De running é o caso comum; de needs_you é o mais
+		// importante — uma pergunta cujo processo morreu não vai ser respondida
+		// nunca, e sem isso o notifier fica re-cutucando para sempre. De done/error
+		// é no-op: a sessão já tem veredito e trocá-lo por idle apagaria
+		// "concluída"/"falhou" do app sem ganhar nada.
+		if ev.Type == event.SessionEnded &&
+			cur.State != session.StateRunning && cur.State != session.StateNeedsYou {
+			return
+		}
+		if cur.State == target {
+			return // CAS(X,X) NÃO é no-op (registry.go:346 ainda bumpa UpdatedAt e faz broadcast) — early-return continua obrigatório
+		}
+		if e.reg.UpdateStateIfCurrent(ev.SessionID, cur.State, target) {
+			break
+		}
+		// Perdeu a corrida: outra goroutine escreveu entre o Get e o
+		// UpdateStateIfCurrent. Só 2-3 escritores concorrentes são plausíveis por
+		// sessão na prática — o teto abaixo é uma defesa contra contenção
+		// patológica futura não travar o Apply num loop indefinido, não um
+		// comportamento esperado do dia a dia.
+		if attempt+1 >= maxCASAttempts {
+			slog.Warn("engine: CAS excedeu o teto de tentativas, evento descartado (contenção patológica?)",
+				"session", ev.SessionID, "event_type", ev.Type, "attempts", attempt+1)
+			return
+		}
+		slog.Debug("engine: CAS perdeu a corrida, tentando de novo com estado fresco",
+			"session", ev.SessionID, "event_type", ev.Type)
 	}
-	// user_responded só faz sentido saindo de needs_you (a usuária respondeu ao
-	// pedido). De qualquer outro estado é no-op: evita regredir done→running numa
-	// corrida entre a resposta (goroutine HTTP) e o evento terminal do stream
-	// (goroutine do Runner) — ambos chamam Apply.
-	if ev.Type == event.UserResponded && cur.State != session.StateNeedsYou {
-		return
-	}
-	// session_ended (o processo do agente saiu) só rebaixa uma sessão que o hub
-	// ainda achava ATIVA. De running é o caso comum; de needs_you é o mais
-	// importante — uma pergunta cujo processo morreu não vai ser respondida
-	// nunca, e sem isso o notifier fica re-cutucando para sempre. De done/error
-	// é no-op: a sessão já tem veredito e trocá-lo por idle apagaria
-	// "concluída"/"falhou" do app sem ganhar nada.
-	if ev.Type == event.SessionEnded &&
-		cur.State != session.StateRunning && cur.State != session.StateNeedsYou {
-		return
-	}
-	if cur.State == target {
-		return // redundante: no-op (não mexe em UpdatedAt nem faz broadcast)
-	}
-	_ = e.reg.UpdateState(ev.SessionID, target)
 	e.record(ev, true) // transição de estado → histórico
 
 	// PendingPrompt (o texto que o app exibe): entra em needs_you com o resumo
@@ -288,8 +339,33 @@ func (e *Engine) ensureRunning(ev event.Event) {
 		// SetTitleIfExternal recusa sessão do Runner: lá a autoridade é dele.
 		e.reg.SetTitleIfExternal(ev.SessionID, ev.Title)
 	}
-	if cur.State != session.StateRunning {
-		_ = e.reg.UpdateState(ev.SessionID, session.StateRunning)
+	// [16/08/2026] `cur` vem do AddIfAbsent no TOPO de ensureRunning — pode estar
+	// obsoleto: uma escrita concorrente de OUTRO evento (ex.: Finished/Errored
+	// via Apply, para a MESMA sessão) pode ter mudado o estado real nesta
+	// janela. session_started tem um contrato diferente do da Sequência A: não
+	// existe um `from` único — é "force running seja qual for o estado
+	// anterior" — então não há guard de origem que precise desistir; a segunda
+	// tentativa do loop sempre converge. Relendo fresco a cada iteração (em vez
+	// de confiar no `cur` velho) preserva esse override incondicional sem
+	// arriscar pular a escrita (achando erradamente que já era running) nem
+	// sobrescrever um veredito terminal genuíno que chegou nessa janela.
+	for attempt := 0; ; attempt++ {
+		fresh, ok := e.reg.Get(ev.SessionID)
+		if !ok {
+			break // sessão sumiu (Remove concorrente) — nada a forçar
+		}
+		if fresh.State == session.StateRunning {
+			break // já é running (idempotente)
+		}
+		if e.reg.UpdateStateIfCurrent(ev.SessionID, fresh.State, session.StateRunning) {
+			break
+		}
+		if attempt+1 >= maxCASAttempts {
+			slog.Warn("engine: ensureRunning CAS excedeu o teto de tentativas, desistindo (contenção patológica?)",
+				"session", ev.SessionID, "attempts", attempt+1)
+			break
+		}
+		// perdeu: tenta de novo com o estado fresco (mesmo raciocínio da Sequência A acima)
 	}
 	e.reg.SetPane(ev.SessionID, ev.Pane)
 }

@@ -449,6 +449,46 @@ func TestConcurrentAccessIsRaceFree(t *testing.T) {
 	<-done
 }
 
+// TestSetPaneEvictionClearsPendingQuestions cobre o achado do card
+// a87e93b01123fa13 (bug irmão descoberto na mesma revisão): o switch de
+// evicção do SetPane, no case StateNeedsYou, limpava PendingPrompt mas
+// esquecia PendingQuestions — violando a invariante documentada em
+// session.go:66-72 ("Vazio nos demais casos" de needs_you). Sem a correção,
+// uma sessão evictada saía em StateDone com PendingQuestions ainda populado
+// (dado sujo no Registry e no JSON persistido). Nota: o nome de teste pedido
+// na tarefa original (TestSetPaneEvictsAndMarksBroadcastOnly) não existe no
+// repo — a cobertura de SetPane mora em internal/engine/engine_test.go
+// (TestSetPaneEvictsStaleSession), que também não cobria PendingQuestions;
+// este teste fica em registry_test.go por testar Registry.SetPane
+// diretamente, sem passar pelo Engine.
+func TestSetPaneEvictionClearsPendingQuestions(t *testing.T) {
+	r := New()
+	now := time.Now()
+	pane := "/tmp/tmux-501/main\t%0"
+	qs := []session.Question{{Question: "qual?", Options: []session.QuestionOption{{Label: "a"}, {Label: "b"}}}}
+
+	// A: travada em needs_you, com PendingQuestions preenchido E com a pane.
+	r.Add(session.Session{
+		ID: "A", Machine: "macbook", State: session.StateNeedsYou,
+		Pane: pane, PendingPrompt: "?", PendingQuestions: qs,
+		CreatedAt: now, UpdatedAt: now,
+	})
+	// B: nova sessão reusa a MESMA pane — evicta A.
+	r.Add(session.Session{ID: "B", Machine: "macbook", State: session.StateRunning, CreatedAt: now, UpdatedAt: now})
+	r.SetPane("B", pane)
+
+	a, _ := r.Get("A")
+	if a.State != session.StateDone {
+		t.Fatalf("A.State = %q, quero done (evictada)", a.State)
+	}
+	if a.PendingPrompt != "" {
+		t.Errorf("A.PendingPrompt = %q, quero vazio após evicção", a.PendingPrompt)
+	}
+	if len(a.PendingQuestions) != 0 {
+		t.Errorf("A.PendingQuestions = %+v, quero vazio após evicção (invariante de session.go:66-72)", a.PendingQuestions)
+	}
+}
+
 func TestRemoveDeletesAndSignals(t *testing.T) {
 	r := New()
 	sub := r.Subscribe()

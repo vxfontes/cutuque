@@ -416,3 +416,108 @@ func TestSessionStartedDoRunnerAindaReivindicaSessaoDeHook(t *testing.T) {
 		t.Errorf("Title = %q, quero \"autoritativo\"", got.Title)
 	}
 }
+
+// TestApply_TerminalEventThenStaleUserResponded_NeverRegresses cobre o call
+// site da Sequência A (engine.go, loop de CAS em Apply, [16/08/2026]) de forma
+// DETERMINÍSTICA (sem goroutines): força o estado terminal primeiro — como se
+// o "vencedor" de uma corrida já tivesse escrito seu veredito — e só depois
+// aplica o user_responded que chegaria com uma expectativa obsoleta de
+// needs_you (o "perdedor"). O loop relê o estado FRESCO a cada tentativa: a
+// primeira leitura já enxerga o veredito terminal, a guard de origem
+// (cur.State != needs_you) desiste sem escrever, e a sessão preserva o
+// veredito em vez de regredir a running.
+//
+// Isto NÃO substitui a prova sob concorrência real
+// (TestApply_ConcurrentUserRespondedVsTerminalEvent_NeverRegressesTerminalState,
+// reativado logo abaixo): aqui a ordem de chegada é fixada por construção
+// (útil como regressão rápida e sem flakiness), lá as 2000 tentativas cobrem
+// TODAS as ordens de chegada possíveis sob paralelismo real.
+func TestApply_TerminalEventThenStaleUserResponded_NeverRegresses(t *testing.T) {
+	cases := []struct {
+		name   string
+		termEv event.Type
+		want   session.State
+	}{
+		{"finished => done sobrevive", event.Finished, session.StateDone},
+		{"errored => error sobrevive", event.Errored, session.StateError},
+		{"session_ended => idle sobrevive", event.SessionEnded, session.StateIdle},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			reg := registry.New()
+			eng := New(reg)
+			seed(reg, "s", session.StateNeedsYou)
+
+			// "Vencedor": o evento terminal escreve primeiro (força o estado —
+			// simula o outro escritor tendo ganhado a corrida).
+			eng.Apply(event.Event{SessionID: "s", Type: c.termEv})
+			winner, _ := reg.Get("s")
+			if winner.State != c.want {
+				t.Fatalf("setup: State = %q após %v, quero %q", winner.State, c.termEv, c.want)
+			}
+
+			// "Perdedor": user_responded chega depois, com uma expectativa
+			// obsoleta de needs_you. O loop relê fresco, vê o veredito terminal
+			// já gravado e desiste (guard de origem) — nunca escreve running por
+			// cima, e não faz sequer um CAS(X,X): UpdatedAt não deveria mudar.
+			eng.Apply(event.Event{SessionID: "s", Type: event.UserResponded})
+
+			got, _ := reg.Get("s")
+			if got.State != c.want {
+				t.Errorf("State = %q após user_responded obsoleto, quero %q preservado (não pode regredir a running)", got.State, c.want)
+			}
+			if !got.UpdatedAt.Equal(winner.UpdatedAt) {
+				t.Errorf("UpdatedAt mudou (%v -> %v): user_responded obsoleto não deveria escrever nada", winner.UpdatedAt, got.UpdatedAt)
+			}
+		})
+	}
+}
+
+// TestEnsureRunning_ForcesRunningRegardlessOfForcedPriorState cobre o call
+// site da Sequência D (engine.go, loop de CAS em ensureRunning, [16/08/2026]):
+// session_started tem um contrato de "força running a partir de QUALQUER
+// estado anterior, inclusive terminal" — diferente da Sequência A, não há
+// `from` único nem guard restritiva de origem. Força o estado para done
+// (simula uma sessão que terminou — inclusive por uma escrita concorrente que
+// o `cur` capturado no AddIfAbsent não enxergaria mais, se o código ainda
+// fizesse a decisão em cima do snapshot velho) e confere que um re-disparo de
+// session_started (a sessão já existia — cai no ramo `!added`) força de volta
+// para running, usando SEMPRE o estado FRESCO lido dentro do loop.
+func TestEnsureRunning_ForcesRunningRegardlessOfForcedPriorState(t *testing.T) {
+	reg := registry.New()
+	eng := New(reg)
+	seed(reg, "s", session.StateDone) // força o estado: sessão já tinha veredito terminal
+
+	// Re-disparo de session_started (mesma machine/agent/title do seed) — cai
+	// no ramo "já existia" de ensureRunning, exercitando o loop de força.
+	eng.Apply(event.Event{SessionID: "s", Type: event.SessionStarted,
+		Machine: "macbook", Agent: "claude-code", Title: "t"})
+
+	got, _ := reg.Get("s")
+	if got.State != session.StateRunning {
+		t.Errorf("State = %q após session_started re-disparado sobre done, quero StateRunning (override incondicional)", got.State)
+	}
+}
+
+// TestEnsureRunning_AlreadyRunningIsIdempotent cobre o outro ramo do mesmo
+// loop: quando o estado fresco já É running, o loop sai (`break`) sem chamar
+// UpdateStateIfCurrent — evita um CAS(running,running) à toa (bump de
+// UpdatedAt e broadcast) toda vez que um hook re-confirma uma sessão que já
+// estava rodando.
+func TestEnsureRunning_AlreadyRunningIsIdempotent(t *testing.T) {
+	reg := registry.New()
+	eng := New(reg)
+	seed(reg, "s", session.StateRunning)
+	before, _ := reg.Get("s")
+
+	eng.Apply(event.Event{SessionID: "s", Type: event.SessionStarted,
+		Machine: "macbook", Agent: "claude-code", Title: "t"})
+
+	after, _ := reg.Get("s")
+	if after.State != session.StateRunning {
+		t.Errorf("State = %q, quero StateRunning", after.State)
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("UpdatedAt mudou (%v -> %v): sessão já running não deveria ter sido reescrita", before.UpdatedAt, after.UpdatedAt)
+	}
+}

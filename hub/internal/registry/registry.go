@@ -392,6 +392,14 @@ func (r *Registry) SetPane(id, pane string) {
 					os.State = session.StateDone
 					os.UpdatedAt = time.Now()
 					os.PendingPrompt = ""
+					// [16/08/2026] Faltava limpar PendingQuestions aqui: a invariante
+					// documentada em session.go:66-72 ("Vazio nos demais casos [de
+					// needs_you]") valia pra PendingPrompt mas não pra este campo —
+					// uma sessão evictada saía do needs_you carregando a pergunta de
+					// seleção pendente, dado sujo tanto no Registry quanto no JSON
+					// persistido/serializado, à espera do próximo consumidor que
+					// confiasse na invariante documentada.
+					os.PendingQuestions = nil
 				case session.StateRunning:
 					// Perder o pane para um claude NOVO é prova de que este aqui
 					// não está mais rodando naquele terminal. Antes ele só perdia
@@ -403,7 +411,21 @@ func (r *Registry) SetPane(id, pane string) {
 					os.UpdatedAt = time.Now()
 				}
 				r.byID[oid] = os
-				evicted = append(evicted, os)
+				// Correção do Achado 1 (16/08/2026): o marcador PaneEvicted vai SÓ
+				// na cópia que sai pro broadcast (notifyCopy), nunca na cópia
+				// gravada em r.byID acima. Motivo: r.byID é o estado durável —
+				// contaminar ele com um sinal que só faz sentido NESTE evento
+				// vazaria para List()/persist() futuros. O notifier (único
+				// consumidor que se importa com isso hoje) precisa do marcador
+				// para não confundir "tinha pane e perdeu agora" (deve cutucar)
+				// com "nunca teve pane" (subagente do maestri, não deve cutucar
+				// — guard em notifier.go). Sem isso, a sessão evictada chegava ao
+				// notifier com Pane=="" igual a um subagente, o push de done/idle
+				// era descartado e a sessão sumia do radar quando o app estava
+				// fechado (achado 1: eviccão do SetPane perde push e histórico).
+				notifyCopy := os
+				notifyCopy.PaneEvicted = true
+				evicted = append(evicted, notifyCopy)
 			}
 		}
 	}

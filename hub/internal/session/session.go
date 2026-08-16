@@ -52,6 +52,17 @@ type Session struct {
 	// local fora do tmux. Permite ao app abrir o terminal ao vivo dessa exata
 	// sessão (correlação robusta, mesmo com várias sessões na mesma pasta).
 	Pane string `json:"pane,omitempty"`
+	// PaneEvicted é um marcador que existe APENAS no valor entregue pelo
+	// Subscribe() no instante em que Registry.SetPane evicta esta sessão
+	// (perdeu o pane para um claude novo no mesmo terminal) — nunca no estado
+	// durável guardado pelo Registry (r.byID), nem no JSON do WS/REST/
+	// persistência (por isso a tag "-": não é contrato de app, é sinal interno
+	// hub→notifier). Corrige o Achado 1 (16/08/2026): antes, a evicção zerava
+	// Pane e o notifier não distinguia essa sessão (que TINHA pane e perdeu)
+	// do subagente que NUNCA teve pane — as duas caíam no mesmo guard
+	// "External && Pane==''" em notifier.go e perdiam o push de done/idle.
+	// Ver Registry.SetPane e notifier.handle.
+	PaneEvicted bool `json:"-"`
 	// PendingQuestions é preenchido quando o pending é uma pergunta de seleção
 	// (a ferramenta nativa AskUserQuestion do Claude Code) em vez de um pedido
 	// comum de permissão: o app troca o sim/não por um seletor (single/multi
