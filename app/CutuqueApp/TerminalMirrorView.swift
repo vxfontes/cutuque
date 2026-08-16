@@ -91,12 +91,39 @@ final class TerminalMirrorModel: ObservableObject {
         guard pollTask == nil else { return }
         pollTask = Task { [weak self] in
             var pacer = PollPacer()
+            let relogio = ContinuousClock()
+            // [16/08/2026] Instante do último `record` — substitui a antiga
+            // `sonoAnterior` (o sono PLANEJADO da rodada anterior). O
+            // problema da antiga: se o app suspende, o `Task.sleep` estoura
+            // MUITO além do planejado, mas `sonoAnterior` continuava com o
+            // número pequeno de antes — o `elapsed` passado ao pacer mentia
+            // pra menos e a rampa demorava a subir. Guardando o INSTANTE em
+            // vez do sono, `DecorridoReal.desde` mede a diferença de parede
+            // entre duas voltas — suspensão incluída de graça. `nil` na
+            // primeira volta: sem registro anterior, ver `DecorridoReal`.
+            var ultimoRegistro: ContinuousClock.Instant?
             while !Task.isCancelled {
                 guard let self else { return }
+                let t0 = relogio.now
                 let changed = await self.refresh()
-                let interval = pacer.interval
-                pacer.record(changed: changed, elapsed: interval.seconds)
-                try? await Task.sleep(for: interval)
+                let agora = relogio.now
+                // Custo REAL da requisição — RTT de Tailscale+SSH+capture-pane
+                // incluído. É o que faltava para descontar do sleep (defeito 1).
+                let custo = agora - t0
+                // Tempo REAL decorrido desde o `record` anterior (defeito 3,
+                // agora à prova de suspensão — ver `DecorridoReal`). Lido e
+                // gravado ANTES de `pacer.interval` ser consultado de novo
+                // (defeito 2): a decisão de quanto dormir já enxerga o
+                // resultado da rodada que acabou de rodar, então uma tecla
+                // digitada agora derruba `quietFor` a zero e o sono seguinte
+                // já sai no piso — não espera uma volta inteira do laço para
+                // reagir.
+                let decorrido = DecorridoReal.desde(ultimoRegistro: ultimoRegistro, agora: agora, custo: custo)
+                pacer.record(changed: changed, elapsed: decorrido.seconds)
+                ultimoRegistro = agora
+                let alvo = pacer.interval
+                let sono = SonoRestante.duracao(alvo: alvo, custo: custo, piso: PollPacer.piso)
+                try? await Task.sleep(for: sono)
             }
         }
     }
