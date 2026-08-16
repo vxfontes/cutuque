@@ -4,12 +4,29 @@ import SwiftUI
 /// abre outro nível; arquivo abre o visualizador. Ocultos escondidos por padrão,
 /// com toggle — igual ao seletor de pastas.
 ///
-/// A navegação é por pilha: entrar numa pasta empurra outra `FileBrowserView` e
-/// o voltar nativo faz o papel do "..". O `FolderPickerView` precisa do ".."
-/// porque é um sheet sem pilha; aqui não.
+/// [16/08/2026] Comentário antigo reescrito — card `2fc2b3f6` ("iPad/Arquivos:
+/// não dá pra subir de pasta"). A versão anterior afirmava que "o voltar
+/// nativo faz o papel do '..'"; isso é FALSO na prática. A pilha só tem UMA
+/// direção: entrar empurra, voltar desfaz a ÚLTIMA descida — nunca sobe acima
+/// do ponto onde a instância nasceu. No macmini a home cai perto de `/root`, e
+/// dali não havia NENHUMA saída pra cima (nem pro `/DATA`, nem pra lugar
+/// nenhum) — era exatamente esse fundo de poço que o comentário antigo não via.
+///
+/// A instância RAIZ (única com `empilhada == false`, ver `MachineDetailView`)
+/// difere das empilhadas por construção: ela nasce direto no `ZStack` de abas
+/// (decisão #19, nunca desmonta) e não tem pilha ABAIXO dela pra desempilhar —
+/// por isso "subir" nela troca de pasta NO LUGAR (`caminhoAtual` recarrega,
+/// igual `FolderPickerView.load(parent)`). Já uma instância empilhada só
+/// existe porque uma pasta-mãe a empurrou ao tocar numa filha — logo o
+/// pai-na-pilha é SEMPRE o pai-no-FS, e "subir" ali é `dismiss()` puro. "Voltar
+/// sempre sobe": as duas afordâncias (linha ".." na lista + botão da toolbar)
+/// chamam a mesma `subir()`, que escolhe entre os dois modos. Ver
+/// `NavegacaoDePastas`, no fim do arquivo, pra "dá pra subir daqui?".
 struct FileBrowserView: View {
     let machine: String
-    /// Caminho a listar. Vazio = home da máquina.
+    /// Caminho de nascença. Vazio = home da máquina. Só serve pra semear
+    /// `caminhoAtual` no `init` — depois disso a fonte de verdade é o
+    /// `@State`, porque a instância raiz troca de pasta NO LUGAR (ver acima).
     let path: String
     /// Falso quando embutida no `MachineDetailView`, que fica montado junto com
     /// o terminal e por isso é a ÚNICA fonte do título (ver
@@ -41,7 +58,23 @@ struct FileBrowserView: View {
     /// que responde "a usuária ainda está olhando para esta aba?" é o
     /// `paneState`, que vem de fora.
     var abaAtiva: Bool = true
+    /// Falso (default) = instância RAIZ, montada uma vez no `ZStack` de abas
+    /// (`MachineDetailView.swift:115`), sem pilha abaixo dela — "subir" troca
+    /// de pasta NO LUGAR. Verdadeiro = instância empilhada por um
+    /// `NavigationLink` ao tocar numa subpasta (linha ~141 abaixo) — "subir"
+    /// desempilha com `dismiss()`. Ver o comentário do topo do arquivo pra o
+    /// porquê da assimetria.
+    var empilhada: Bool = false
 
+    @Environment(\.dismiss) private var dismiss
+    /// Caminho realmente exibido/carregado. Semeado de `path` uma única vez no
+    /// `init` (mesmo idioma de `MachineDetailView.init` com `_tema`/`_icone`) —
+    /// não precisa de reseed porque nenhum call site do repo troca `path` sob
+    /// a MESMA identidade SwiftUI (a raiz é fixada por `.id(machine.name)`; uma
+    /// empilhada nasce e morre com um `path` fixo). Depois do `init`, é a ÚNICA
+    /// fonte de verdade — `load()`, `titulo` e `podeSubir` leem daqui, nunca de
+    /// `path`.
+    @State private var caminhoAtual: String
     @State private var listing: FileListing?
     @State private var loading = false
     @State private var error: String?
@@ -49,6 +82,19 @@ struct FileBrowserView: View {
     // para as pastas seguintes.
     @AppStorage("machines.showHiddenFiles") private var showHidden = false
     private let api = APIClient()
+
+    init(machine: String, path: String, ownsNavigationTitle: Bool = true,
+         isActive: Bool = true, carregaAgora: Bool = true, abaAtiva: Bool = true,
+         empilhada: Bool = false) {
+        self.machine = machine
+        self.path = path
+        self.ownsNavigationTitle = ownsNavigationTitle
+        self.isActive = isActive
+        self.carregaAgora = carregaAgora
+        self.abaAtiva = abaAtiva
+        self.empilhada = empilhada
+        _caminhoAtual = State(initialValue: path)
+    }
 
     private var visible: [FileEntry] {
         listing?.visibleEntries(showHidden: showHidden) ?? []
@@ -60,7 +106,53 @@ struct FileBrowserView: View {
         .resolver(visibleIsEmpty: visible.isEmpty, loading: loading, showHidden: showHidden)
     }
 
+    /// "Dá pra subir daqui?" — puro, ver `NavegacaoDePastas` no fim do arquivo.
+    /// Derivado de `listing`/`caminhoAtual` a cada render, nunca cacheado num
+    /// `@State` à parte: com a decisão #19 (painel nunca desmonta), um cache
+    /// separado do `listing` atual ficaria com a resposta errada ao trocar de
+    /// pasta sem trocar de instância.
+    private var podeSubir: Bool {
+        NavegacaoDePastas.podeSubir(caminhoAtual: caminhoAtual, parent: listing?.parent)
+    }
+
+    /// Sobe um nível — fonte única pra linha ".." e pro botão da toolbar
+    /// ("os dois", pedido explícito dela). Escolhe o modo pela mesma regra do
+    /// comentário do topo: raiz troca no lugar, empilhada desempilha.
+    private func subir() {
+        guard podeSubir, let pai = listing?.parent else { return }
+        if empilhada {
+            dismiss()
+        } else {
+            caminhoAtual = pai
+            Task { await load() }
+        }
+    }
+
     var body: some View {
+        VStack(spacing: 0) {
+            // Legenda de local só na RAIZ (`!ownsNavigationTitle`): o título
+            // nativo ali é fixo em `machine.name` (dono único é o
+            // `MachineDetailView`, `OwnedNavigationTitle.swift`) e não
+            // acompanha `caminhoAtual` trocando no lugar — sem isto, subir ou
+            // descer na raiz não deixaria rastro nenhum de ONDE se está.
+            // Empilhada não precisa: já é dona do próprio título (`titulo`
+            // abaixo, mostrado na nav bar nativa).
+            if !ownsNavigationTitle {
+                Text(caminhoAtual.isEmpty ? machine : caminhoAtual)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+            }
+            conteudo
+        }
+    }
+
+    @ViewBuilder
+    private var conteudo: some View {
         Group {
             switch estadoVazio {
             case .comItens:
@@ -116,6 +208,24 @@ struct FileBrowserView: View {
                     .toggleStyle(.button)
                 }
             }
+            // [16/08/2026] Segunda afordância de subir (card 2fc2b3f6, ela
+            // pediu "os dois"): a toolbar compõe INDEPENDENTE do `switch` em
+            // `estadoVazio` acima, então este botão sobrevive aos três
+            // estados — inclusive pasta vazia, que era o pior caso (sem
+            // ISTO, a linha ".." sozinha sumiria justo ali, porque `lista` só
+            // renderiza no ramo `.comItens`). `podeSubir` no próprio `if`
+            // (mesma posição de `isActive && abaAtiva`) porque aqui o gate
+            // não é foco de aba, é "existe pai pra onde ir" — mesmo lugar,
+            // mesmo padrão da casa, só mais uma condição.
+            if isActive && abaAtiva && podeSubir {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        subir()
+                    } label: {
+                        Image(systemName: "arrow.up")
+                    }
+                }
+            }
         }
         .overlay { if loading && listing == nil { ProgressView() } }
         .refreshable { await load() }
@@ -131,14 +241,26 @@ struct FileBrowserView: View {
     }
 
     /// A lista de verdade — extraída do `body` pra virar um dos ramos do
-    /// `switch` em `estadoVazio`. Conteúdo inalterado, só mudou de dono.
+    /// `switch` em `estadoVazio`.
     @ViewBuilder
     private var lista: some View {
         List {
+            // [16/08/2026] Primeira afordância de subir (card 2fc2b3f6, "os
+            // dois"): só existe dentro do ramo `.comItens`, por isso o botão
+            // da toolbar (acima) é indispensável pros outros dois ramos — não
+            // é redundância, é cobertura dos três estados.
+            if podeSubir {
+                Button {
+                    subir()
+                } label: {
+                    Label("..", systemImage: "arrow.up.left.circle")
+                        .foregroundStyle(.secondary)
+                }
+            }
             ForEach(visible) { entry in
                 if entry.isDir {
                     NavigationLink {
-                        FileBrowserView(machine: machine, path: entry.path, abaAtiva: abaAtiva)
+                        FileBrowserView(machine: machine, path: entry.path, abaAtiva: abaAtiva, empilhada: true)
                     } label: {
                         Label(entry.name, systemImage: "folder")
                             .lineLimit(1)
@@ -173,7 +295,7 @@ struct FileBrowserView: View {
         loading = true
         defer { loading = false }
         do {
-            listing = try await api.listFiles(machine: machine, path: path)
+            listing = try await api.listFiles(machine: machine, path: caminhoAtual)
             error = nil
         } catch {
             // Cancelamento NÃO é falha de rede. O `.task(id: carregaAgora)` acima
@@ -219,5 +341,27 @@ enum EstadoDaListaVazia: Equatable {
     static func resolver(visibleIsEmpty: Bool, loading: Bool, showHidden: Bool) -> EstadoDaListaVazia {
         guard visibleIsEmpty, !loading else { return .comItens }
         return showHidden ? .semNadaMesmo : .talvezSoOcultos
+    }
+}
+
+/// "Dá pra subir a partir daqui?" — puro, sem `@State` nem rede, pra testar
+/// sem instanciar SwiftUI (mesmo padrão de `ErroDeCarga`/`EstadoDaListaVazia`,
+/// acima). Card 2fc2b3f6.
+///
+/// NUNCA comparar contra "/" cravado — é a armadilha do precedente da casa em
+/// `FolderPickerView.swift:35` (`listing.path != "/"`). O hub calcula `parent`
+/// com `os.path.dirname` (`files.go:41`), e `dirname("/") == "/"`: a raiz do
+/// FS é pai de si mesma. Comparar contra a string `"/"` cravada amarraria o
+/// app a essa convenção de caminho (quebraria, por exemplo, num hub que
+/// devolvesse raiz vazia ou `"C:\"`); comparar `parent` com o caminho atual
+/// funciona em qualquer FS, porque a invariante ("pai de si mesmo") é do hub,
+/// não do caractere `"/"`.
+enum NavegacaoDePastas {
+    /// `parent` vem de `listing?.parent` (`FileListing`, não-opcional no
+    /// contrato — aqui opcional só porque `listing` pode ainda ser `nil`
+    /// enquanto carrega).
+    static func podeSubir(caminhoAtual: String, parent: String?) -> Bool {
+        guard let parent, !parent.isEmpty else { return false }
+        return parent != caminhoAtual
     }
 }
