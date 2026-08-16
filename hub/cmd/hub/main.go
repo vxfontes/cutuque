@@ -232,6 +232,12 @@ func main() {
 		serverOpts = append(serverOpts, server.WithPublicMode())
 		logger.Warn("modo público ligado (CUTUQUE_PUBLIC): /dashboard e a escrita do /board NÃO foram registrados")
 	}
+	// Log de acesso: uma linha por request + GET /dev/usage com o resumo. Ligado
+	// por CUTUQUE_ACCESS_LOG ou por implicação do modo público.
+	if accessLogLigado() {
+		serverOpts = append(serverOpts, server.WithAccessLog(logger))
+		logger.Info("log de acesso ligado: uma linha por request e GET /dev/usage (com token)")
+	}
 	// CUTUQUE_MACHINES_DIR liga o CADASTRO de máquinas pelo app (aba Máquinas):
 	// é onde ficam o registro, as chaves privadas geradas aqui e o known_hosts
 	// próprio. Sem a env var o hub só LISTA o que veio do CUTUQUE_SSH_TARGETS —
@@ -473,6 +479,32 @@ func localShellLigado() bool { return envLigada("CUTUQUE_LOCAL_SHELL") }
 // Ligar esta no hub de casa não abre buraco de segurança; só tira o Command
 // Center do ar e deixa os agentes sem escrever no board.
 func publicoLigado() bool { return envLigada("CUTUQUE_PUBLIC") }
+
+// envDesligada é o "não" EXPLÍCITO. Diferente de !envLigada, que não distingue
+// "a pessoa escreveu 0" de "a variável nem existe" — e essa diferença é o que
+// permite uma chave ligada por implicação (o log de acesso no modo público) ser
+// desligada à mão sem precisar de deploy novo.
+func envDesligada(nome string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(nome))) {
+	case "0", "false", "no", "off", "nao", "não":
+		return true
+	}
+	return false
+}
+
+// accessLogLigado lê CUTUQUE_ACCESS_LOG, a chave que faz o hub imprimir uma
+// linha por request e registrar a rota GET /dev/usage (ver server.WithAccessLog).
+//
+// O modo público LIGA sozinho: numa caixa exposta o log é a única forma de saber
+// se o revisor da Apple chegou a conectar, e o Render no plano Hobby não oferece
+// HTTP request logs. Quem quiser silêncio mesmo assim escreve CUTUQUE_ACCESS_LOG=0
+// — o "não" explícito ganha da implicação.
+func accessLogLigado() bool {
+	if envDesligada("CUTUQUE_ACCESS_LOG") {
+		return false
+	}
+	return envLigada("CUTUQUE_ACCESS_LOG") || publicoLigado()
+}
 
 // agentMap indexa alvos pelo agente que cada um representa (t.Kind()).
 func agentMap(ts ...claudecode.Target) map[string]claudecode.Target {

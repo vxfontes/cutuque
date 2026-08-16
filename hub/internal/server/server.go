@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -28,6 +29,8 @@ type routerConfig struct {
 	engine      *engine.Engine
 	wsTimeouts  prazosWS
 	publico     bool
+	accessLog   *slog.Logger
+	usage       *usageRecorder
 }
 
 // RouterOption configura dependências opcionais do Router.
@@ -148,10 +151,37 @@ func WithPublicMode() RouterOption {
 	return func(rc *routerConfig) { rc.publico = true }
 }
 
+// WithAccessLog [16/08/2026] liga uma linha de log por request e a rota
+// GET /dev/usage (com token) com o resumo de quem bateu na caixa.
+//
+// Nasceu da caixa pública do review: sem isto não há como saber se o revisor
+// chegou a conectar, se digitou o token errado (401 em série) ou se a caixa
+// estava dormindo quando ele tentou. E o Render no plano Hobby NÃO oferece
+// HTTP request logs — é recurso de Pro pra cima —, então o que o processo não
+// imprimir simplesmente não existe.
+//
+// O que é logado está em accesslog.go, e o que NÃO é também: nunca a query
+// string (o token do WS viaja nela, SEC-003 — é o mesmo motivo pelo qual o
+// WithPublicMode acima recusa `?token=`), nunca conteúdo de sessão.
+//
+// Sem esta opção o hub não loga request nenhum e /dev/usage não é registrada.
+func WithAccessLog(logger *slog.Logger) RouterOption {
+	return func(rc *routerConfig) {
+		if logger == nil {
+			logger = slog.Default()
+		}
+		rc.accessLog = logger
+		rc.usage = newUsageRecorder(time.Now())
+	}
+}
+
 // Router registra as rotas do hub. As rotas protegidas passam pelo middleware
 // de token; /health fica aberto para healthcheck. lch pode ser nil quando os
 // comandos de lançamento/aprovação não são necessários (ex.: alguns testes).
-func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...RouterOption) *http.ServeMux {
+//
+// Devolve http.Handler e não *http.ServeMux porque com WithAccessLog o mux sai
+// embrulhado pelo middleware.
+func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...RouterOption) http.Handler {
 	rc := routerConfig{wsTimeouts: prazosWSPadrao()}
 	for _, opt := range opts {
 		opt(&rc)
@@ -310,6 +340,12 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 	// 404. rc.board pode ser nil aqui — o seed trata.
 	mux.Handle("POST /dev/seed", requireAuth(cfg.Token, SeedHandler(cfg, reg, rc.board)))
 
+	// Resumo de uso. Só existe com WithAccessLog: sem recorder não há o que
+	// servir, e rota que responde vazio confunde mais do que ajuda.
+	if rc.usage != nil {
+		mux.Handle("GET /dev/usage", requireAuth(cfg.Token, usageHandler(rc.usage)))
+	}
+
 	// Quadro Kanban (Cutuque Board). Só quando há store.
 	if rc.board != nil {
 		// Board: SEM token. O hub só escuta na interface Tailscale (rede interna,
@@ -340,6 +376,9 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		mux.Handle("GET /board/close-options", requireAuth(cfg.Token, BoardCloseOptionsHandler(rc.board)))
 	}
 
+	if rc.accessLog != nil {
+		return withAccessLog(rc.accessLog, rc.usage, mux)
+	}
 	return mux
 }
 

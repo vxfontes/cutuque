@@ -182,11 +182,21 @@ Tudo vem de variáveis de ambiente (ver [`config/hub.env.example`](./config/hub.
 | `CUTUQUE_MAX_SESSIONS` | Teto de sessões concorrentes vivas. |
 | `CUTUQUE_LOCAL_SHELL` | Abre o terminal **dentro do container do hub**, quando não há máquina remota. Só para o hub de demonstração. |
 | `CUTUQUE_PUBLIC` | Declara que o hub está na **internet aberta**: tira do ar o `/dashboard` (que serve o token dentro do HTML) e a escrita do `/board` (que não pede token). |
+| `CUTUQUE_ACCESS_LOG` | Imprime **uma linha por request** e registra o `GET /dev/usage` (com token) com o resumo de quem bateu na caixa. Liga sozinha junto com `CUTUQUE_PUBLIC`; desligue com `=0`. |
 
-> ⚠️ As duas últimas são **desligadas por omissão e por qualquer valor que não
-> seja um "sim" explícito** (`1`, `true`, `yes`, `on`, `sim`). Elas existem por
-> causa da caixa pública de demonstração do review da App Store — num hub de
-> casa, atrás do Tailscale, nenhuma das duas deve estar ligada.
+> ⚠️ `CUTUQUE_LOCAL_SHELL` e `CUTUQUE_PUBLIC` são **desligadas por omissão e por
+> qualquer valor que não seja um "sim" explícito** (`1`, `true`, `yes`, `on`,
+> `sim`). Elas existem por causa da caixa pública de demonstração do review da
+> App Store — num hub de casa, atrás do Tailscale, nenhuma das duas deve estar
+> ligada.
+
+> 📋 `CUTUQUE_ACCESS_LOG` é a exceção: ela acompanha o modo público **por
+> implicação**, porque caixa exposta sem log é caixa cega (o Render no plano
+> Hobby não oferece HTTP request logs — é recurso de Pro pra cima) e sem ela não
+> há como saber se o revisor chegou a conectar ou se errou o token. Para calar o
+> log num hub público, escreva o "não" explícito `CUTUQUE_ACCESS_LOG=0` — ele
+> ganha da implicação. O log **nunca** escreve a query string (o token do
+> WebSocket viaja nela) nem conteúdo de sessão.
 
 > 💡 Os IPs e hosts nos exemplos e testes usam a faixa de documentação
 > `192.0.2.0/24` (RFC 5737) — troque pelos seus.

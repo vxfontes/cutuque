@@ -159,6 +159,84 @@ func TestCadaChaveLeASuaPropriaEnv(t *testing.T) {
 	}
 }
 
+// TestEnvDesligada cobre o "não" EXPLÍCITO. O que importa aqui é a diferença que
+// o !envLigada não sabe fazer: env ausente e env escrita "0" são as duas
+// "desligada" pro envLigada, mas só a segunda é uma decisão de alguém.
+func TestEnvDesligada(t *testing.T) {
+	const chave = "CUTUQUE_TESTE_DESLIGADA"
+	casos := map[string]bool{
+		"0": true, "false": true, "no": true, "off": true, "nao": true, "não": true,
+		"FALSE": true, " off ": true, // maiúscula e espaço sobrando não decidem nada
+		"":       false, // vazio não é "não", é ausência
+		"1":      false,
+		"sim":    false,
+		"talvez": false, // valor sem sentido não vira "não" — só o "não" explícito conta
+	}
+	for valor, quero := range casos {
+		t.Run("valor="+valor, func(t *testing.T) {
+			t.Setenv(chave, valor)
+			if got := envDesligada(chave); got != quero {
+				t.Errorf("envDesligada() com %q = %v, quero %v", valor, got, quero)
+			}
+		})
+	}
+
+	t.Run("env ausente não é não explícito", func(t *testing.T) {
+		t.Setenv(chave, "irrelevante") // só para o cleanup restaurar
+		os.Unsetenv(chave)
+		if envDesligada(chave) {
+			t.Error("env ausente virou 'não' explícito — some a diferença que justifica a função")
+		}
+	})
+}
+
+// TestAccessLogLigado guarda a regra do log de acesso: ele acompanha o modo
+// público por implicação (caixa exposta sem log é caixa cega — o Render Hobby não
+// dá HTTP request logs), mas um CUTUQUE_ACCESS_LOG=0 escrito à mão ganha da
+// implicação, sem precisar desligar o modo público junto.
+func TestAccessLogLigado(t *testing.T) {
+	casos := []struct {
+		nome, accessLog, publico string
+		quero                    bool
+	}{
+		{"nada ligado", "", "", false},
+		{"ligado à mão", "1", "", true},
+		{"público liga sozinho", "", "1", true},
+		{"não explícito ganha do público", "0", "1", false},
+		{"não explícito com público desligado", "0", "", false},
+		{"valor sem sentido não desliga o público", "talvez", "1", true},
+		{"valor sem sentido sozinho não liga", "talvez", "", false},
+	}
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			t.Setenv("CUTUQUE_ACCESS_LOG", c.accessLog)
+			t.Setenv("CUTUQUE_PUBLIC", c.publico)
+			if got := accessLogLigado(); got != c.quero {
+				t.Errorf("accessLogLigado() com ACCESS_LOG=%q PUBLIC=%q = %v, quero %v",
+					c.accessLog, c.publico, got, c.quero)
+			}
+		})
+	}
+}
+
+// O log de acesso não pode ser um atalho pro terminal local: são chaves de risco
+// bem diferente (uma imprime metadado, a outra abre shell dentro do container).
+func TestAccessLogNaoLigaOTerminalLocal(t *testing.T) {
+	t.Setenv("CUTUQUE_ACCESS_LOG", "1")
+	t.Setenv("CUTUQUE_PUBLIC", "")
+	t.Setenv("CUTUQUE_LOCAL_SHELL", "")
+
+	if !accessLogLigado() {
+		t.Fatal("CUTUQUE_ACCESS_LOG=1 não ligou o log")
+	}
+	if localShellLigado() {
+		t.Error("ligar o log de acesso abriu o terminal local")
+	}
+	if publicoLigado() {
+		t.Error("ligar o log de acesso ligou o modo público")
+	}
+}
+
 // TestBuildTargetsUsesSSHTargetsWhenConfigured cobre a Fase 5: com a env var
 // setada, os alvos viram SSHTarget (hub numa máquina, claude noutra via ssh) —
 // nenhum LocalTarget implícito é adicionado.
