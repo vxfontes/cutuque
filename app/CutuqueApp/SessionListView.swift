@@ -51,6 +51,11 @@ final class SessionListViewModel: ObservableObject {
     /// então "brotar" sessões.
     @Published var didInitialLoad = false
 
+    /// Aviso pontual pra usuária (mesmo padrão do `notice` da tela de detalhe:
+    /// `nil` = nada na tela; texto = alerta "Aviso" com um OK). [16/08/2026]
+    /// Nasceu pro swipe "Concluir" recusado pelo hub, que antes sumia calado.
+    @Published var notice: String?
+
     /// Retrato COMPLETO do registry já chegou pelo menos uma vez — REST
     /// completo em `refresh()` ou snapshot completo do WebSocket. Upsert/
     /// remoção de UMA sessão (`upsert`, `sessionRemoved`) NÃO liga isto: não é
@@ -309,11 +314,32 @@ final class SessionListViewModel: ObservableObject {
     /// Marca uma sessão como CONCLUÍDA: tira de needs_you (não apaga). Some da
     /// seção "Precisa de você" na hora; o hub marca done e o WS reconcilia. Não
     /// vira dismissed, então a sessão pode voltar a te avisar se precisar.
+    ///
+    /// [16/08/2026] O optimistic update deixou de ser incondicional. O hub
+    /// passou a recusar (409) quando a sessão já não está em needs_you — o
+    /// `Launcher.Resolve` virou CAS pra não sobrescrever um veredito terminal
+    /// que chegou no mesmo instante. Como o swipe aparece em TODA linha (e com
+    /// `allowsFullSwipe`, arrastar até o fim já dispara), a recusa é caminho
+    /// normal, não exceção rara: antes, o `try?` engolia o erro e a linha
+    /// sumia pra reaparecer sozinha no broadcast seguinte, sem explicação.
+    /// Agora ela volta NA HORA e o motivo aparece no aviso.
     func resolve(_ session: Session) {
         withAnimation(.snappy) {
             sessions.removeAll { $0.id == session.id }
         }
-        Task { try? await api.resolve(sessionID: session.id) }
+        Task { [weak self] in
+            do {
+                try await self?.api.resolve(sessionID: session.id)
+            } catch {
+                guard let self else { return }
+                // Desfaz o optimistic update com o retrato que a linha tinha
+                // ao ser arrastada. Se o WS já tiver trazido uma versão mais
+                // nova nesse meio tempo, o `upsert` seguinte a sobrescreve —
+                // é reconciliação normal, não conflito.
+                self.upsert(session)
+                self.notice = error.localizedDescription
+            }
+        }
     }
 
     /// Encerra o servidor tmux inteiro (kill-server): fecha todos os panes
@@ -717,6 +743,21 @@ struct SessionListView: View {
             Button("Cancelar", role: .cancel) { renameTarget = nil }
         } message: { _ in
             Text("Só muda o nome aqui no app; não afeta a sessão real.")
+        }
+        // [16/08/2026] Mesmo alerta "Aviso" da tela de detalhe (`notice`), agora
+        // também na lista: o swipe "Concluir" recusado pelo hub (409) precisa
+        // dizer o porquê, senão a linha volta do nada.
+        .alert(
+            "Aviso",
+            isPresented: Binding(
+                get: { model.notice != nil },
+                set: { if !$0 { model.notice = nil } }
+            ),
+            presenting: model.notice
+        ) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { notice in
+            Text(notice)
         }
         .refreshable {
             await model.refresh()

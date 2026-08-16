@@ -8,6 +8,14 @@ enum CutuqueError: LocalizedError, Equatable {
     case staleState
     /// 404 — sessão inexistente.
     case notFound
+    /// [16/08/2026] 409 do `POST /sessions/{id}/resolve`, especificamente.
+    /// Caso SEPARADO de `.staleState` de propósito: só o `resolve` devolve
+    /// `current_state` no corpo, e um caso próprio evita mexer no `.staleState`
+    /// que approve/deny/answer/interrupt já usam (três `catch` no app dependem
+    /// dele sem valor associado). `atual` é o estado que VENCEU a corrida —
+    /// nil quando o corpo não trouxe/não decodificou, e aí a mensagem cai num
+    /// texto genérico em vez de mentir sobre qual foi.
+    case concluirRecusado(atual: SessionState?)
     /// Qualquer outro status inesperado.
     case unexpected(status: Int)
 
@@ -16,8 +24,24 @@ enum CutuqueError: LocalizedError, Equatable {
         case .server(_, let message): return message
         case .staleState:             return "o estado mudou"
         case .notFound:               return "sessão não encontrada"
+        case .concluirRecusado(let atual):
+            return Self.textoDeConcluirRecusado(atual)
         case .unexpected(let status): return "erro inesperado (\(status))"
         }
+    }
+
+    /// Texto do aviso quando o "Concluir" perde a corrida. Função pura e
+    /// `static` para o teste cobrir a decisão sem subir UI nem rede (mesmo
+    /// padrão de `EstadoDaListaVazia.resolver` e `LivePaneLogic`).
+    ///
+    /// Decisão da dona do projeto (16/08): a linha volta pra lista E ela é
+    /// avisada do motivo — o gesto continua disponível em qualquer sessão, só
+    /// deixa de sumir em silêncio quando o hub recusa.
+    static func textoDeConcluirRecusado(_ atual: SessionState?) -> String {
+        guard let atual else {
+            return "não concluí: o estado da sessão mudou antes de eu conseguir"
+        }
+        return "não concluí: a sessão virou \(atual.label)"
     }
 }
 
@@ -1179,8 +1203,50 @@ struct APIClient {
 
     /// Marca a sessão como concluída (tira de needs_you) SEM apagá-la — usado
     /// pelo swipe "Concluir". `POST /sessions/{id}/resolve`.
+    ///
+    /// [16/08/2026] Não usa `postAction` (que delega ao `send`, e o `send`
+    /// DESCARTA o corpo: `let (_, response)`). O hub passou a devolver
+    /// `409 {"error":"stale_state","current_state":"<estado vencedor>"}` quando
+    /// o CAS do `Launcher.Resolve` perde a corrida contra uma transição
+    /// concorrente do Engine, e esse `current_state` é justamente o que a tela
+    /// precisa pra dizer POR QUE não concluiu. Por isso o caminho é próprio:
+    /// lê o corpo e devolve `.concluirRecusado(atual:)`.
+    ///
+    /// Sem isso, o app antigo contra o hub novo engolia o 409 e a linha
+    /// reaparecia sozinha no broadcast seguinte, sem explicação nenhuma.
     func resolve(sessionID: String) async throws {
-        try await postAction(sessionID: sessionID, action: "resolve")
+        let url = baseURL
+            .appendingPathComponent("sessions")
+            .appendingPathComponent(sessionID)
+            .appendingPathComponent("resolve")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        switch http.statusCode {
+        case 200, 204: return
+        case 404:      throw CutuqueError.notFound
+        case 409:
+            // `current_state` é opcional de propósito: o fallback genérico do
+            // `default` do ResolveHandler (e qualquer hub mais antigo) manda
+            // só {"error":"stale_state"}, sem estado. Decodificação frouxa —
+            // corpo ausente ou ilegível vira `nil`, não vira erro diferente.
+            let atual = try? JSONDecoder().decode(RespostaDeEstadoObsoleto.self, from: data).currentState
+            throw CutuqueError.concluirRecusado(atual: atual)
+        default:
+            throw CutuqueError.unexpected(status: http.statusCode)
+        }
+    }
+
+    /// Corpo do 409 do `/resolve` (espelha `staleStateResponse` do hub).
+    private struct RespostaDeEstadoObsoleto: Decodable {
+        let currentState: SessionState?
+
+        enum CodingKeys: String, CodingKey {
+            case currentState = "current_state"
+        }
     }
 
     /// Pede ao hub pra importar o transcript do Mac dessa sessão, para o chat
