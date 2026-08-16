@@ -1,7 +1,24 @@
 // Package machine mantém o registro das máquinas SSH que o hub conhece: as que
-// vêm do CUTUQUE_SSH_TARGETS (Source=env, imutáveis pelo app) e, a partir da
-// F3, as cadastradas pelo app (Source=app). Nesta fase o registro é só de
-// leitura e vive em memória — persistência nasce quando houver o que persistir.
+// vêm do CUTUQUE_SSH_TARGETS (Source=env, imutáveis pelo app) e as cadastradas
+// pelo app (Source=app, editável). Nasceu em 2026-08-01 como registro só de
+// leitura em memória (comentário original: "persistência nasce quando houver o
+// que persistir") — desde então cresceu para o que é hoje, revisado em
+// 2026-08-16:
+//
+//   - Persistência em disco (NewRegistryAt/persist, machine.go): machines.json
+//     com o padrão tmp+rename do resto do hub; disco é carregado DEPOIS do env,
+//     que segue como fonte da verdade das máquinas dele.
+//   - Identidades (identity.go): usuário/senha por máquina, com a senha
+//     opcionalmente cifrada em disco via secretBox (secret.go) — a chave que
+//     decifra vem de CUTUQUE_IDENTITY_KEY no ambiente, nunca do disco.
+//   - Chave SSH própria por máquina (keys.go): geração ed25519 e um
+//     known_hosts dedicado, fora do ~/.ssh usado pelas máquinas do hub.env.
+//   - Instalação de chave via senha, one-shot (install.go), e detecção de SO
+//     remoto (detect.go), ambos direto por golang.org/x/crypto/ssh.
+//
+// Continua sem import cruzado com session/registry/engine/board: é um domínio
+// standalone, falado por main.go (bootstrap) e launcher/targets.go (monta os
+// Target de SSH a partir daqui).
 package machine
 
 import (
