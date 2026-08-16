@@ -101,11 +101,12 @@ func TestBuildTargetsLocalShellNaoMexeQuandoHaMaquinas(t *testing.T) {
 	}
 }
 
-// TestLocalShellLigado: a chave abre um terminal dentro do container, então o
-// default tem que ser "não" e o "sim" tem que ser explícito. Em especial env var
-// PRESENTE porém vazia (o jeito clássico de um compose "desligar" algo) não pode
-// ligar nada.
-func TestLocalShellLigado(t *testing.T) {
+// TestEnvLigada: estas chaves afrouxam coisa (abrem um terminal dentro do
+// container, tiram rotas do mux), então o default tem que ser "não" e o "sim"
+// tem que ser explícito. Em especial env var PRESENTE porém vazia (o jeito
+// clássico de um compose "desligar" algo) não pode ligar nada.
+func TestEnvLigada(t *testing.T) {
+	const chave = "CUTUQUE_TESTE_LIGADA"
 	casos := map[string]bool{
 		"1": true, "true": true, "yes": true, "on": true, "sim": true,
 		"TRUE": true, " sim ": true, // maiúscula e espaço sobrando não deveriam decidir nada
@@ -118,20 +119,44 @@ func TestLocalShellLigado(t *testing.T) {
 	}
 	for valor, quero := range casos {
 		t.Run("valor="+valor, func(t *testing.T) {
-			t.Setenv("CUTUQUE_LOCAL_SHELL", valor)
-			if got := localShellLigado(); got != quero {
-				t.Errorf("localShellLigado() com %q = %v, quero %v", valor, got, quero)
+			t.Setenv(chave, valor)
+			if got := envLigada(chave); got != quero {
+				t.Errorf("envLigada() com %q = %v, quero %v", valor, got, quero)
 			}
 		})
 	}
 
 	t.Run("env ausente", func(t *testing.T) {
-		t.Setenv("CUTUQUE_LOCAL_SHELL", "irrelevante") // só para o cleanup restaurar
-		os.Unsetenv("CUTUQUE_LOCAL_SHELL")
-		if localShellLigado() {
-			t.Error("sem a env var o terminal local ligou sozinho")
+		t.Setenv(chave, "irrelevante") // só para o cleanup restaurar
+		os.Unsetenv(chave)
+		if envLigada(chave) {
+			t.Error("sem a env var a chave ligou sozinha")
 		}
 	})
+}
+
+// TestCadaChaveLeASuaPropriaEnv guarda contra o erro de copiar-colar que o
+// envLigada compartilhado convida: duas funções de uma linha, quase idênticas,
+// e uma delas lendo o nome da outra. Aí ligar o modo público abriria um shell,
+// ou ligar o shell derrubaria o dashboard — e nenhum teste de valor pegaria.
+func TestCadaChaveLeASuaPropriaEnv(t *testing.T) {
+	t.Setenv("CUTUQUE_LOCAL_SHELL", "1")
+	t.Setenv("CUTUQUE_PUBLIC", "")
+	if !localShellLigado() {
+		t.Error("CUTUQUE_LOCAL_SHELL=1 não ligou o terminal local")
+	}
+	if publicoLigado() {
+		t.Error("o modo público ligou lendo a env do terminal local")
+	}
+
+	t.Setenv("CUTUQUE_LOCAL_SHELL", "")
+	t.Setenv("CUTUQUE_PUBLIC", "1")
+	if !publicoLigado() {
+		t.Error("CUTUQUE_PUBLIC=1 não ligou o modo público")
+	}
+	if localShellLigado() {
+		t.Error("o terminal local ligou lendo a env do modo público")
+	}
 }
 
 // TestBuildTargetsUsesSSHTargetsWhenConfigured cobre a Fase 5: com a env var

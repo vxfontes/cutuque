@@ -222,6 +222,16 @@ func main() {
 		// hooks não chega no Postgres.
 		server.WithEngine(eng),
 	}
+	// [16/08/2026] Hub na internet aberta: tira do mux o /dashboard (servido sem
+	// auth E com o token do hub dentro do HTML) e a escrita do /board (que não
+	// pede token nenhum). Ver server.WithPublicMode.
+	//
+	// Warn e não Info de propósito: o efeito é sumir com rotas, e quem ligou isto
+	// sem querer vai procurar o dashboard sumido no log, não na documentação.
+	if publicoLigado() {
+		serverOpts = append(serverOpts, server.WithPublicMode())
+		logger.Warn("modo público ligado (CUTUQUE_PUBLIC): /dashboard e a escrita do /board NÃO foram registrados")
+	}
 	// CUTUQUE_MACHINES_DIR liga o CADASTRO de máquinas pelo app (aba Máquinas):
 	// é onde ficam o registro, as chaves privadas geradas aqui e o known_hosts
 	// próprio. Sem a env var o hub só LISTA o que veio do CUTUQUE_SSH_TARGETS —
@@ -427,26 +437,44 @@ func machinesForRegistry(ms []machine.Machine) []machine.Machine {
 	return []machine.Machine{{Name: "macbook", Dest: "local", Source: machine.SourceLocal}}
 }
 
-// agentMap indexa alvos pelo agente que cada um representa (t.Kind()).
-// localShellLigado [16/08/2026] lê CUTUQUE_LOCAL_SHELL, a chave que libera o
-// terminal DENTRO do container do hub (ver claudecode.LocalShellTarget).
+// envLigada [16/08/2026] lê uma chave booleana de ambiente: verdadeira só com um
+// "sim" EXPLÍCITO, falsa por omissão e por qualquer outro valor.
 //
-// Existe para a caixa pública de demonstração do review da App Store, onde não
-// há máquina nenhuma do outro lado de um ssh e o revisor ainda assim precisa
-// abrir um terminal. NÃO ligue no hub de casa: lá o terminal deve ser a máquina
-// de verdade, e um shell no container passando por macbook seria mentira.
-//
-// Desligado por omissão e por qualquer valor que não seja um "sim" explícito —
-// uma env var que liga sozinha por estar presente e vazia é o tipo de coisa que
-// liga sem ninguém ter pedido.
-func localShellLigado() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("CUTUQUE_LOCAL_SHELL"))) {
+// A regra é rígida de propósito. Estas chaves afrouxam coisa (abrem um shell,
+// tiram a autenticação implícita de rotas), e uma env var que liga sozinha só
+// por estar presente — mesmo vazia, mesmo com um "não" digitado dentro — é o
+// tipo de chave que um dia liga sem ninguém ter pedido, no hub errado.
+func envLigada(nome string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(nome))) {
 	case "1", "true", "yes", "on", "sim":
 		return true
 	}
 	return false
 }
 
+// localShellLigado lê CUTUQUE_LOCAL_SHELL, a chave que libera o terminal DENTRO
+// do container do hub (ver claudecode.LocalShellTarget).
+//
+// Existe para a caixa pública de demonstração do review da App Store, onde não
+// há máquina nenhuma do outro lado de um ssh e o revisor ainda assim precisa
+// abrir um terminal. NÃO ligue no hub de casa: lá o terminal deve ser a máquina
+// de verdade, e um shell no container passando por macbook seria mentira.
+func localShellLigado() bool { return envLigada("CUTUQUE_LOCAL_SHELL") }
+
+// publicoLigado lê CUTUQUE_PUBLIC, a chave que declara que este hub está na
+// INTERNET ABERTA e não atrás do Tailscale (ver server.WithPublicMode).
+//
+// As duas chaves andam juntas na caixa do review, mas são independentes e
+// resolvem coisas opostas: a LOCAL_SHELL ADICIONA um terminal, esta REMOVE as
+// rotas que só faziam sentido numa rede privada — /dashboard, que serve o token
+// do hub dentro do HTML sem pedir autenticação, e a escrita do /board, que não
+// pede token nenhum.
+//
+// Ligar esta no hub de casa não abre buraco de segurança; só tira o Command
+// Center do ar e deixa os agentes sem escrever no board.
+func publicoLigado() bool { return envLigada("CUTUQUE_PUBLIC") }
+
+// agentMap indexa alvos pelo agente que cada um representa (t.Kind()).
 func agentMap(ts ...claudecode.Target) map[string]claudecode.Target {
 	m := make(map[string]claudecode.Target, len(ts))
 	for _, t := range ts {

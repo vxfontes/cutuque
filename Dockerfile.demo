@@ -1,0 +1,68 @@
+# Dockerfile da CAIXA PÚBLICA do review [16/08/2026].
+#
+# Não é o Dockerfile de casa. O de casa (./Dockerfile) roda no macmini, dentro
+# do Tailscale, e alcança as máquinas da Vanessa por ssh. Este roda no Render,
+# na internet aberta, e a premissa dele é a oposta: não alcança nada.
+#
+# A Apple parou a submissão na Guideline 2.1 — o revisor não consegue avaliar um
+# cliente cuja API o próprio usuário hospeda. A saída é entregar a eles uma URL e
+# um token de uma cópia descartável do hub. Como é descartável e é pública, tudo
+# aqui é SUBTRAÇÃO: o que não está instalado não pode ser usado contra ninguém.
+#
+# Build no Render: Language=Docker, Dockerfile Path=./Dockerfile.demo,
+# Root Directory VAZIO (o build precisa enxergar hub/ a partir da raiz).
+
+# --- build ------------------------------------------------------------------
+# Mesma imagem e mesmas flags do Dockerfile de casa: golang:1.25-alpine casa com
+# o go.mod (go 1.25.6), e CGO_ENABLED=0 dá binário estático, que não depende da
+# libc da imagem final.
+FROM golang:1.25-alpine AS build
+
+WORKDIR /src
+COPY hub/ hub/
+
+# -trimpath a mais que o de casa: sem ele o binário carrega os caminhos
+# absolutos da máquina de build. Num artefato que vai pra internet aberta, não
+# publicar a árvore de diretórios de graça é barato.
+RUN cd hub && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -trimpath -o /out/hub ./cmd/hub
+
+# --- final ------------------------------------------------------------------
+FROM alpine:latest
+
+# ca-certificates e MAIS NADA.
+#
+# O openssh-client fica de fora DE PROPÓSITO. O Dockerfile de casa instala ele
+# porque o SSHTarget precisa de um `ssh` de verdade no PATH para alcançar o
+# MacBook. Aqui não existe SSHTarget: a caixa sobe sem CUTUQUE_SSH_TARGETS e sem
+# CUTUQUE_MACHINES_DIR, então não há alvo remoto nenhum para alcançar. Deixar o
+# cliente ssh instalado só daria a quem digitar no terminal do review uma
+# ferramenta de saída que ele não tem motivo para ter.
+#
+# Também não entram node, claude, codex nem opencode: passaria de 1 GB e o free
+# do Render tem 512 MB. O revisor ganha o terminal e a lista viva do seed; não
+# ganha um agente rodando pra valer. Troca consciente.
+RUN apk add --no-cache ca-certificates
+
+# O terminal do app sobe o shell com `-i` (ver claudecode.LocalShellTarget), e
+# `-i` faz o shell LER OS RC FILES. A allowlist do ShellEnv (SEC-006) protege o
+# AMBIENTE DO PROCESSO — verificado na bancada: o CUTUQUE_TOKEN chega vazio no
+# terminal. Mas ela não tem como proteger o que um /etc/profile exportar, porque
+# isso o próprio shell define depois. Numa alpine limpa não há rc nenhum; este
+# rm existe para que continue não havendo, inclusive se alguém adicionar um
+# pacote aqui em cima que traga o seu.
+RUN rm -rf /etc/profile /etc/profile.d /root/.profile /root/.ashrc
+
+# Sem $SHELL e sem bash instalado, o localShellProg() cai no /bin/sh — o ash do
+# busybox. Tem ls, cat, ps, vi: dá pra ver que é um terminal de verdade. Se um
+# dia instalar bash aqui, apague junto o /etc/bash/bashrc e o /root/.bashrc,
+# pelo mesmo motivo do rm acima.
+
+COPY --from=build /out/hub /hub
+
+# O Render procura a porta 10000 por padrão; o CUTUQUE_PORT é definido igual nas
+# variáveis do serviço. EXPOSE não publica nada sozinho, é documentação — mas é
+# a documentação que evita a próxima pessoa adivinhar.
+EXPOSE 10000
+
+ENTRYPOINT ["/hub"]

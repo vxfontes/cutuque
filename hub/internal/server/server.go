@@ -27,6 +27,7 @@ type routerConfig struct {
 	identities  Identities
 	engine      *engine.Engine
 	wsTimeouts  prazosWS
+	publico     bool
 }
 
 // RouterOption configura dependências opcionais do Router.
@@ -115,6 +116,38 @@ func WithWSTimeouts(ping, escrita time.Duration) RouterOption {
 	return func(rc *routerConfig) { rc.wsTimeouts = prazosWS{ping: ping, escrita: escrita} }
 }
 
+// WithPublicMode [16/08/2026] declara que este hub está exposto na INTERNET
+// ABERTA, e não atrás do Tailscale. Existe por causa da caixa pública do review
+// da Apple (Guideline 2.1: o revisor não consegue avaliar um cliente cuja API o
+// próprio usuário hospeda), mas a razão dela é geral.
+//
+// Algumas rotas aqui foram escritas assumindo que só a tailnet alcança o hub, e
+// a suposição está escrita nos próprios comentários delas. Na internet aberta
+// ela deixa de valer, e com ela as rotas que dependiam dela:
+//
+//   - GET /dashboard é servido SEM token E com o token do hub injetado no HTML
+//     (ver dashboard.go). Um curl na página devolve o bearer que abre tudo,
+//     inclusive o terminal.
+//   - As rotas de ESCRITA do /board não pedem token nenhum. Hub público seria um
+//     Kanban que qualquer um escreve — e num hub de demonstração quem vê a
+//     sujeira é o revisor.
+//
+// O modo não "protege" as rotas: ele NÃO AS REGISTRA. Rota não registrada
+// responde 404 — não há o que autenticar, não há o que vazar. Proteger o
+// /dashboard com Bearer não é opção: é página de navegador, e navegador não
+// manda header numa navegação; a alternativa seria ?token= na URL, que joga o
+// token no histórico, no referer e no log de acesso — pior, não melhor.
+//
+// Fica de FORA de propósito o que não vaza nem escreve: /health (o healthcheck
+// do provedor precisa dele), as rotas de LEITURA do board, /board-protocol,
+// /cutuque e /install (conteúdo estático e público por natureza).
+//
+// Sem esta opção nada muda — é o hub de casa, atrás do Tailscale, com o
+// dashboard e o board que os agentes usam.
+func WithPublicMode() RouterOption {
+	return func(rc *routerConfig) { rc.publico = true }
+}
+
 // Router registra as rotas do hub. As rotas protegidas passam pelo middleware
 // de token; /health fica aberto para healthcheck. lch pode ser nil quando os
 // comandos de lançamento/aprovação não são necessários (ex.: alguns testes).
@@ -145,9 +178,17 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 	mux.Handle("GET /health", HealthHandler())
 	// Command Center web (estático, mesma origem -> WS não é cross-origin).
 	// O token do hub é injetado na página, então não precisa passar ?token=.
-	mux.Handle("GET /dashboard", DashboardHandler(cfg.Token))
-	// Ícone do app (logo/favicon do web) — padroniza a marca com o iOS.
-	mux.Handle("GET /dashboard-icon.png", DashboardIconHandler())
+	//
+	// [16/08/2026] E é exatamente por isso que o modo público não a registra:
+	// a página é aberta, o token vem dentro dela, e na internet um GET basta
+	// para levar o bearer embora. Ver WithPublicMode.
+	if !rc.publico {
+		mux.Handle("GET /dashboard", DashboardHandler(cfg.Token))
+		// Ícone do app (logo/favicon do web) — padroniza a marca com o iOS.
+		// Sem o dashboard ele não tem quem o peça; sai junto por arrumação, não
+		// por risco.
+		mux.Handle("GET /dashboard-icon.png", DashboardIconHandler())
+	}
 	// Protocolo do board para os agentes (aberto) — lido via Tailscale.
 	mux.Handle("GET /board-protocol", BoardProtocolHandler())
 	// CLI cutuque servida via Tailscale: /cutuque (o executável) e /install (curl | sh).
@@ -274,12 +315,19 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		// não exposto à internet), e os agentes usam o CLI sem credencial. Só o
 		// board é aberto; os demais endpoints (sessões, hooks, ws…) seguem com token.
 		mux.Handle("GET /board", BoardListHandler(rc.board))
-		mux.Handle("POST /board/tasks", BoardCreateHandler(rc.board))
-		mux.Handle("PATCH /board/tasks/{id}", BoardPatchHandler(rc.board))
+		// [16/08/2026] Escrita sem token só se o hub NÃO estiver na internet
+		// aberta. A justificativa acima ("o hub só escuta na interface Tailscale")
+		// é o que sustenta essas três, então onde ela deixa de valer elas somem —
+		// ver WithPublicMode. A leitura fica: um board público em leitura é uma
+		// página; um board público em escrita é um mural.
+		if !rc.publico {
+			mux.Handle("POST /board/tasks", BoardCreateHandler(rc.board))
+			mux.Handle("PATCH /board/tasks/{id}", BoardPatchHandler(rc.board))
+			mux.Handle("POST /board/tasks/{id}/comments", BoardCommentHandler(rc.board))
+		}
 		// DELETE exige token: só a mantenedora (dashboard/app, com token injetado) apaga
 		// cards. Os agentes usam o CLI sem token e não conseguem deletar.
 		mux.Handle("DELETE /board/tasks/{id}", requireAuth(cfg.Token, BoardDeleteHandler(rc.board)))
-		mux.Handle("POST /board/tasks/{id}/comments", BoardCommentHandler(rc.board))
 		mux.Handle("GET /board/stats", BoardStatsHandler(rc.board))
 		mux.Handle("GET /board/search", BoardSearchHandler(rc.board))
 		mux.Handle("GET /board/archive", BoardArchiveHandler(rc.board))

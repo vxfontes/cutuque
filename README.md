@@ -180,6 +180,13 @@ Tudo vem de variáveis de ambiente (ver [`config/hub.env.example`](./config/hub.
 | `CUTUQUE_APNS_*` | Credenciais APNs (opcionais; sem elas, o hub sobe sem push). |
 | `CUTUQUE_SSH_TARGETS` | Máquinas-alvo no formato `nome=user@host,...`. |
 | `CUTUQUE_MAX_SESSIONS` | Teto de sessões concorrentes vivas. |
+| `CUTUQUE_LOCAL_SHELL` | Abre o terminal **dentro do container do hub**, quando não há máquina remota. Só para o hub de demonstração. |
+| `CUTUQUE_PUBLIC` | Declara que o hub está na **internet aberta**: tira do ar o `/dashboard` (que serve o token dentro do HTML) e a escrita do `/board` (que não pede token). |
+
+> ⚠️ As duas últimas são **desligadas por omissão e por qualquer valor que não
+> seja um "sim" explícito** (`1`, `true`, `yes`, `on`, `sim`). Elas existem por
+> causa da caixa pública de demonstração do review da App Store — num hub de
+> casa, atrás do Tailscale, nenhuma das duas deve estar ligada.
 
 > 💡 Os IPs e hosts nos exemplos e testes usam a faixa de documentação
 > `192.0.2.0/24` (RFC 5737) — troque pelos seus.
