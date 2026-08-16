@@ -306,8 +306,9 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		mux.Handle("POST /app/active", requireAuth(cfg.Token, AppActiveHandler(rc.foreground)))
 	}
 
-	// Dev-only: seed de dados fake. Em prod o handler responde 404.
-	mux.Handle("POST /dev/seed", requireAuth(cfg.Token, SeedHandler(cfg, reg)))
+	// Dev-only: seed de dados fake (sessões + quadro). Em prod o handler responde
+	// 404. rc.board pode ser nil aqui — o seed trata.
+	mux.Handle("POST /dev/seed", requireAuth(cfg.Token, SeedHandler(cfg, reg, rc.board)))
 
 	// Quadro Kanban (Cutuque Board). Só quando há store.
 	if rc.board != nil {
