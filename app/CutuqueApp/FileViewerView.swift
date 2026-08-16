@@ -58,7 +58,13 @@ struct FileViewerView: View {
                 ProgressView()
             }
         }
-        .navigationTitle(entry.name)
+        // String variável, nunca `if/else` embrulhando o modifier: `abaAtiva`
+        // muda em runtime (decisão #19 mantém toda máquina montada, e uma
+        // subpasta empilhada por cima disso continua viva por baixo), e
+        // embrulhar `.navigationTitle` num `if/else` remontaria esta view,
+        // derrubando o `@State content/draft/editing` (mesma armadilha
+        // documentada em `OwnedNavigationTitle.swift`).
+        .navigationTitle(abaAtiva ? entry.name : "")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarItems }
         .alert("Deu ruim", isPresented: .constant(actionError != nil)) {
@@ -69,38 +75,50 @@ struct FileViewerView: View {
         .task { await load() }
     }
 
+    /// [16/08/2026] Gate no CONTEÚDO da `ToolbarContent`, não num `if` na
+    /// árvore do `body` — mesma regra do resto do app. Aqui é seguro além do
+    /// de sempre: `toolbarItems` é `ToolbarContent`, uma DSL separada da
+    /// árvore de `View`, então este `if abaAtiva` NUNCA remonta o `Group` que
+    /// segura `@State content/draft/editing` acima. Antes deste gate,
+    /// QUALQUER arquivo aberto em QUALQUER aba de máquina contribuía
+    /// Editar/Compartilhar (ou Cancelar/Salvar) pra barra compartilhada,
+    /// incondicionalmente — achado da auditoria do card de duplicação de
+    /// toolbar (paleta/olho/ícone de máquina), não reportado ainda pela
+    /// Vanessa mas mesma família estrutural.
     @ToolbarContentBuilder
     private var toolbarItems: some ToolbarContent {
-        if editing {
-            ToolbarItem(placement: .topBarLeading) {
-                Button("Cancelar") {
-                    draft = content?.content ?? ""
-                    editing = false
+        if abaAtiva {
+            if editing {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancelar") {
+                        draft = content?.content ?? ""
+                        editing = false
+                    }
+                    .disabled(saving)
                 }
-                .disabled(saving)
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                if saving {
-                    ProgressView()
-                } else {
-                    Button("Salvar") { Task { await save() } }.disabled(!dirty)
+                ToolbarItem(placement: .topBarTrailing) {
+                    if saving {
+                        ProgressView()
+                    } else {
+                        Button("Salvar") { Task { await save() } }.disabled(!dirty)
+                    }
                 }
-            }
-        } else if let content, content.isReadable {
-            // `isReadable` (e não `podeMostrarTexto`) é o portão certo aqui, e a
-            // diferença entre os dois é a CAUDA: quando o hub manda só o fim de
-            // um arquivo grande, a tela mostra o texto mas Editar e Compartilhar
-            // somem — salvar 200 KB por cima de um arquivo de 5 MB o truncaria,
-            // e compartilhar um pedaço com o nome do arquivo inteiro mentiria.
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                // Compartilhar o texto cobre "salvar no app Arquivos" sem uma
-                // ida extra à máquina — o conteúdo já está aqui.
-                ShareLink(item: content.content, preview: SharePreview(entry.name)) {
-                    Image(systemName: "square.and.arrow.up")
-                }
-                Button("Editar") {
-                    draft = content.content
-                    editing = true
+            } else if let content, content.isReadable {
+                // `isReadable` (e não `podeMostrarTexto`) é o portão certo aqui, e a
+                // diferença entre os dois é a CAUDA: quando o hub manda só o fim de
+                // um arquivo grande, a tela mostra o texto mas Editar e Compartilhar
+                // somem — salvar 200 KB por cima de um arquivo de 5 MB o truncaria,
+                // e compartilhar um pedaço com o nome do arquivo inteiro mentiria.
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    // Compartilhar o texto cobre "salvar no app Arquivos" sem uma
+                    // ida extra à máquina — o conteúdo já está aqui.
+                    ShareLink(item: content.content, preview: SharePreview(entry.name)) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    Button("Editar") {
+                        draft = content.content
+                        editing = true
+                    }
                 }
             }
         }

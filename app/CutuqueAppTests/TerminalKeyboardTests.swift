@@ -43,4 +43,41 @@ final class TerminalKeyboardTests: XCTestCase {
         XCTAssertNil(TerminalKeyboard.tmuxKey(for: "c", modifiers: [.command]))
         XCTAssertNil(TerminalKeyboard.tmuxKey(for: KeyEquivalent.escape.character, modifiers: [.command]))
     }
+
+    // MARK: Letras de comando da gaveta
+
+    func testLetrasDeComandoNaOrdemDaLegenda() {
+        // A ordem é a da legenda que a própria TUI desenha (j/k rolar, x parar,
+        // r reiniciar, p pausar, s salvar): a barra tem que ler igual ao que está
+        // na tela, senão achar o botão vira caça ao tesouro.
+        XCTAssertEqual(TerminalKeyboard.letrasDeComando, ["j", "k", "x", "r", "p", "s"])
+    }
+
+    func testLetraDaGavetaContinuaIndoProALinhaQuandoDigitada() {
+        // A gaveta manda a letra como TECLA (sendKey). Digitar a mesma letra no
+        // teclado tem que seguir caindo na linha local — senão escrever "prompt"
+        // viraria uma saraivada de comandos de TUI.
+        for letra in TerminalKeyboard.letrasDeComando {
+            XCTAssertNil(
+                TerminalKeyboard.tmuxKey(for: Character(letra), modifiers: []),
+                "\(letra) digitada deveria ficar na linha local"
+            )
+        }
+    }
+
+    func testLetrasDeComandoSaoTeclaSimples() {
+        // Contrato com a allowlist do hub (tmuxAllowedKeys): valor literal, uma
+        // letra ASCII. Lá a tecla é concatenada CRUA no shell do ssh — nada aqui
+        // pode virar espaço, aspa ou nome composto.
+        for letra in TerminalKeyboard.letrasDeComando {
+            XCTAssertEqual(letra.count, 1, "\(letra) não é uma tecla simples")
+            XCTAssertTrue(
+                letra.allSatisfy { $0.isASCII && $0.isLetter },
+                "\(letra) tem caractere que não é letra ASCII"
+            )
+        }
+        XCTAssertEqual(Set(TerminalKeyboard.letrasDeComando).count,
+                       TerminalKeyboard.letrasDeComando.count,
+                       "letra repetida na gaveta")
+    }
 }

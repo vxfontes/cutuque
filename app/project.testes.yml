@@ -1,0 +1,35 @@
+# Projeto-irmão que existe por UM motivo: rodar a suíte quando a máquina não tem
+# runtime do watchOS instalado.
+#
+# [16/08/2026] `xcodebuild test -scheme CutuqueApp` morre com "This scheme builds
+# an embedded Apple Watch app. watchOS 26.2 must be installed in order to test the
+# scheme" mesmo com o SDK do watchOS presente — testar exige o RUNTIME (~4 GB), e
+# ele desaparece a cada limpeza de simuladores. Como o app embute o relógio
+# (`CutuqueWatch` com `embed: true`), o scheme arrasta a plataforma inteira só para
+# rodar teste de lógica pura de iOS.
+#
+# Aqui o `CutuqueApp` reaparece SEM a dependência do relógio. O alvo `CutuqueWatch`
+# continua declarado (herdado do include) — ele só deixa de ser construído pelo
+# scheme, que é o que destrava o teste. Nada mais muda: mesmas fontes, mesmos
+# ajustes, mesmo bundle de testes.
+#
+# Uso:
+#   xcodegen generate --spec project.testes.yml
+#   xcodebuild test -project CutuqueAppTestes.xcodeproj -scheme CutuqueApp \
+#     -destination 'platform=iOS Simulator,name=iPad Pro 13-inch (M5)'
+#
+# NÃO use este projeto para archive/TestFlight: o .ipa sairia sem o app do relógio.
+# Para distribuir é sempre o `project.yml`.
+include:
+  - project.yml
+
+name: CutuqueAppTestes
+
+targets:
+  CutuqueApp:
+    # `:REPLACE` troca a lista inteira em vez de concatenar com a do include —
+    # sem ele o `- target: CutuqueWatch` do project.yml voltaria por acumulação.
+    dependencies:REPLACE:
+      - target: CutuqueWidgets
+      - package: SwiftTerm
+        product: SwiftTerm

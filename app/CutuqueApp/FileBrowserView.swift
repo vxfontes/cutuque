@@ -54,7 +54,86 @@ struct FileBrowserView: View {
         listing?.visibleEntries(showHidden: showHidden) ?? []
     }
 
+    /// Qual estado a lista vazia resolve pra — puro, ver `EstadoDaListaVazia`
+    /// logo abaixo.
+    private var estadoVazio: EstadoDaListaVazia {
+        .resolver(visibleIsEmpty: visible.isEmpty, loading: loading, showHidden: showHidden)
+    }
+
     var body: some View {
+        Group {
+            switch estadoVazio {
+            case .comItens:
+                lista
+            case .talvezSoOcultos:
+                // [16/08/2026] Antes, este ramo só diagnosticava ("talvez só
+                // itens ocultos") e não resolvia — foi o que deixou a
+                // navegação sem saída numa pasta só-de-ocultos: não dá pra
+                // subir de pasta (bug maior, card 2fc2b3f6, ainda em aberto) e
+                // a tela vazia não oferecia nada pra fazer. A ação mora AQUI,
+                // junto do texto, porque é exatamente onde quem está travada
+                // vai olhar — o toggle de ocultos já existia, mas só na
+                // toolbar (abaixo), que é o que ela não olhou.
+                //
+                // `showHidden` é a MESMA preferência da toolbar (comentário na
+                // declaração do `@AppStorage` acima — vale pra toda a
+                // navegação): ligar por aqui tem que ter exatamente o mesmo
+                // efeito de ligar por lá. Não é um estado paralelo, é o mesmo
+                // `@AppStorage`.
+                ContentUnavailableView {
+                    Label("Nada visível aqui", systemImage: "eye.slash")
+                } description: {
+                    Text("Pode ser só itens ocultos nesta pasta.")
+                } actions: {
+                    Button("Mostrar ocultos") { showHidden = true }
+                }
+            case .semNadaMesmo:
+                // Ocultos já ligados e mesmo assim vazia: a pasta está vazia
+                // de verdade. Não há ação a oferecer — inventar um botão aqui
+                // seria mentir sobre o que resolveria.
+                ContentUnavailableView("Pasta vazia", systemImage: "folder")
+            }
+        }
+        .ownedNavigationTitle(titulo, owns: ownsNavigationTitle)
+        .toolbar {
+            // Gate no CONTEÚDO, não no modificador: não é `if` na árvore de
+            // views, então não remonta nada.
+            //
+            // [16/08/2026] `isActive` sozinho só cobre painel (terminal vs
+            // arquivos) DENTRO de uma máquina — com decisão #19 (toda aba
+            // montada pra sempre), duas abas de máquina ambas com o painel
+            // Arquivos à frente tinham as DUAS `isActive == true`, dobrando o
+            // ícone de olho na mesma navigation bar. `abaAtiva` (foco da ABA,
+            // já recebido e repassado às subpastas — ver o comentário do
+            // parâmetro) fecha o furo; `isActive` continua necessário porque
+            // uma aba em foco com o terminal à frente não deve mostrar o
+            // toggle de ocultos.
+            if isActive && abaAtiva {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Toggle(isOn: $showHidden) {
+                        Label("Ocultos", systemImage: showHidden ? "eye" : "eye.slash")
+                    }
+                    .toggleStyle(.button)
+                }
+            }
+        }
+        .overlay { if loading && listing == nil { ProgressView() } }
+        .refreshable { await load() }
+        .task(id: carregaAgora) {
+            guard carregaAgora else { return }
+            await load()
+        }
+        .alert("Não deu para listar", isPresented: .constant(error != nil)) {
+            Button("OK") { error = nil }
+        } message: {
+            Text(error ?? "")
+        }
+    }
+
+    /// A lista de verdade — extraída do `body` pra virar um dos ramos do
+    /// `switch` em `estadoVazio`. Conteúdo inalterado, só mudou de dono.
+    @ViewBuilder
+    private var lista: some View {
         List {
             ForEach(visible) { entry in
                 if entry.isDir {
@@ -81,34 +160,6 @@ struct FileBrowserView: View {
                     }
                 }
             }
-            if visible.isEmpty && !loading {
-                Text(showHidden ? "Pasta vazia" : "Nada visível aqui — talvez só itens ocultos.")
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .ownedNavigationTitle(titulo, owns: ownsNavigationTitle)
-        .toolbar {
-            // Gate no CONTEÚDO, não no modificador: não é `if` na árvore de
-            // views, então não remonta nada.
-            if isActive {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Toggle(isOn: $showHidden) {
-                        Label("Ocultos", systemImage: showHidden ? "eye" : "eye.slash")
-                    }
-                    .toggleStyle(.button)
-                }
-            }
-        }
-        .overlay { if loading && listing == nil { ProgressView() } }
-        .refreshable { await load() }
-        .task(id: carregaAgora) {
-            guard carregaAgora else { return }
-            await load()
-        }
-        .alert("Não deu para listar", isPresented: .constant(error != nil)) {
-            Button("OK") { error = nil }
-        } message: {
-            Text(error ?? "")
         }
     }
 
@@ -147,5 +198,26 @@ enum ErroDeCarga {
     static func ehCancelamento(_ erro: Error) -> Bool {
         if erro is CancellationError { return true }
         return (erro as? URLError)?.code == .cancelled
+    }
+}
+
+/// O que a lista vazia de `FileBrowserView` deve mostrar. Puro — só os três
+/// sinais que já existem na view (`visible.isEmpty`, `loading`, `showHidden`),
+/// sem tocar rede nem `@AppStorage` — pra dar pra testar sem instanciar
+/// SwiftUI (mesmo padrão de `ErroDeCarga`, acima).
+enum EstadoDaListaVazia: Equatable {
+    /// Não é o caso vazio: a lista tem item, ou ainda está carregando.
+    case comItens
+    /// Vazia só porque os ocultos estão escondidos — ligar o toggle pode
+    /// revelar algo. Foi este o caso que deixou a navegação sem saída (card
+    /// 2fc2b3f6): o texto avisava "talvez só ocultos" e não oferecia a ação.
+    case talvezSoOcultos
+    /// Ocultos já ligados e mesmo assim vazia: a pasta está vazia de verdade,
+    /// não há ação a oferecer.
+    case semNadaMesmo
+
+    static func resolver(visibleIsEmpty: Bool, loading: Bool, showHidden: Bool) -> EstadoDaListaVazia {
+        guard visibleIsEmpty, !loading else { return .comItens }
+        return showHidden ? .semNadaMesmo : .talvezSoOcultos
     }
 }

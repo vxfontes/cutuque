@@ -273,6 +273,20 @@ func NewRegistryAt(path string, ms []Machine, idents *IdentityStore) *Registry {
 		}
 		r.put(m)
 	}
+	// Aplica por cima os overrides de aparência salvos para env/local — a
+	// máquina do app já trouxe a aparência dela no diskMachine acima, então
+	// aqui só interessa nome que hoje é env/local.
+	for _, row := range loadAparencia(aparenciaPath(path)) {
+		m, ok := r.by[row.Name]
+		if !ok || m.Source == SourceApp {
+			continue // nome saiu do hub.env, ou já é cadastro do app: ignora em silêncio
+		}
+		// Atribuição DIRETA no mapa — nunca r.put(m) aqui: put() ignora nome já
+		// existente (dedupe de máquina duplicada, linha ~370), então chamar
+		// put() de novo faria este override ser ENGOLIDO EM SILÊNCIO, sem erro.
+		m.Theme, m.Icon = row.Theme, row.Icon
+		r.by[row.Name] = m
+	}
 	// Regrava só se algo mudou de forma: um boot normal não deve reescrever
 	// /data à toa.
 	if migrou {
@@ -433,6 +447,52 @@ func loadDisk(path string) []Machine {
 	return out
 }
 
+// aparenciaSalva é um override de tema/ícone persistido para uma máquina que
+// NÃO é cadastro do app (env ou local) — a única coisa que sobrevive nelas
+// entre boots, já que o resto (Dest, Source, RemoteCmd) vem do hub.env de novo
+// a cada subida. Nome é a chave: se a máquina sumir do hub.env, a entrada
+// correspondente vira lixo inofensivo até a próxima gravação reescrever o
+// arquivo sem ela (persist() reconstrói do zero a partir de r.by a cada chamada).
+type aparenciaSalva struct {
+	Name  string `json:"name"`
+	Theme string `json:"theme,omitempty"`
+	Icon  string `json:"icon,omitempty"`
+}
+
+// aparenciaPath deriva o caminho do arquivo de overrides de aparência a partir
+// do caminho de machines.json: um arquivo IRMÃO, no MESMO diretório, chamado
+// appearance.json. Sem parâmetro novo em NewRegistryAt/main.go.
+//
+// Arquivo separado de propósito: misturar isto no machines.json (que hoje é só
+// diskMachine = cadastro do app) exigiria inventar um marcador para distinguir
+// "isto é cadastro de verdade" de "isto é só um eco de aparência de env/local"
+// — a identidade do arquivo já é esse marcador, de graça.
+func aparenciaPath(machinesPath string) string {
+	if machinesPath == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(machinesPath), "appearance.json")
+}
+
+// loadAparencia carrega os overrides de aparência salvos. Defensivo, no mesmo
+// molde do loadDisk: arquivo ausente ou corrompido nunca bloqueia o boot, só
+// devolve nil (primeiro boot, ou nenhuma env/local-machine mudou de aparência
+// ainda).
+func loadAparencia(path string) []aparenciaSalva {
+	if path == "" {
+		return nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var out []aparenciaSalva
+	if json.Unmarshal(b, &out) != nil {
+		return nil // corrompido: melhor subir sem os overrides do que não subir
+	}
+	return out
+}
+
 // persist grava as máquinas do APP (as de env vêm do hub.env a cada boot, e as
 // gravar aqui as congelaria). Chame com o lock de leitura livre.
 //
@@ -455,9 +515,15 @@ func (r *Registry) persist() error {
 
 	r.mu.RLock()
 	dms := make([]diskMachine, 0, len(r.order))
+	aps := make([]aparenciaSalva, 0, len(r.order))
 	for _, n := range r.order {
 		m := r.by[n]
 		if m.Source != SourceApp {
+			// env/local não tem cadastro próprio — só a aparência (se alguma
+			// foi escolhida) sobrevive, no arquivo irmão.
+			if m.Theme != "" || m.Icon != "" {
+				aps = append(aps, aparenciaSalva{Name: m.Name, Theme: m.Theme, Icon: m.Icon})
+			}
 			continue
 		}
 		dms = append(dms, diskMachine{
@@ -481,7 +547,24 @@ func (r *Registry) persist() error {
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, r.path)
+	if err := os.Rename(tmp, r.path); err != nil {
+		return err
+	}
+
+	// Segunda escrita, MESMO saveMu/snapshot que já resolve a corrida de dois
+	// aparelhos: appearance.json guarda só a aparência de quem não é cadastro
+	// do app. Reconstrói do zero a cada persist() — poda sozinho, na próxima
+	// gravação, qualquer nome que saiu do registro, sem job de limpeza ativo.
+	ab, err := json.MarshalIndent(aps, "", " ")
+	if err != nil {
+		return err
+	}
+	apath := aparenciaPath(r.path)
+	atmp := apath + ".tmp"
+	if err := os.WriteFile(atmp, ab, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(atmp, apath)
 }
 
 // Add cadastra uma máquina nova vinda do app. Nome e destino são validados; a
@@ -639,6 +722,12 @@ func (r *Registry) SetTheme(name, theme string) error {
 // Nada aqui alcança host, porta, identidade ou fingerprint, e é de propósito:
 // aparência não afeta conexão, então a rota que a muda não deve nem ter como
 // derrubar uma confiança que a usuária conferiu à mão.
+//
+// SEM gate de Editable(): aparência é do app, conexão é da fonte — vale para as
+// três origens (env, local, app). checkLook já validou a FORMA acima, e o
+// !ok abaixo já cobre "não existe"; não há um terceiro portão aqui de
+// propósito. Quem continua trancado para env/local é Update/Remove, que mexem
+// em host/porta/identidade/remoção — isso sim é assunto da fonte (hub.env).
 func (r *Registry) SetAppearance(name, theme, icon string) (Machine, error) {
 	theme, icon = strings.TrimSpace(theme), strings.TrimSpace(icon)
 	if err := checkLook(theme, icon); err != nil {
@@ -649,10 +738,6 @@ func (r *Registry) SetAppearance(name, theme, icon string) (Machine, error) {
 	if !ok {
 		r.mu.Unlock()
 		return Machine{}, fmt.Errorf("%w: %q", ErrNotFound, name)
-	}
-	if !m.Editable() {
-		r.mu.Unlock()
-		return Machine{}, fmt.Errorf("%w: %q", ErrReadOnly, name)
 	}
 	m.Theme, m.Icon = theme, icon
 	r.by[name] = m

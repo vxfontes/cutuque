@@ -960,21 +960,21 @@ func TestPutAppearanceIDMalformadoE400(t *testing.T) {
 	}
 }
 
-func TestPutAppearanceDoEnvE403EInexistenteE404(t *testing.T) {
+// Reescrito (era TestPutAppearanceDoEnvE403EInexistenteE404): aparência é do
+// app, conexão é da fonte — PUT .../appearance numa máquina de env agora
+// devolve 200, não mais 403. "Inexistente" continua 404, sem mudança.
+func TestPutAppearanceDoEnvE200EInexistenteE404(t *testing.T) {
 	mreg := machine.NewRegistry([]machine.Machine{
 		{Name: "macbook", Dest: "vx@host", Port: 22, Source: machine.SourceEnv},
 	})
 	idents := identidadeComChave(t, "vx", "vx")
 
 	rec := doAdmin(t, mreg, newFakeKeys(), idents, http.MethodPut, "/machines/macbook/appearance", `{"theme":"nord"}`)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("env: status %d, esperava 403: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("env: status %d, esperava 200: %s", rec.Code, rec.Body.String())
 	}
-	if got := erroDe(t, rec); got != "read_only" {
-		t.Errorf("env: erro = %q", got)
-	}
-	if m, _ := mreg.Get("macbook"); m.Theme != "" {
-		t.Errorf("a máquina do env aceitou tema: %+v", m)
+	if m, _ := mreg.Get("macbook"); m.Theme != "nord" {
+		t.Errorf("a máquina do env não gravou o tema: %+v", m)
 	}
 
 	rec = doAdmin(t, mreg, newFakeKeys(), idents, http.MethodPut, "/machines/fantasma/appearance", `{"theme":"nord"}`)

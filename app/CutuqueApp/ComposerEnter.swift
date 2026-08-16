@@ -17,6 +17,28 @@ import SwiftUI
 /// que os DOIS teclados produzem — em vez de escutar a tecla, que só um deles
 /// entrega. O `.onKeyPress` continua tendo um papel, mas só um: avisar
 /// antecipadamente que a quebra é ⇧⏎ (intencional) e não deve virar envio.
+///
+/// ## [16/08/2026] O parágrafo acima valia só para o teclado DE TELA
+///
+/// Ela continuou sem conseguir enviar nas builds 21/22, já com o conserto de
+/// 13/08 instalado — e usando o teclado **físico**. Bancada isolada (app SwiftUI
+/// mínimo reproduzindo esta fiação, com log dos bytes) mostrou que a premissa
+/// "Return sempre insere `\n`" **é falsa no físico**:
+///
+/// | Teclado | Return | ⇧Return |
+/// |---|---|---|
+/// | físico | `onKeyPress` vê `U+000D` e ignora; `onChange` **nunca roda**; dispara **só** `onSubmit` | idem — cai no `onSubmit` **sem** escrever `\n` |
+/// | de tela | `onChange` roda com `\n` (`U+000A`) real | (não existe ⇧⏎) |
+///
+/// Ou seja, no físico o Return **não escreve nada**: quem consome o evento é o
+/// `onSubmit` — justamente o que fora descartado. Os dois caminhos não são
+/// alternativas, são **complementares**: `acao` atende o teclado de tela e
+/// `acaoSubmit` atende o físico. Nenhum dos dois pode sair.
+///
+/// A pegadinha que um conserto ingênuo criaria: **`onSubmit` não distingue
+/// Shift**. ⇧Return físico cai nele igual, sem `\n`. Por isso `acaoSubmit`
+/// também consulta `quebraIntencional` — e no físico ela precisa **escrever** a
+/// quebra, porque ninguém mais escreve.
 enum ComposerEnter {
     /// O que o compositor faz com a mudança de texto.
     enum Acao: Equatable {
@@ -52,6 +74,35 @@ enum ComposerEnter {
             return .limpar
         }
         return .enviar(anterior)
+    }
+
+    /// O que o compositor faz quando o `onSubmit` dispara — o caminho do teclado
+    /// FÍSICO, onde o Return não escreve `\n` nenhum.
+    enum AcaoSubmit: Equatable {
+        /// Nada a fazer: campo vazio ou só espaço em branco. Não envia, e também
+        /// não escreve quebra — abrir uma linha em branco num campo vazio só deixa
+        /// o botão desabilitado sem explicação (mesmo motivo do `.limpar`).
+        case nada
+        /// ⇧⏎ no teclado físico: a quebra tem que ser ESCRITA aqui. No caminho de
+        /// tela ela já vem escrita pelo próprio campo; neste, não vem de ninguém.
+        case inserirQuebra
+        /// Return pelado: manda o texto que está no campo e limpa.
+        case enviar
+    }
+
+    /// - Parameters:
+    ///   - texto: o conteúdo atual do campo.
+    ///   - quebraIntencional: o `.onKeyPress` já viu um ⇧⏎ e este `onSubmit` é o
+    ///     dele. Dá para confiar nessa leitura: a bancada confirmou que o
+    ///     `onKeyPress` dispara ~30–40 ms ANTES do `onSubmit`, nunca invertido.
+    static func acaoSubmit(texto: String, quebraIntencional: Bool) -> AcaoSubmit {
+        // A ordem importa: ⇧⏎ num campo vazio é alguém abrindo uma linha para
+        // começar a escrever, não um envio a ser barrado — mas continua não
+        // valendo abrir linha em branco no vazio, então cai no `.nada` abaixo.
+        if texto.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .nada
+        }
+        return quebraIntencional ? .inserirQuebra : .enviar
     }
 
     /// A tecla é o ⇧⏎ que insere quebra em vez de enviar? Só o teclado físico

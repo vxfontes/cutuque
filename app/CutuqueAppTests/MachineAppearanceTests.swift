@@ -42,6 +42,32 @@ final class MachineAppearanceTests: XCTestCase {
         XCTAssertEqual(m.displayIcon, "apple.logo")
     }
 
+    // MARK: - Eixo de aparência × eixo de conexão (16/08/2026, card 298d32510fe2a4e3)
+
+    private func maquinaDeOrigem(_ source: String) -> Machine {
+        Machine(name: "vps", dest: "vx@192.0.2.50", port: 22, source: source,
+                hostFingerprint: source == "app" ? "SHA256:abc" : nil, host: nil, identity: nil,
+                os: nil, theme: nil, icon: nil)
+    }
+
+    /// A raiz do card: aparência (tema+ícone) e conexão (host/porta/detectar
+    /// SO) viraram eixos INDEPENDENTES quando o hub parou de gatear
+    /// `SetAppearance` por origem. `isEditable` continua o eixo de conexão —
+    /// só `"app"` — mas `aparenciaEditavel` tem de valer para as três origens
+    /// que o hub manda (`app`, `env`, `local`). Se algum call site voltar a
+    /// usar `isEditable` para travar tema/ícone, este teste não pega — é
+    /// exatamente por isso que o axis ganhou nome próprio em vez de ficar
+    /// implícito num `true` espalhado pelas views.
+    func testAparenciaEhEditavelParaQualquerOrigemMesmoQuandoConexaoNaoE() {
+        for origem in ["app", "env", "local"] {
+            XCTAssertTrue(maquinaDeOrigem(origem).aparenciaEditavel,
+                           "aparência tem de valer pra origem \(origem)")
+        }
+        XCTAssertTrue(maquinaDeOrigem("app").isEditable)
+        XCTAssertFalse(maquinaDeOrigem("env").isEditable, "conexão de máquina de env continua travada")
+        XCTAssertFalse(maquinaDeOrigem("local").isEditable, "conexão da máquina local continua travada")
+    }
+
     // MARK: - Precedência do ícone
 
     func testEscolhaAMaoVenceOSODetectado() {

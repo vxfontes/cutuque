@@ -188,10 +188,37 @@ func (t *SSHTarget) sshOpts() []string {
 	return agent.WithIdentity(t.identity, sshBaseOpts())
 }
 
-// sshOptsDeConsulta são as opções deste alvo para uma LEITURA repetida (hoje a
-// listagem de panes): iguais às normais, com ConnectTimeout curto.
+// sshOptsDeConsulta são as opções deste alvo para uma LEITURA repetida (a
+// listagem de panes, e agora a sondagem de alcance da aba Máquinas): iguais
+// às normais, com ConnectTimeout curto.
 func (t *SSHTarget) sshOptsDeConsulta() []string {
 	return agent.WithIdentity(t.identity, sshBaseOptsConsulta())
+}
+
+// Prober é implementado pelo alvo que sabe confirmar alcance de VERDADE via
+// ssh (só o SSHTarget). O LocalTarget não implementa — é o próprio hub, sem
+// ssh no meio, então a ausência da interface já basta como sinal de "sempre
+// alcançável" para quem faz a type assertion (mesmo padrão de
+// Discoverer/Liver/Tmuxer: capacidade opcional, resolvida por asserção).
+type Prober interface {
+	Probe(ctx context.Context) error
+}
+
+// Probe confere se esta máquina responde de VERDADE ao ssh: abre e fecha uma
+// conexão real, sem tocar em tmux/python3/claude — só o comando remoto mais
+// barato que existe (`true`), para o veredito não depender de nada estar
+// instalado do outro lado além do próprio login shell. Usa o ConnectTimeout de
+// CONSULTA (curto): é exatamente o "polling de fundo repetido" do comentário
+// dela, nunca abrir/pilotar sessão (ver connectTimeoutConsulta). nil = ssh
+// respondeu (a máquina está "pronto pra uso"); erro = não respondeu dentro do
+// prazo, recusou a chave, ou qualquer outra falha — tudo cai no mesmo veredito
+// "não respondeu", sem distinguir motivo (a aba Máquinas só quer saber se dá
+// para usar agora).
+func (t *SSHTarget) Probe(ctx context.Context) error {
+	args := append(t.sshOptsDeConsulta(), "--", t.dest, "true")
+	cmd := exec.CommandContext(ctx, t.prog, args...)
+	cmd.Env = childEnv()
+	return cmd.Run()
 }
 
 // Name identifica o alvo remoto (vira o campo Machine da sessão).

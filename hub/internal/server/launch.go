@@ -27,6 +27,11 @@ type Launcher interface {
 	SendText(id, text string) error
 	Reply(id, text string) error
 	Machines() []string
+	// Reachability devolve o alcance conhecido de cada máquina cadastrada
+	// como alvo (aba Máquinas: pronto | nao_respondeu | checando). Não bate
+	// ssh na hora do request — só lê o cache do Launcher e dispara sondagem
+	// em background quando algo está velho (ver launcher.Reachability).
+	Reachability() []launcher.Reachability
 	Remove(id string) error
 	Resolve(id string) error
 	ImportHistory(id string) error

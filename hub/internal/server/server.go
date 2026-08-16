@@ -166,6 +166,11 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		mux.Handle("POST /sessions/{id}/reply", requireAuth(cfg.Token, ReplyHandler(lch)))
 		// Máquinas disponíveis (picker do app) e apagar sessão (swipe-to-delete).
 		mux.Handle("GET /targets", requireAuth(cfg.Token, TargetsHandler(lch)))
+		// Alcance da aba Máquinas (pronto|nao_respondeu|checando) — rota NOVA,
+		// não reaproveita /targets (que só lista nomes p/ criar sessão, sem
+		// noção de "responde agora"). Cache do Launcher, nunca bate ssh na hora
+		// do request (ver ReachabilityHandler/launcher.Reachability).
+		mux.Handle("GET /machines/reachability", requireAuth(cfg.Token, ReachabilityHandler(lch)))
 		mux.Handle("DELETE /sessions/{id}", requireAuth(cfg.Token, DeleteSessionHandler(lch)))
 		mux.Handle("POST /sessions/{id}/resolve", requireAuth(cfg.Token, ResolveHandler(lch)))
 		mux.Handle("POST /sessions/{id}/history", requireAuth(cfg.Token, HistoryHandler(lch)))

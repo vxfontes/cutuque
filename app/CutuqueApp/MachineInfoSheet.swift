@@ -131,7 +131,9 @@ struct MachineInfoSheet: View {
         Section {
             // A grade mora em `SeletorDeIconeDeMaquina` desde 13/08/2026: o
             // formulário de máquina usa a mesma.
-            SeletorDeIconeDeMaquina(so: so, escolhido: icone, habilitado: machine.isEditable) { id in
+            // Eixo aparência, não conexão: destrava para hub.env/local também
+            // (ver `Machine.aparenciaEditavel`).
+            SeletorDeIconeDeMaquina(so: so, escolhido: icone, habilitado: machine.aparenciaEditavel) { id in
                 aplicar(tema: tema, icone: id)
             }
         } header: {
@@ -147,7 +149,7 @@ struct MachineInfoSheet: View {
         } footer: {
             Text("Automático usa o sistema detectado. Escolher à mão resolve o host onde a detecção não funciona.")
         }
-        .disabled(!machine.isEditable)
+        .disabled(!machine.aparenciaEditavel)
     }
 
     @ViewBuilder private var secaoTema: some View {
@@ -159,11 +161,14 @@ struct MachineInfoSheet: View {
         } header: {
             Text("Tema do terminal")
         } footer: {
-            Text(machine.isEditable
-                 ? "Vale só para esta máquina, e o terminal aberto muda de cor na hora."
-                 : "Máquina do hub.env: a aparência dela é do hub, não do app.")
+            // [16/08/2026] Não é mais condicional: aparência é sempre do app,
+            // mesmo em máquina do hub.env — a frase antiga ("a aparência dela
+            // é do hub") virou mentira quando `SetAppearance` parou de gatear
+            // por origem. O texto de conexão continua em `origem` (linha 179),
+            // que é sobre a fonte da MÁQUINA, não sobre quem manda no tema.
+            Text("Vale só para esta máquina, e o terminal aberto muda de cor na hora — mesmo se ela vier do hub.env.")
         }
-        .disabled(!machine.isEditable)
+        .disabled(!machine.aparenciaEditavel)
     }
 
     private func linha(_ rotulo: String, _ valor: String) -> some View {
@@ -228,8 +233,17 @@ struct MachineInfoSheet: View {
     /// A única guarda é `tocouAqui` — leitura não desfaz toque.
     ///
     /// Falhar é inofensivo: fica o comportamento de antes.
+    ///
+    /// [16/08/2026] O gate aqui é `aparenciaEditavel`, NUNCA `isEditable`: esta
+    /// releitura é do eixo aparência (o hub aceita `PUT /appearance` de
+    /// qualquer origem desde hoje), não do eixo conexão — que continua
+    /// travado só pra `detectarSO()`, essa sim uma rota que o hub ainda
+    /// recusa com 403 pra máquina de env/local. Gatear esta releitura por
+    /// `isEditable` de novo reintroduziria o bug original por outra porta: a
+    /// UI destravada mas a releitura do hub nunca rodando pra máquina do
+    /// hub.env — pareceria funcionar até dois aparelhos divergirem.
     private func resemear() async {
-        guard machine.isEditable,
+        guard machine.aparenciaEditavel,
               let todas = try? await api.listMachines(),
               let fresca = todas.first(where: { $0.name == machine.name }),
               !tocouAqui else { return }

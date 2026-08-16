@@ -100,8 +100,26 @@ case "$cmd" in
       exit 1
     fi
 
+    sock="$(sock_dir)/$SRV"
+
+    # [15/08/2026] Matar a ÚLTIMA sessão encerra o servidor junto, e o tmux
+    # deixa o socket pra trás (ver killservers) — sem isso o `tmx servers`
+    # listaria um servidor que não existe mais. Se este shell estiver nesse
+    # servidor e a sessão for a última, ele cai junto e não chega a varrer, daí
+    # o varredor destacado. Quando NÃO for a última, ele confere, vê que o
+    # servidor ainda responde e não faz nada.
+    if [ -n "$TMUX" ] && [ "$(basename "${TMUX%%,*}")" = "$SRV" ]; then
+      nohup bash -c 'sleep 1; tmux -L "$1" ls >/dev/null 2>&1 || rm -f "$2"' \
+        _ "$SRV" "$sock" >/dev/null 2>&1 &
+    fi
+
     TM kill-session -t "$name"
     echo "Sessão '$name' encerrada (srv=$SRV)."
+
+    if [ -e "$sock" ] && ! TM ls >/dev/null 2>&1; then
+      rm -f "$sock"
+      echo "Era a última: servidor '$SRV' encerrado junto e socket removido."
+    fi
     ;;
 
   killall)
@@ -110,16 +128,137 @@ case "$cmd" in
     read -r -p "Isso vai matar TODAS as sessões do servidor '$SRV'. Continuar? [y/N] " confirm
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
       sock="$(sock_dir)/$SRV"
+
+      # [15/08/2026] O tmux NÃO apaga o socket ao morrer (medido; ver o bloco
+      # killservers). Sem varrer, `tmx servers` seguiria listando o que este
+      # comando acabou de matar.
+      #
+      # Caso especial que o killservers não tem: aqui o alvo pode ser o
+      # servidor DESTE shell, e aí o kill-server derruba tudo antes da varrida
+      # rodar. Por isso o varredor sai destacado ANTES do kill — o nohup o
+      # protege do SIGHUP que o tmux manda ao sair.
+      # $TMUX = "<caminho-do-socket>,<pid>,<índice>"; comparo o basename porque
+      # o caminho dele pode vir por /private/tmp e o sock_dir() por /tmp.
+      aqui_dentro=""
+      if [ -n "$TMUX" ] && [ "$(basename "${TMUX%%,*}")" = "$SRV" ]; then
+        aqui_dentro=1
+        echo "! '$SRV' é o servidor em que VOCÊ está — este terminal vai cair."
+        nohup bash -c 'sleep 1; tmux -L "$1" ls >/dev/null 2>&1 || rm -f "$2"' \
+          _ "$SRV" "$sock" >/dev/null 2>&1 &
+      fi
+
       if TM kill-server 2>/dev/null; then
         echo "Servidor '$SRV' encerrado."
       elif [ -e "$sock" ]; then
-        rm -f "$sock"
         echo "Servidor '$SRV' não tinha processo ativo; socket órfão removido."
       else
         echo "Servidor '$SRV' não existe."
       fi
+
+      # caminho normal (chamado de fora do servidor): varre aqui mesmo.
+      if [ -z "$aqui_dentro" ] && [ -e "$sock" ] && ! TM ls >/dev/null 2>&1; then
+        rm -f "$sock"
+      fi
     else
       echo "Cancelado."
+    fi
+    ;;
+
+  killservers|nuke)
+    # [15/08/2026] mata TODOS os servidores tmux de uma vez. Nasceu porque o
+    # caminho antigo era rodar `tmx servers`, copiar nome por nome e chamar
+    # `tmx killall <nome>` pra cada um.
+    #
+    # Varre os sockets em sock_dir() em vez de perguntar ao tmux: servidor sem
+    # processo vivo não responde, mas deixa o socket pra trás — e é justamente
+    # esse lixo que o `tmx servers` mostra e que a gente também quer limpar.
+    #
+    # 2º arg -y/--yes/-f pula a confirmação.
+    dir="$(sock_dir)"
+
+    socks=()
+    for sock in "$dir"/*; do
+      [ -S "$sock" ] && socks+=("$(basename "$sock")")
+    done
+
+    if [ ${#socks[@]} -eq 0 ]; then
+      echo "(nenhum servidor tmux ativo)"
+      exit 0
+    fi
+
+    # Servidor onde ESTE shell está, se estiver dentro de um tmux.
+    # $TMUX = "<caminho-do-socket>,<pid>,<índice-da-sessão>".
+    current=""
+    if [ -n "$TMUX" ]; then
+      maybe="$(basename "${TMUX%%,*}")"
+      [ -S "$dir/$maybe" ] && current="$maybe"
+    fi
+
+    echo "Vai matar ${#socks[@]} servidor(es) tmux:"
+    for s in "${socks[@]}"; do
+      if out="$(tmux -L "$s" ls 2>/dev/null)"; then
+        n="$(printf '%s\n' "$out" | wc -l | tr -d ' ')"
+        if [ "$n" -eq 1 ]; then label="1 sessão"; else label="$n sessões"; fi
+      else
+        label="socket órfão"
+      fi
+      if [ "$s" = "$current" ]; then
+        printf '  %-20s (%s)  <- você está aqui\n' "$s" "$label"
+      else
+        printf '  %-20s (%s)\n' "$s" "$label"
+      fi
+    done
+
+    force=""
+    case "$name" in
+      -y|--yes|-f) force=1 ;;
+    esac
+
+    if [ -z "$force" ]; then
+      read -r -p "Continuar? [y/N] " confirm
+      if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo "Cancelado."
+        exit 0
+      fi
+    fi
+
+    killed=0
+    orphans=0
+    for s in "${socks[@]}"; do
+      # o servidor da própria sessão fica pro fim: matá-lo aqui derrubaria este
+      # shell no meio do laço e os servidores seguintes sobreviveriam.
+      [ "$s" = "$current" ] && continue
+
+      if tmux -L "$s" kill-server 2>/dev/null; then
+        echo "  ✗ $s encerrado."
+        killed=$((killed + 1))
+      elif [ -e "$dir/$s" ]; then
+        echo "  ✗ $s sem processo ativo; socket órfão removido."
+        orphans=$((orphans + 1))
+      fi
+
+      # O tmux NÃO apaga o socket ao morrer (medido: processo some, arquivo
+      # fica). Sem esta varrida o `tmux servers` continuaria listando servidor
+      # morto e a limpeza não teria servido de nada. Só remove depois de
+      # confirmar que ninguém mais responde naquele socket.
+      if [ -e "$dir/$s" ] && ! tmux -L "$s" ls >/dev/null 2>&1; then
+        rm -f "$dir/$s"
+      fi
+    done
+
+    resumo="$killed servidor(es) encerrado(s)"
+    [ "$orphans" -gt 0 ] && resumo="$resumo, $orphans socket(s) órfão(s) removido(s)"
+    echo "$resumo."
+
+    if [ -n "$current" ]; then
+      echo
+      echo "! '$current' é o servidor em que VOCÊ está — encerrando por último."
+      echo "  Este terminal vai cair agora."
+      # este shell morre junto com o servidor, então quem varre o socket dele é
+      # um processo destacado (nohup ignora o SIGHUP que o tmux manda ao sair).
+      nohup bash -c 'sleep 1; tmux -L "$1" ls >/dev/null 2>&1 || rm -f "$2"' \
+        _ "$current" "$dir/$current" >/dev/null 2>&1 &
+      tmux -L "$current" kill-server 2>/dev/null || true
     fi
     ;;
 
@@ -215,6 +354,7 @@ Comandos:
   servers               lista TODOS os servidores tmux (-L)
   kill <sessao>         mata uma sessão
   killall [grupo]       mata todas as sessões do servidor atual (ou do grupo informado)
+  killservers [-y]      mata TODOS os servidores de uma vez, inclusive sockets órfãos (apelido: nuke)
   rename <a> <b>        renomeia sessão
   proj                  usa o nome da pasta atual como sessão
   cc [sessao] [grupo]   cria/entra na sessão JÁ rodando o claude; grupo = servidor -L

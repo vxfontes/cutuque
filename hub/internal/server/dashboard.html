@@ -74,6 +74,7 @@
     position: relative; background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 100%);
     border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; box-shadow: var(--shadow);
     display: flex; gap: 13px; overflow: hidden; transition: transform .12s, border-color .12s;
+    cursor: pointer; /* card abre o painel da sessão (chat/terminal) */
   }
   .card:hover { transform: translateY(-1px); border-color: var(--faint); }
   .card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--st, var(--idle)); }
@@ -231,6 +232,52 @@
   .m-delete { display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 1px solid color-mix(in srgb, var(--error) 40%, var(--border)); color: var(--error); border-radius: 8px; padding: 7px 12px; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: .12s; }
   .m-delete:hover { background: color-mix(in srgb, var(--error) 12%, transparent); border-color: var(--error); }
   .m-delete .ic { width: 14px; height: 14px; }
+  /* Painel de sessão (clique no card): chat de agente OU espelho de terminal
+     tmux, nunca os dois — mesma separação Chat x Espelho do app iOS, porque
+     digitar num pane externo pelo canal errado criaria um agente paralelo
+     (ver launcher.SendText). */
+  .session-modal { max-width: 720px; display: flex; flex-direction: column; max-height: 88vh; }
+  .sess-tags { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 4px; }
+  .sess-tags .state-tag { color: var(--tc, var(--text)); border-color: color-mix(in srgb, var(--tc, var(--border)) 40%, transparent); background: color-mix(in srgb, var(--tc, transparent) 14%, transparent); }
+  .sess-pending { margin-top: 10px; }
+  .sess-pending-head {
+    padding: 9px 11px; border-radius: 9px; font-size: 12.5px; color: var(--prompt-text);
+    background: color-mix(in srgb, var(--needs_you) 12%, transparent); border: 1px solid color-mix(in srgb, var(--needs_you) 30%, transparent);
+  }
+  .sess-question { margin-top: 8px; background: var(--panel2); border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; font-size: 12.5px; }
+  .sq-header { font-weight: 700; text-transform: uppercase; letter-spacing: .04em; font-size: 11px; color: var(--faint); margin-bottom: 4px; }
+  .sq-text { margin-bottom: 6px; }
+  .sq-options { margin: 0; padding-left: 18px; color: var(--muted); }
+  .sess-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .sess-actions.standalone { margin-top: 10px; }
+  .sess-approve { color: var(--done); border-color: color-mix(in srgb, var(--done) 40%, var(--border)); }
+  .sess-approve:hover { border-color: var(--done); }
+  .sess-deny { color: var(--error); border-color: color-mix(in srgb, var(--error) 40%, var(--border)); }
+  .sess-deny:hover { border-color: var(--error); }
+  .sess-body { margin-top: 14px; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  /* Chat (sessão sem pane): bolhas por kind (user/assistant/tool/tool_result). */
+  .chat-log { flex: 1; min-height: 220px; max-height: 46vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 4px 2px; }
+  .chat-msg { max-width: 88%; padding: 8px 11px; border-radius: 10px; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+  .chat-msg.user { align-self: flex-end; background: color-mix(in srgb, var(--running) 16%, var(--panel2)); border: 1px solid color-mix(in srgb, var(--running) 30%, transparent); }
+  .chat-msg.assistant { align-self: flex-start; background: var(--panel2); border: 1px solid var(--border); }
+  .chat-msg.tool, .chat-msg.tool_result {
+    align-self: stretch; background: var(--panel); border: 1px dashed var(--border); color: var(--muted);
+    font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .chat-empty, .chat-loading { color: var(--faint); font-style: italic; text-align: center; padding: 20px; }
+  .chat-compose { display: flex; gap: 8px; margin-top: 10px; }
+  .chat-compose input { flex: 1; background: var(--panel2); border: 1px solid var(--border); border-radius: 9px; color: var(--text); padding: 8px 10px; font: inherit; font-size: 13px; }
+  .chat-compose button { background: var(--running); border: none; color: #fff; border-radius: 9px; padding: 0 14px; font-weight: 600; cursor: pointer; }
+  /* Terminal (sessão com pane): espelho do tmux (poll) + barra de teclas (/tmux/key) + linha de texto (/tmux/keys). */
+  .term-screen {
+    flex: 1; min-height: 260px; max-height: 46vh; overflow: auto; background: #05070b; color: #c9d1d9;
+    border-radius: 9px; border: 1px solid var(--border); padding: 10px 12px;
+    font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre;
+  }
+  .term-keys { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .term-key { background: var(--panel2); border: 1px solid var(--border); color: var(--muted); border-radius: 7px; padding: 5px 9px; font: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer; }
+  .term-key:hover { color: var(--text); border-color: var(--faint); }
+
   /* Modal de confirmação */
   .confirm { position: relative; width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 22px; }
   .confirm h3 { margin: 0 0 8px; font-size: 16px; }
@@ -451,6 +498,13 @@
     </div>
   </div>
 
+  <div id="sessionModal" class="modal-overlay" hidden>
+    <div class="modal session-modal" role="dialog" aria-modal="true">
+      <button class="modal-close" id="sessionModalClose" aria-label="Fechar">✕</button>
+      <div id="sessionModalBody"></div>
+    </div>
+  </div>
+
   <div id="confirmModal" class="modal-overlay" hidden>
     <div class="confirm" role="dialog" aria-modal="true">
       <h3 id="confirmTitle">Confirmar?</h3>
@@ -644,7 +698,7 @@
       const proj = projectName(s.cwd);
       const heading = proj || s.title || s.id;
       const subtitle = proj && s.title ? esc(s.title) : '';
-      return `<div class="card ${s.state}" style="--st:${st.color}">
+      return `<div class="card ${s.state}" style="--st:${st.color}" data-id="${esc(s.id)}">
         <div class="glyph">${st.glyph}</div>
         <div class="body">
           <div class="title">${esc(heading)}</div>
@@ -665,6 +719,310 @@
     const chip = e.target.closest('.chip'); if (!chip) return;
     filter = chip.dataset.f; render();
   });
+  $grid.addEventListener('click', (e) => {
+    const card = e.target.closest('.card'); if (!card) return;
+    openSessionCard(card.dataset.id);
+  });
+
+  // ---- Painel de sessão (clique no card) ----
+  // Duas telas mutuamente exclusivas por sessão, decididas por session.pane:
+  //   pane vazio    -> Chat: transcrito (/output + output_chunk do WS) + compositor -> /sessions/{id}/input
+  //   pane presente -> Terminal: espelho do tmux (poll de /tmux/screen) + barra de
+  //                    teclas (/tmux/key) + linha de texto (/tmux/keys)
+  // Nunca as duas juntas: mandar texto livre pelo /input numa sessão externa
+  // adotada do tmux iria pelo --resume do launcher.SendText e abriria um
+  // agente PARALELO em vez de falar com o que já está na tela (mesmo motivo
+  // documentado no card de investigação). É a separação Chat x Espelho do app.
+  const $sessionModal = document.getElementById('sessionModal');
+  const $sessionModalBody = document.getElementById('sessionModalBody');
+  let openSessionId = null;
+  let openSessionMode = null; // 'chat' | 'tmux' | null (nada aberto)
+  const authHeader = () => ({ Authorization: 'Bearer ' + TOKEN });
+
+  // Teclas nomeadas permitidas (espelha tmuxAllowedKeys do hub, claudecode/tmux.go).
+  // Qualquer tecla fora daqui volta 502 do hub — por isso é allowlist, não
+  // "qualquer tecla": entrada nova aqui é decisão de segurança do hub, não de UI.
+  // [16/08/2026] j/k/x/r/p/s são novas (comandos de 1 tecla de TUIs) e só
+  // funcionam depois do próximo deploy do hub — até lá dão 502, tratado como
+  // aviso (nunca em silêncio), não como bug desta página.
+  const TERM_KEYS = [
+    ['Ctrl+C', 'C-c'], ['Ctrl+D', 'C-d'], ['Ctrl+Z', 'C-z'], ['Ctrl+L', 'C-l'],
+    ['Esc', 'Escape'], ['Enter', 'Enter'], ['Tab', 'Tab'], ['⌫', 'BSpace'], ['Espaço', 'Space'],
+    ['↑', 'Up'], ['↓', 'Down'], ['←', 'Left'], ['→', 'Right'],
+    ['PgUp', 'PageUp'], ['PgDn', 'PageDown'], ['Home', 'Home'], ['End', 'End'],
+    ['j', 'j'], ['k', 'k'], ['x', 'x'], ['r', 'r'], ['p', 'p'], ['s', 's'],
+  ];
+
+  function openSessionCard(id) {
+    const s = sessions.get(id);
+    if (!s) return;
+    openSessionId = id;
+    openSessionMode = null; // força montar o corpo (chat OU terminal) na 1ª sincronização
+    $sessionModalBody.innerHTML = `
+      <h2 id="sessTitle"></h2>
+      <div class="sess-tags" id="sessTags"></div>
+      <div id="sessSubtitle" class="subtitle"></div>
+      <div id="sessPending"></div>
+      <div class="sess-body" id="sessBody"></div>
+    `;
+    syncSessionModal(s);
+    $sessionModal.hidden = false;
+  }
+  function closeSessionModal() {
+    stopScreenPoll();
+    openSessionId = null;
+    openSessionMode = null;
+    $sessionModal.hidden = true;
+  }
+  document.getElementById('sessionModalClose').addEventListener('click', closeSessionModal);
+  $sessionModal.addEventListener('click', (e) => { if (e.target === $sessionModal) closeSessionModal(); });
+  // Ações (aprovar/negar/interromper): delegado no container, funciona pros
+  // botões que o pendingBlockHtml desenha a cada sincronização.
+  $sessionModalBody.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-act]'); if (!b || !openSessionId) return;
+    sessionAction(openSessionId, b.dataset.act);
+  });
+
+  // Atualiza o painel aberto com o estado atual da sessão. Reconstrói só o
+  // cabeçalho/pendente sempre; o corpo (chat/terminal) só é remontado quando
+  // o modo muda (senão perderia o scroll do transcrito e o texto digitando).
+  function syncSessionModal(s) {
+    const st = STATES[s.state] || STATES.idle;
+    const proj = projectName(s.cwd);
+    const heading = proj || s.title || s.id;
+    const subtitle = proj && s.title ? s.title : '';
+    const isTmux = !!s.pane;
+
+    document.getElementById('sessTitle').textContent = heading;
+    document.getElementById('sessSubtitle').textContent = subtitle;
+    const tags = [`<span class="tag state-tag" style="--tc:${st.color}">${st.glyph} ${esc(st.label)}</span>`];
+    if (s.machine) tags.push(`<span class="tag">${esc(s.machine)}</span>`);
+    if (s.agent) tags.push(`<span class="tag">${esc(s.agent)}</span>`);
+    tags.push(`<span class="tag">${isTmux ? 'terminal (tmux)' : 'chat'}</span>`);
+    document.getElementById('sessTags').innerHTML = tags.join('');
+    document.getElementById('sessPending').innerHTML = pendingBlockHtml(s);
+
+    const mode = isTmux ? 'tmux' : 'chat';
+    if (openSessionMode !== mode) {
+      openSessionMode = mode;
+      stopScreenPoll();
+      if (isTmux) { renderTerminalBody(s); startScreenPoll(s.machine, s.pane); }
+      else { renderChatBody(); loadTranscript(s.id); }
+    }
+  }
+
+  // Bloco de pendência (needs_you) + ações. Invariante de segurança do hub
+  // (session.go): nunca aprovar às cegas — por isso o pending_prompt fica
+  // VISÍVEL bem acima do botão Aprovar, sempre. Pergunta de seleção
+  // (AskUserQuestion) não ganha seletor aqui (ficaria grande demais pro
+  // escopo) — mas aparece por inteiro em texto, nunca escondida.
+  function pendingBlockHtml(s) {
+    if (s.state === 'needs_you') {
+      const qs = s.pending_questions || [];
+      if (qs.length) {
+        return `<div class="sess-pending">
+          <div class="sess-pending-head">${ICONS.alert} Pergunta de seleção pendente — sem seletor aqui ainda; responda pelo terminal/app.</div>
+          ${qs.map((q) => `<div class="sess-question">
+            ${q.header ? `<div class="sq-header">${esc(q.header)}</div>` : ''}
+            <div class="sq-text">${esc(q.question)}</div>
+            <ul class="sq-options">${(q.options || []).map((o) => `<li>${esc(o.label)}${o.description ? ` — ${esc(o.description)}` : ''}</li>`).join('')}</ul>
+          </div>`).join('')}
+          <div class="sess-actions"><button type="button" class="board-btn" data-act="interrupt">Interromper</button></div>
+        </div>`;
+      }
+      return `<div class="sess-pending">
+        <div class="sess-pending-head">${ICONS.alert} ${esc(s.pending_prompt || 'Aguardando aprovação.')}</div>
+        <div class="sess-actions">
+          <button type="button" class="board-btn sess-approve" data-act="approve">Aprovar</button>
+          <button type="button" class="board-btn sess-deny" data-act="deny">Negar</button>
+          <button type="button" class="board-btn" data-act="interrupt">Interromper</button>
+        </div>
+      </div>`;
+    }
+    if (s.state === 'running') {
+      return `<div class="sess-actions standalone"><button type="button" class="board-btn" data-act="interrupt">Interromper</button></div>`;
+    }
+    return '';
+  }
+
+  // approve/deny exigem canal vivo (stdin) no launcher — numa sessão externa
+  // sem handle o hub responde 409 stale_state; mostramos aviso, nunca falha
+  // silenciosa. interrupt já sabe rotear (Escape via tmux quando há pane).
+  async function sessionAction(id, act) {
+    try {
+      const res = await fetch(`/sessions/${encodeURIComponent(id)}/${act}`, { method: 'POST', headers: authHeader() });
+      if (!res.ok) {
+        const label = { approve: 'aprovar', deny: 'negar', interrupt: 'interromper' }[act] || act;
+        toast(`Não deu pra ${label}`, `O hub respondeu ${res.status}.`, 'err');
+        return;
+      }
+      // sucesso: o session_updated do WS traz o novo estado e re-sincroniza sozinho.
+    } catch (e) {
+      toast('Ação não chegou ao hub', e.message, 'err');
+    }
+  }
+
+  // --- Chat (sessão sem pane) ---
+  function renderChatBody() {
+    document.getElementById('sessBody').innerHTML = `
+      <div class="chat-log" id="chatLog"><div class="chat-loading">Carregando transcrito…</div></div>
+      <form class="chat-compose" id="chatForm">
+        <input id="chatInput" placeholder="Digitar para o agente…" autocomplete="off" />
+        <button type="submit">Enviar</button>
+      </form>
+    `;
+    document.getElementById('chatForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const inp = document.getElementById('chatInput');
+      const v = inp.value.trim();
+      if (!v || !openSessionId) return;
+      inp.value = '';
+      sendChatInput(openSessionId, v);
+    });
+  }
+  function chatChunkHtml(c) {
+    const kind = c.kind || 'assistant';
+    return `<div class="chat-msg ${esc(kind)}"><div class="chat-msg-txt">${esc(c.text)}</div></div>`;
+  }
+  async function loadTranscript(id) {
+    const log = document.getElementById('chatLog');
+    try {
+      const res = await fetch(`/sessions/${encodeURIComponent(id)}/output`, { headers: authHeader() });
+      if (res.status === 404) { log.innerHTML = '<div class="chat-empty">Sessão não encontrada no hub.</div>'; return; }
+      if (!res.ok) { log.innerHTML = `<div class="chat-empty">O hub respondeu ${res.status}.</div>`; return; }
+      const data = await res.json();
+      const chunks = data.chunks || [];
+      log.innerHTML = chunks.length ? chunks.map(chatChunkHtml).join('') : '<div class="chat-empty">Sem mensagens ainda.</div>';
+      log.scrollTop = log.scrollHeight;
+    } catch (e) {
+      log.innerHTML = '<div class="chat-empty">Falha ao carregar o transcrito.</div>';
+    }
+  }
+  // Chamado pelo output_chunk do WS: transcrito ao vivo sem polling (o hub já
+  // empurra pelo mesmo socket que o dashboard mantém aberto).
+  function appendChatChunk(sessionId, kind, text) {
+    if (openSessionId !== sessionId || openSessionMode !== 'chat') return;
+    const log = document.getElementById('chatLog'); if (!log) return;
+    const empty = log.querySelector('.chat-empty'); if (empty) empty.remove();
+    log.insertAdjacentHTML('beforeend', chatChunkHtml({ kind, text }));
+    log.scrollTop = log.scrollHeight;
+  }
+  async function sendChatInput(id, text) {
+    try {
+      const res = await fetch(`/sessions/${encodeURIComponent(id)}/input`, {
+        method: 'POST', headers: { ...authHeader(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) {
+        // eco (kind=user) só chega se o SendText aceitou; num 409 nada foi
+        // dito ao agente, então o aviso não pode ficar em silêncio.
+        const label = res.status === 409 ? 'Sessão sem canal vivo agora' : `O hub respondeu ${res.status}`;
+        toast('Não deu pra enviar', label, 'err');
+      }
+    } catch (e) {
+      toast('Não deu pra enviar', 'O hub não respondeu.', 'err');
+    }
+  }
+
+  // --- Terminal (sessão com pane do tmux) ---
+  function renderTerminalBody(s) {
+    document.getElementById('sessBody').innerHTML = `
+      <pre class="term-screen" id="termScreen">Carregando tela…</pre>
+      <div class="term-keys" id="termKeys">${TERM_KEYS.map(([label, key]) => `<button type="button" class="term-key" data-key="${esc(key)}">${esc(label)}</button>`).join('')}</div>
+      <form class="chat-compose" id="termForm">
+        <input id="termInput" placeholder="Digitar linha (Enter vai junto)…" autocomplete="off" />
+        <button type="submit">Enviar</button>
+      </form>
+    `;
+    document.getElementById('termKeys').addEventListener('click', (e) => {
+      const b = e.target.closest('.term-key'); if (!b || !openSessionId) return;
+      sendTmuxKey(s.machine, s.pane, b.dataset.key);
+    });
+    document.getElementById('termForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const inp = document.getElementById('termInput');
+      const v = inp.value;
+      if (!v || !openSessionId) return;
+      inp.value = '';
+      sendTmuxText(s.machine, s.pane, v);
+    });
+  }
+  // textContent (não innerHTML+esc): é uma tela de terminal de terceiro, e
+  // textContent nunca interpreta o que escreve como HTML — mesma garantia do
+  // esc(), sem precisar preservar espaços/quebras via entidades.
+  function renderScreen(text) {
+    const el = document.getElementById('termScreen'); if (!el) return;
+    el.textContent = text;
+    el.scrollTop = el.scrollHeight;
+  }
+  let screenPollTimer = null;
+  let screenPollTick = null;
+  // /tmux/screen é captura de tela INTEIRA (não incremental) -> poll, não SSE.
+  // Para quando o painel fecha ou a aba perde foco (visibilitychange abaixo),
+  // senão fica martelando o hub pra sempre com o painel escondido.
+  function startScreenPoll(machine, pane) {
+    stopScreenPoll();
+    const tick = async () => {
+      if (document.hidden || !openSessionId) return;
+      try {
+        const res = await fetch(`/machines/${encodeURIComponent(machine)}/tmux/screen?target=${encodeURIComponent(pane)}`, { headers: authHeader() });
+        if (res.ok) { const data = await res.json(); renderScreen(data.screen || ''); }
+        else console.error('tmux screen falhou:', res.status);
+      } catch (e) { console.error('tmux screen erro:', e.message); }
+    };
+    screenPollTick = tick;
+    tick();
+    screenPollTimer = setInterval(tick, 1200);
+  }
+  function stopScreenPoll() {
+    if (screenPollTimer) clearInterval(screenPollTimer);
+    screenPollTimer = null;
+    screenPollTick = null;
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stopScreenPoll();
+    else if (openSessionId && openSessionMode === 'tmux') {
+      const s = sessions.get(openSessionId);
+      if (s) startScreenPoll(s.machine, s.pane);
+    }
+  });
+  // Depois de digitar/apertar tecla, busca a tela na hora (sem esperar o
+  // próximo tick) — a resposta parece instantânea mesmo com poll de 1.2s.
+  function tickScreenSoon() { if (screenPollTick) screenPollTick(); }
+  // Tecla NOMEADA pura (sem Enter) — pegadinha do hub: /tmux/keys (texto) manda
+  // send-keys -l E UM Enter depois, então "x" pela linha de texto chegaria como
+  // x+Enter (outra coisa numa TUI). Só /tmux/key manda a tecla crua.
+  async function sendTmuxKey(machine, pane, key) {
+    try {
+      const res = await fetch(`/machines/${encodeURIComponent(machine)}/tmux/key`, {
+        method: 'POST', headers: { ...authHeader(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: pane, key }),
+      });
+      if (!res.ok) {
+        // 502 é o caso esperado pras teclas j/k/x/r/p/s antes do deploy do hub
+        // sair — mesmo assim o aviso aparece, nunca em silêncio.
+        toast('Tecla não aceita pelo hub', `"${key}" → respondeu ${res.status}. Se for j/k/x/r/p/s, só funciona após o próximo deploy do hub.`, 'err');
+        return;
+      }
+      tickScreenSoon();
+    } catch (e) {
+      toast('Tecla não enviada', 'O hub não respondeu.', 'err');
+    }
+  }
+  // Texto + Enter (send-keys -l), o mesmo caminho que o app usa pra "falar" com
+  // o pane: digitar uma linha e submeter, como se fosse no teclado do terminal.
+  async function sendTmuxText(machine, pane, text) {
+    try {
+      const res = await fetch(`/machines/${encodeURIComponent(machine)}/tmux/keys`, {
+        method: 'POST', headers: { ...authHeader(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: pane, text }),
+      });
+      if (!res.ok) { toast('Não deu pra digitar no terminal', `O hub respondeu ${res.status}.`, 'err'); return; }
+      tickScreenSoon();
+    } catch (e) {
+      toast('Não deu pra digitar no terminal', 'O hub não respondeu.', 'err');
+    }
+  }
 
   // --- Board (Kanban) ---
   function cardHtml(t) {
@@ -1068,6 +1426,7 @@
     if (e.key !== 'Escape') return;
     if (!$confirmModal.hidden) closeConfirm();
     else if (!$cardModal.hidden) closeCard();
+    else if (!$sessionModal.hidden) closeSessionModal();
   });
 
   $tabs.addEventListener('click', (e) => {
@@ -1132,8 +1491,18 @@
     ws.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch { return; }
       if (m.type === 'snapshot') { sessions.clear(); (m.sessions || []).forEach((s) => sessions.set(s.id, s)); render(); }
-      else if (m.type === 'session_updated' && m.session) { sessions.set(m.session.id, m.session); render(); }
-      else if (m.type === 'session_removed') { sessions.delete(m.session_id); render(); }
+      else if (m.type === 'session_updated' && m.session) {
+        sessions.set(m.session.id, m.session); render();
+        if (openSessionId === m.session.id) syncSessionModal(m.session);
+      }
+      else if (m.type === 'session_removed') {
+        sessions.delete(m.session_id); render();
+        if (openSessionId === m.session_id) closeSessionModal();
+      }
+      // Transcrito ao vivo: o hub empurra cada pedaço pelo MESMO WS que o
+      // dashboard já mantém aberto (ws.go) — sem isso o painel de chat só
+      // teria a carga inicial do /output, congelada até reabrir.
+      else if (m.type === 'output_chunk' && m.session_id) { appendChatChunk(m.session_id, m.kind, m.data); }
       else if (m.type === 'board_snapshot') { tasks.clear(); (m.tasks || []).forEach((t) => tasks.set(t.id, t)); renderBoard(); }
       else if (m.type === 'board_updated' && m.task) { tasks.set(m.task.id, m.task); renderBoard(); if (openCardId === m.task.id) renderCardModal(m.task, openReadOnly); }
       else if (m.type === 'board_removed') { tasks.delete(m.id); renderBoard(); if (openCardId === m.id) closeCard(); }

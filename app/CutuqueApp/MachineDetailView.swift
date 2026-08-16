@@ -125,14 +125,32 @@ struct MachineDetailView: View {
                 .allowsHitTesting(!showsTerminal)
                 .accessibilityHidden(showsTerminal)
         }
-        .navigationTitle(machine.name)
+        // String variável, nunca `if/else` embrulhando o modifier: o `owns`
+        // fixo do `OwnedNavigationTitle` não se aplica aqui (esta view não usa
+        // esse mecanismo), mas a MESMA armadilha vale — `paneState` muda em
+        // runtime, e envolver `.navigationTitle` num `if/else` com um valor que
+        // muda remontaria a subview, derrubando o `ssh` (decisão #19).
+        .navigationTitle(paneState == .ativo ? machine.name : "")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) { identidadeENavigationBarLeading }
+            // Gate no CONTEÚDO de cada ToolbarItem — nunca um `if` na árvore de
+            // views (regra da casa, ver o comentário do menu de copiar logo
+            // abaixo). Sem isto, com decisão #19 (toda aba de máquina montada
+            // pra sempre), N abas de máquina contribuíam o MESMO ícone de
+            // identidade/monitor e o MESMO botão de paleta pra uma única
+            // navigation bar compartilhada — o bug relatado pela Vanessa
+            // ("paleta, olho e ícone de máquina duplicam com duas abas de
+            // máquina abertas").
+            if paneState == .ativo {
+                ToolbarItem(placement: .navigationBarLeading) { identidadeENavigationBarLeading }
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
-                // Só quando o painel do terminal está à frente — no painel de
-                // arquivos não há tela para copiar.
-                if showsTerminal {
+                // Só quando o painel do terminal está à frente (estado de
+                // PAINEL) E a aba está em foco (estado de ABA) — os dois
+                // sinais são independentes: `showsTerminal` decide terminal-
+                // vs-arquivos DENTRO desta máquina, `paneState` decide se esta
+                // instância de `MachineDetailView` é a aba na frente.
+                if showsTerminal && paneState == .ativo {
                     Menu {
                         // O retrato para HABILITAR sai daqui de dentro, do
                         // conteúdo do `Menu`, e não de um `.disabled` pendurado
@@ -199,10 +217,16 @@ struct MachineDetailView: View {
                 // SwiftUI escondia quando N painéis montados (decisão #19)
                 // disputavam esta mesma toolbar — "a parte de personalizar a
                 // maquina não deixa escolher as coisas do hub".
-                Button { sheetInfo = SheetInfo() } label: {
-                    Image(systemName: "paintpalette")
+                //
+                // [16/08/2026] Este botão nunca teve NENHUM gate — era o
+                // "ícone de paleta" que a Vanessa via dobrado com duas abas de
+                // máquina abertas. `paneState == .ativo` fecha o mesmo furo.
+                if paneState == .ativo {
+                    Button { sheetInfo = SheetInfo() } label: {
+                        Image(systemName: "paintpalette")
+                    }
+                    .accessibilityLabel("Informações e aparência")
                 }
-                .accessibilityLabel("Informações e aparência")
             }
         }
         .sheet(item: $sheetInfo) { _ in

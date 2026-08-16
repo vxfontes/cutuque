@@ -206,6 +206,9 @@ struct TerminalMirrorView: View {
     // demais num painel de iPad, e vice-versa. Cada plataforma lembra o seu.
     @AppStorage("cutuque.terminalFont") private var fontPhone: Double = 10
     @AppStorage("cutuque.terminalFont.pad") private var fontPad: Double = 13
+    /// Gaveta das letras de comando (`j k x r p s`) na barra de teclas. Fechada por
+    /// padrão: só faz sentido com uma TUI de workflow rodando no pane.
+    @AppStorage("cutuque.terminalLetrasDeComando") private var letrasAbertas = false
     private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
     private var fontPtStored: Double {
         get { isPad ? fontPad : fontPhone }
@@ -550,11 +553,39 @@ struct TerminalMirrorView: View {
                 keyButton("↓", "Down")
                 keyButton("←", "Left")
                 keyButton("→", "Right")
+                Divider().frame(height: 22)
+                gavetaDeLetras
+                if letrasAbertas {
+                    ForEach(TerminalKeyboard.letrasDeComando, id: \.self) { letra in
+                        keyButton(letra, letra)
+                    }
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
         }
         .background(.bar)
+    }
+
+    /// O `›`/`‹` que abre e recolhe as letras de comando.
+    ///
+    /// As seis letras soltas ao lado das setas viravam um paredão — e elas só
+    /// servem quando o que está rodando no pane é uma TUI que as escuta. Ficam
+    /// guardadas atrás de um toque, e a escolha é lembrada (`@AppStorage`): quem
+    /// vive em workflow abre uma vez e pronto.
+    private var gavetaDeLetras: some View {
+        Button {
+            withAnimation(.snappy(duration: 0.22)) { letrasAbertas.toggle() }
+        } label: {
+            Text(letrasAbertas ? "‹" : "›")
+                .font(.system(size: 17, weight: .bold, design: .rounded))
+                .foregroundStyle(.primary)
+                .frame(minWidth: 42, minHeight: 34)
+                .background(Color.secondary.opacity(0.15),
+                            in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(letrasAbertas ? "Recolher teclas de comando" : "Mostrar teclas de comando")
     }
 
     private func fontButton(_ symbol: String, delta: Double) -> some View {
@@ -620,16 +651,29 @@ struct TerminalMirrorView: View {
                     Task { await model.sendKey(key) }
                     return .handled
                 }
-                // ⏎ envia. Não dá para usar onSubmit: o campo é multilinha
-                // (axis: .vertical) e nesse modo o Return só insere `\n` e nunca
-                // dispara onSubmit. Reconhecer o `\n` cobre os DOIS teclados — o
-                // de tela do iPad não passa por onKeyPress nenhum.
+                // ⏎ do teclado DE TELA: ele não passa por onKeyPress nenhum, só
+                // injeta um `\n` no binding — então o sinal aqui é a quebra
+                // recém-inserida. Este caminho está certo desde 13/08 e não pode
+                // ser mexido; o que faltava era o gêmeo do teclado físico, abaixo.
                 .onChange(of: input) { anterior, novo in
                     switch ComposerEnter.acao(anterior: anterior, novo: novo,
                                               quebraIntencional: quebraIntencional) {
                     case .nada: break
                     case .limpar: input = ""
                     case .enviar(let texto): enviarInput(texto)
+                    }
+                    quebraIntencional = false
+                }
+                // ⏎ do teclado FÍSICO: aqui o Return NÃO escreve `\n` — ele dispara
+                // só o onSubmit, e o onChange acima nunca roda. Sem este bloco o
+                // Enter do Magic Keyboard não envia nada (bug de 16/08).
+                .onSubmit {
+                    switch ComposerEnter.acaoSubmit(texto: input,
+                                                    quebraIntencional: quebraIntencional) {
+                    case .nada: break
+                    // No físico ninguém escreve a quebra do ⇧⏎ — quem escreve é aqui.
+                    case .inserirQuebra: input += "\n"
+                    case .enviar: enviarInput(input)
                     }
                     quebraIntencional = false
                 }

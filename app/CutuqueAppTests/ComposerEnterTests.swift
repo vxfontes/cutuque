@@ -116,4 +116,62 @@ final class ComposerEnterTests: XCTestCase {
             .enviar("manutenção 👩🏽‍💻")
         )
     }
+
+    // MARK: onSubmit — o caminho do teclado FÍSICO
+    //
+    // Bancada de 16/08: no Magic Keyboard o Return NÃO escreve `\n` — ele dispara
+    // só o `onSubmit`, e o `onChange` (que `acao` atende) nunca roda. Sem estes
+    // casos o Enter físico não envia nada, que era o bug das builds 21/22. Ela
+    // confirmou: _"sim, é o teclado físico mesmo"_.
+
+    func testSubmitEnviaOTextoDoCampo() {
+        XCTAssertEqual(
+            ComposerEnter.acaoSubmit(texto: "roda o deploy", quebraIntencional: false),
+            .enviar
+        )
+    }
+
+    func testSubmitComShiftEscreveAQuebraEmVezDeEnviar() {
+        // A pegadinha que derrubaria um conserto ingênuo: `onSubmit` NÃO distingue
+        // Shift — ⇧Return físico cai nele igual, e sem escrever `\n`. Se isto
+        // virasse `.enviar`, ⇧⏎ deixaria de quebrar linha no teclado físico.
+        XCTAssertEqual(
+            ComposerEnter.acaoSubmit(texto: "primeira linha", quebraIntencional: true),
+            .inserirQuebra
+        )
+    }
+
+    func testSubmitEmCampoVazioNaoFazNada() {
+        // Nem envia (não há o que enviar) nem abre linha em branco — isso só
+        // deixaria o botão desabilitado sem explicação visível.
+        XCTAssertEqual(ComposerEnter.acaoSubmit(texto: "", quebraIntencional: false), .nada)
+        XCTAssertEqual(ComposerEnter.acaoSubmit(texto: "   \n  ", quebraIntencional: false), .nada)
+    }
+
+    func testSubmitComShiftEmCampoVazioTambemNaoAbreLinha() {
+        XCTAssertEqual(ComposerEnter.acaoSubmit(texto: "  ", quebraIntencional: true), .nada)
+    }
+
+    func testSubmitEnviaRascunhoDeVariasLinhas() {
+        // Rascunho montado com ⇧⏎: o Return final manda tudo, quebras inclusas.
+        XCTAssertEqual(
+            ComposerEnter.acaoSubmit(texto: "linha 1\nlinha 2", quebraIntencional: false),
+            .enviar
+        )
+    }
+
+    func testOsDoisCaminhosNaoSePisamNoMesmoToque() {
+        // Cada teclado produz UM sinal só: o de tela escreve `\n` (e o `onSubmit`
+        // não dispara); o físico dispara `onSubmit` (e não escreve nada, então não
+        // há `onChange`). Aqui fica travada a consequência disso na lógica pura: o
+        // texto que o físico entrega NÃO tem quebra recém-inserida, então `acao`
+        // com ele devolve `.nada` — só o `acaoSubmit` envia. É o que impede envio
+        // em dobro caso um dia os dois disparem no mesmo toque.
+        let texto = "manda isso"
+        XCTAssertEqual(
+            ComposerEnter.acao(anterior: texto, novo: texto, quebraIntencional: false),
+            .nada
+        )
+        XCTAssertEqual(ComposerEnter.acaoSubmit(texto: texto, quebraIntencional: false), .enviar)
+    }
 }

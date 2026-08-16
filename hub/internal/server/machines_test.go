@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vxfontes/cutuque/hub/internal/adapter/claudecode"
 	"github.com/vxfontes/cutuque/hub/internal/launcher"
@@ -60,6 +61,65 @@ func TestGetMachinesVazioDevolveListaVaziaNaoNull(t *testing.T) {
 	}
 	var got struct {
 		Machines []machine.Machine `json:"machines"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("json inválido: %v", err)
+	}
+	if got.Machines == nil {
+		t.Error("machines veio null; deve ser []")
+	}
+}
+
+// TestGetReachabilityDevolveEstadosDoCache prova o formato de fio da rota
+// nova: os três estados saem com os tokens certos, e "checando" — a máquina
+// sem sondagem ainda — sai SEM checked_at (omitempty), nunca com um horário
+// inventado que pareça confirmação.
+func TestGetReachabilityDevolveEstadosDoCache(t *testing.T) {
+	checked := time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC)
+	f := &fakeLauncher{reachability: []launcher.Reachability{
+		{Machine: "macbook", State: launcher.ReachPronto, CheckedAt: &checked},
+		{Machine: "windows", State: launcher.ReachNaoRespondeu, CheckedAt: &checked},
+		{Machine: "macmini", State: launcher.ReachChecando},
+	}}
+
+	rec := do(t, f, http.MethodGet, "/machines/reachability", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, esperava 200: %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Machines []map[string]any `json:"machines"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("json inválido: %v — corpo: %s", err, rec.Body.String())
+	}
+	if len(got.Machines) != 3 {
+		t.Fatalf("esperava 3 máquinas, veio %d: %s", len(got.Machines), rec.Body.String())
+	}
+	if got.Machines[0]["state"] != "pronto" || got.Machines[0]["checked_at"] == nil {
+		t.Errorf("macbook errado: %+v", got.Machines[0])
+	}
+	if got.Machines[1]["state"] != "nao_respondeu" {
+		t.Errorf("windows errado: %+v", got.Machines[1])
+	}
+	if got.Machines[2]["state"] != "checando" {
+		t.Errorf("macmini errado: %+v", got.Machines[2])
+	}
+	if _, has := got.Machines[2]["checked_at"]; has {
+		t.Errorf("macmini (checando) veio COM checked_at — omitempty deveria ter escondido: %+v", got.Machines[2])
+	}
+}
+
+// TestGetReachabilityVazioDevolveListaVaziaNaoNull segue a mesma convenção de
+// GET /machines: sem alvo nenhum, a lista é [], nunca null.
+func TestGetReachabilityVazioDevolveListaVaziaNaoNull(t *testing.T) {
+	f := &fakeLauncher{}
+	rec := do(t, f, http.MethodGet, "/machines/reachability", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, esperava 200", rec.Code)
+	}
+	var got struct {
+		Machines []launcher.Reachability `json:"machines"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("json inválido: %v", err)

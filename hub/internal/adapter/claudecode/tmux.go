@@ -139,11 +139,22 @@ func tmuxLocalArgs(socket string, rest ...string) []string {
 const tmuxScrollback = 500
 
 // tmuxAllowedKeys são as teclas nomeadas que o app pode enviar (allowlist estrita).
+//
+// Não é conveniência: no `SSHTarget` a tecla é concatenada CRUA no comando que
+// roda no shell remoto (`send-keys -t 'pane' `+key). A allowlist é a barreira de
+// injeção — por isso ela lista valores literais, e nunca uma regra tipo "qualquer
+// letra". Entrada nova aqui é decisão de segurança, não de UI.
 var tmuxAllowedKeys = map[string]bool{
 	"C-c": true, "C-d": true, "C-z": true, "C-l": true,
 	"Escape": true, "Enter": true, "Tab": true, "BSpace": true, "Space": true,
 	"Up": true, "Down": true, "Left": true, "Right": true,
 	"PageUp": true, "PageDown": true, "Home": true, "End": true,
+	// [16/08/2026] Letras soltas que as TUIs de workflow usam como comando de UMA
+	// tecla (j/k rolar, x parar, r reiniciar, p pausar, s salvar). Não dá para
+	// alcançá-las pela linha de digitação: aquele caminho manda `send-keys -l`
+	// seguido de um `Enter` (ver TmuxText), então "x" chegaria como x+Enter — que
+	// numa TUI é outra coisa. Só a tecla pura serve.
+	"j": true, "k": true, "x": true, "r": true, "p": true, "s": true,
 }
 
 // --- SSHTarget ---------------------------------------------------------------

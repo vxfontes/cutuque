@@ -426,6 +426,11 @@ func TestUpdateCampoOmitidoMantemOAtual(t *testing.T) {
 }
 
 // Máquina do hub.env é read-only pelo app: quem manda nela é o env.
+//
+// Regressão do limite da frente "aparência": soltar o gate do SetAppearance
+// (que passou a aceitar env/local) não pode ter afrouxado Update/Remove — quem
+// mexe em host/porta/identidade/remoção continua sendo assunto da fonte, não
+// do app. Este teste é a prova de que o limite continua de pé.
 func TestUpdateERemoveRecusamMaquinaDoEnv(t *testing.T) {
 	r := NewRegistry([]Machine{{Name: "macbook", Dest: "vx@host", Port: 22, Source: SourceEnv}})
 	if _, err := r.Update("macbook", Machine{Host: "outro", Identity: "vx"}); !errors.Is(err, ErrReadOnly) {
@@ -584,13 +589,192 @@ func TestSetAppearanceRecusaIDMalformado(t *testing.T) {
 	}
 }
 
-func TestSetAppearanceRecusaEnvEInexistente(t *testing.T) {
+// Reescrito (era TestSetAppearanceRecusaEnvEInexistente): aparência é do app,
+// conexão é da fonte — SetAppearance numa máquina de env passa a funcionar,
+// sem virar cadastro fake (Source/Dest continuam do env). "Inexistente"
+// continua ErrNotFound, sem mudança.
+func TestSetAppearanceAceitaEnvERecusaInexistente(t *testing.T) {
 	r := NewRegistry([]Machine{{Name: "macbook", Dest: "vx@host", Port: 22, Source: SourceEnv}})
-	if _, err := r.SetAppearance("macbook", "nord", ""); !errors.Is(err, ErrReadOnly) {
-		t.Errorf("máquina do env: err = %v, quero ErrReadOnly", err)
+	m, err := r.SetAppearance("macbook", "nord", "")
+	if err != nil {
+		t.Fatalf("máquina do env: SetAppearance falhou: %v", err)
 	}
+	if m.Theme != "nord" {
+		t.Errorf("máquina do env: tema não gravou: %+v", m)
+	}
+	if m.Source != SourceEnv || m.Dest != "vx@host" {
+		t.Errorf("máquina do env: SetAppearance mexeu na origem/destino: %+v", m)
+	}
+	if guardada, _ := r.Get("macbook"); guardada.Theme != "nord" {
+		t.Errorf("o registro não ficou com o tema: %+v", guardada)
+	}
+
 	if _, err := r.SetAppearance("fantasma", "nord", ""); !errors.Is(err, ErrNotFound) {
 		t.Errorf("máquina inexistente: err = %v, quero ErrNotFound", err)
+	}
+}
+
+// Mesmo princípio, para a máquina local (o próprio hub, sem ssh no meio) — é o
+// caso mais limpo: zero dado de conexão para proteger.
+func TestSetAppearanceAceitaMaquinaLocal(t *testing.T) {
+	r := NewRegistry([]Machine{{Name: "macbook", Dest: "local", Source: SourceLocal}})
+	m, err := r.SetAppearance("macbook", "dracula", "apple")
+	if err != nil {
+		t.Fatalf("SetAppearance falhou: %v", err)
+	}
+	if m.Theme != "dracula" || m.Icon != "apple" || m.Source != SourceLocal {
+		t.Errorf("aparência não gravou ou mexeu na origem: %+v", m)
+	}
+}
+
+// O CORAÇÃO do bug: a raiz tinha duas camadas — o gate (já coberto acima) e a
+// persistência. Mesmo destravando o gate, a escolha morreria sozinha se
+// NewRegistryAt reconstruísse a máquina de env do zero, a cada boot, sem
+// reaplicar a aparência salva. Este teste simula exatamente esse reboot (mesmo
+// molde do TestRegistroSobreviveAoRestart) e confere que Theme/Icon sobrevivem
+// E que a sobreposição não virou cadastro fake — Source/Dest continuam de env.
+func TestAparenciaDeMaquinaDoEnvSobreviveAoRebootComEnvRecarregado(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "machines.json")
+	env := []Machine{{Name: "macbook", Dest: "vx@env", Port: 22, Source: SourceEnv}}
+
+	r := NewRegistryAt(path, env, NewIdentityStore())
+	if _, err := r.SetAppearance("macbook", "gruvboxDark", "apple"); err != nil {
+		t.Fatalf("SetAppearance falhou: %v", err)
+	}
+
+	// Reboot: mesmo arquivo, MESMA lista de env recarregada do hub.env.
+	r2 := NewRegistryAt(path, env, NewIdentityStore())
+	m, ok := r2.Get("macbook")
+	if !ok {
+		t.Fatal("a máquina do env sumiu depois do reboot")
+	}
+	if m.Theme != "gruvboxDark" || m.Icon != "apple" {
+		t.Errorf("a aparência não sobreviveu ao reboot: %+v", m)
+	}
+	if m.Source != SourceEnv || m.Dest != "vx@env" {
+		t.Errorf("a sobreposição de aparência virou cadastro fake: %+v", m)
+	}
+}
+
+// Se o nome sumir do hub.env, o override correspondente vira lixo inofensivo:
+// não erra o boot, a máquina some do List/Get normalmente (o env manda). Se o
+// nome voltar depois, a aparência reaparece — documenta o trade-off aceito de
+// propósito (sem job de limpeza ativo).
+func TestAparenciaDeMaquinaDoEnvViraLixoInofensivoSeElaSumirDoEnv(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "machines.json")
+	comMaquina := []Machine{{Name: "macbook", Dest: "vx@env", Port: 22, Source: SourceEnv}}
+
+	r := NewRegistryAt(path, comMaquina, NewIdentityStore())
+	if _, err := r.SetAppearance("macbook", "nord", "server"); err != nil {
+		t.Fatalf("SetAppearance falhou: %v", err)
+	}
+
+	// Reboot sem a máquina no env: não erra, e ela some do registro.
+	semMaquina := NewRegistryAt(path, nil, NewIdentityStore())
+	if _, ok := semMaquina.Get("macbook"); ok {
+		t.Error("a máquina deveria ter sumido junto com o env")
+	}
+
+	// Reboot com o nome de volta: a aparência reaparece.
+	r3 := NewRegistryAt(path, comMaquina, NewIdentityStore())
+	m, ok := r3.Get("macbook")
+	if !ok {
+		t.Fatal("a máquina não voltou")
+	}
+	if m.Theme != "nord" || m.Icon != "server" {
+		t.Errorf("a aparência não reapareceu: %+v", m)
+	}
+}
+
+// Regressão: aparência de máquina do APP grava só em machines.json
+// (diskMachine), nunca em appearance.json — protege contra duas fontes de
+// verdade para o mesmo dado.
+func TestAparenciaDeMaquinaDoAppNaoDuplicaNoArquivoDeOverrides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "machines.json")
+	r := NewRegistryAt(path, nil, NewIdentityStore())
+	if _, err := r.Add(Machine{Name: "vps", Host: "203.0.113.9", Identity: "vx"}); err != nil {
+		t.Fatalf("Add falhou: %v", err)
+	}
+	if _, err := r.SetAppearance("vps", "nord", "server"); err != nil {
+		t.Fatalf("SetAppearance falhou: %v", err)
+	}
+
+	apath := aparenciaPath(path)
+	b, err := os.ReadFile(apath)
+	if err != nil {
+		t.Fatalf("não deu para ler %s: %v", apath, err)
+	}
+	var overrides []aparenciaSalva
+	if err := json.Unmarshal(b, &overrides); err != nil {
+		t.Fatalf("appearance.json inválido: %v", err)
+	}
+	for _, o := range overrides {
+		if o.Name == "vps" {
+			t.Errorf("máquina do app vazou para appearance.json: %+v", o)
+		}
+	}
+}
+
+// Espelha TestSetAppearanceConcorrenteNaoDivergeDoDisco, mas numa máquina de
+// ENV: confere que appearance.json (não machines.json) não sai truncado nem
+// divergente da memória sob escrita concorrente.
+func TestSetAppearanceConcorrenteEmMaquinaDoEnvNaoDivergeDoDisco(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "machines.json")
+	r := NewRegistryAt(path, []Machine{{Name: "macbook", Dest: "vx@env", Port: 22, Source: SourceEnv}}, NewIdentityStore())
+
+	escolhas := []struct{ tema, icone string }{
+		{"catppuccinMochaComNomeLongo", "raspberrypi"},
+		{"", ""},
+		{"nord", "cloud"},
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 60; i++ {
+		e := escolhas[i%len(escolhas)]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := r.SetAppearance("macbook", e.tema, e.icone); err != nil {
+				t.Errorf("SetAppearance concorrente falhou: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	memoria, ok := r.Get("macbook")
+	if !ok {
+		t.Fatal("a máquina sumiu")
+	}
+	combinacaoPedida := false
+	for _, e := range escolhas {
+		if memoria.Theme == e.tema && memoria.Icon == e.icone {
+			combinacaoPedida = true
+		}
+	}
+	if !combinacaoPedida {
+		t.Errorf("sobrou combinação que ninguém pediu: tema=%q ícone=%q", memoria.Theme, memoria.Icon)
+	}
+
+	b, err := os.ReadFile(aparenciaPath(path))
+	if err != nil {
+		t.Fatalf("não deu para ler appearance.json: %v", err)
+	}
+	var overrides []aparenciaSalva
+	if err := json.Unmarshal(b, &overrides); err != nil {
+		t.Fatalf("appearance.json inválido (escrita atropelada): %v\nconteúdo: %s", err, b)
+	}
+	achou := false
+	for _, o := range overrides {
+		if o.Name != "macbook" {
+			continue
+		}
+		achou = true
+		if o.Theme != memoria.Theme || o.Icon != memoria.Icon {
+			t.Errorf("disco divergiu da memória: disco tema=%q ícone=%q, memória tema=%q ícone=%q",
+				o.Theme, o.Icon, memoria.Theme, memoria.Icon)
+		}
+	}
+	if !achou && (memoria.Theme != "" || memoria.Icon != "") {
+		t.Errorf("a máquina não apareceu em appearance.json: memória tema=%q ícone=%q", memoria.Theme, memoria.Icon)
 	}
 }
 

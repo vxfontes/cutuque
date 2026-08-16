@@ -355,8 +355,18 @@ struct Machine: Decodable, Identifiable, Hashable {
     var isLocal: Bool { source == "local" }
 
     /// Cadastrada aqui pelo app — só essas dá para editar ou remover. As do
-    /// `hub.env` (e a local) pertencem ao hub.
+    /// `hub.env` (e a local) pertencem ao hub. Eixo de CONEXÃO: host, porta,
+    /// identidade, detectar SO de novo — o que muda o alvo do ssh.
     var isEditable: Bool { source == "app" }
+
+    /// Eixo de APARÊNCIA (tema do terminal + ícone), separado de `isEditable`
+    /// desde 16/08/2026: o hub deixou de gatear `SetAppearance` por origem —
+    /// tema/ícone são vaidade de tela, nunca encostam em host/porta/fingerprint,
+    /// então valem para QUALQUER máquina, inclusive as do `hub.env` e a local.
+    /// Existe como propriedade nomeada (e não `true` espalhado pelas telas)
+    /// porque é o registro de que a separação foi decisão, não descuido: se um
+    /// dia a aparência precisar de exceção por origem, mexe só aqui.
+    var aparenciaEditavel: Bool { true }
 
     /// Cadastro do app que ainda não teve a impressão digital confirmada. Fica
     /// na lista, mas não conecta: falta a usuária conferir a chave do host.

@@ -29,6 +29,26 @@ func MachinesHandler(reg *machine.Registry) http.HandlerFunc {
 	}
 }
 
+// ReachabilityHandler devolve o alcance de cada máquina cadastrada como alvo
+// — o sinal "dá pra usar agora?" da aba Máquinas. pronto = ssh respondeu de
+// verdade; nao_respondeu = a última sondagem falhou (qualquer motivo);
+// checando = ainda não sondou. NUNCA bloqueia numa máquina lenta/morta: o
+// handler só lê o cache do Launcher (lch.Reachability cuida de disparar
+// sondagem em background quando precisa) — é exatamente o que evita o hub
+// pagar o ConnectTimeout de uma máquina morta a cada leitura da lista.
+//
+//	GET /machines/reachability → 200 {"machines":[{machine,state,checked_at}]}
+func ReachabilityHandler(lch Launcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		list := lch.Reachability()
+		if list == nil {
+			// Lista vazia, nunca null: mesma convenção do GET /machines.
+			list = []launcher.Reachability{}
+		}
+		writeJSONResp(w, http.StatusOK, map[string][]launcher.Reachability{"machines": list})
+	}
+}
+
 // FilesHandler lista pastas E arquivos de um caminho na máquina (navegador de
 // arquivos da aba Máquinas). Irmão do DirsHandler, que só devolve pastas para o
 // seletor de cwd ao criar uma sessão.

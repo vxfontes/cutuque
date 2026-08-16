@@ -459,8 +459,10 @@ func MachineAppearanceHandler(reg *machine.Registry) http.HandlerFunc {
 		switch {
 		case errors.Is(err, machine.ErrNotFound):
 			writeJSONError(w, http.StatusNotFound, "unknown_machine")
-		case errors.Is(err, machine.ErrReadOnly):
-			writeJSONError(w, http.StatusForbidden, "read_only")
+		// ErrReadOnly não é mais possível aqui desde 2026-08-16: SetAppearance
+		// deixou de gatear por Editable() (aparência é do app, conexão é da
+		// fonte — vale para env/local/app). Removido para não deixar um branch
+		// morto e enganoso; ver hub/internal/machine/machine.go SetAppearance.
 		case errors.Is(err, machine.ErrInvalidLook):
 			writeJSONErrorDetail(w, http.StatusBadRequest, "invalid_appearance", err.Error())
 		case err != nil:

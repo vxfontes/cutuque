@@ -105,7 +105,13 @@ struct SessionDetailPane: View {
     var body: some View {
         ZStack {
             if let session {
-                SessionDetailView(session: session, isActive: showsChat, ownsNavigationTitle: false)
+                // `paneState` (foco da ABA) e `isActive`/`showsChat` (seleção
+                // do PAINEL dentro da aba) são sinais independentes — os dois
+                // precisam chegar na view (ver o comentário de `paneState` em
+                // `SessionDetailView.swift`, achado da revisão adversarial do
+                // card de duplicação de paleta/olho/ícone de máquina).
+                SessionDetailView(session: session, isActive: showsChat, paneState: paneState,
+                                  ownsNavigationTitle: false)
                     .opacity(showsChat ? 1 : 0)
                     .allowsHitTesting(showsChat)
                     .accessibilityHidden(!showsChat)

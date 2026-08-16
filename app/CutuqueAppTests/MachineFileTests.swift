@@ -267,4 +267,40 @@ final class MachineFileTests: XCTestCase {
         XCTAssertEqual(path, "/tmp/nota #1.txt")
         XCTAssertNil(url.fragment, "o # virou fragmento: o caminho chegaria cortado no hub")
     }
+
+    // MARK: - EstadoDaListaVazia (tela vazia do navegador de arquivos)
+
+    /// Tem item visível: não é o caso vazio, carregando ou não.
+    func testEstadoVazioComItensNaoEIndicaVazio() {
+        XCTAssertEqual(
+            EstadoDaListaVazia.resolver(visibleIsEmpty: false, loading: false, showHidden: false),
+            .comItens)
+        XCTAssertEqual(
+            EstadoDaListaVazia.resolver(visibleIsEmpty: false, loading: true, showHidden: true),
+            .comItens)
+    }
+
+    /// Ainda carregando: mesmo sem item nenhum ainda, não é hora de mostrar
+    /// vazio (evita o "Pasta vazia" piscar antes da resposta chegar).
+    func testEstadoVazioCarregandoNaoEVazio() {
+        XCTAssertEqual(
+            EstadoDaListaVazia.resolver(visibleIsEmpty: true, loading: true, showHidden: false),
+            .comItens)
+    }
+
+    /// Vazia com ocultos escondidos: é o caso que travou a navegação (card
+    /// 2fc2b3f6) — precisa oferecer a ação de mostrar ocultos, não só avisar.
+    func testEstadoVazioSemOcultosOfereceMostrarOcultos() {
+        XCTAssertEqual(
+            EstadoDaListaVazia.resolver(visibleIsEmpty: true, loading: false, showHidden: false),
+            .talvezSoOcultos)
+    }
+
+    /// Vazia com ocultos JÁ ligados: pasta vazia de verdade, não há ação a
+    /// mais para oferecer.
+    func testEstadoVazioComOcultosEVazioDeVerdade() {
+        XCTAssertEqual(
+            EstadoDaListaVazia.resolver(visibleIsEmpty: true, loading: false, showHidden: true),
+            .semNadaMesmo)
+    }
 }

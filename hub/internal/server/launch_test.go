@@ -29,11 +29,12 @@ type fakeLauncher struct {
 	interruptErr    error
 	interruptEffect launcher.InterruptEffect
 
-	machines   []string
-	removeErr  error
-	historyErr error
-	dirListing session.DirListing
-	dirsErr    error
+	machines     []string
+	reachability []launcher.Reachability
+	removeErr    error
+	historyErr   error
+	dirListing   session.DirListing
+	dirsErr      error
 
 	fileListing session.FileListing
 	fsErr       error
@@ -91,6 +92,9 @@ type fakeLauncher struct {
 }
 
 func (f *fakeLauncher) Machines() []string { return f.machines }
+func (f *fakeLauncher) Reachability() []launcher.Reachability {
+	return f.reachability
+}
 func (f *fakeLauncher) Remove(id string) error {
 	f.gotRemoveID = id
 	return f.removeErr

@@ -242,7 +242,24 @@ struct SessionDetailView: View {
     /// terminal (painel Chat|Terminal do iPad, `SessionDetailPane`, decisão
     /// #19). Default `true` preserva o iPhone, que só monta um painel por
     /// vez e nunca chama isto com `false`.
+    ///
+    /// [16/08/2026] Isto é `showsChat` (seleção de PAINEL dentro da aba, ver
+    /// `SessionDetailPane.swift`), NÃO foco de ABA — e é exatamente por isso
+    /// que sozinho não bastava pro toolbar (ver `paneState` abaixo e o
+    /// achado da revisão adversarial do card de duplicação de paleta/olho/
+    /// ícone de máquina).
     var isActive: Bool = true
+    /// Estado da ABA (decisão #19), vindo de fora — mesmo sinal que
+    /// `MachineDetailView`/`TerminalMirrorView` já usam. Default `.ativo`
+    /// preserva o iPhone (`SessionListView`, que monta esta view sozinha,
+    /// sem aba) e o `SessionDetailPane`, que já guarda o próprio `paneState`
+    /// e só precisava passá-lo adiante. NavigationState.swift faz toda aba
+    /// nova nascer em modo chat (`modosPorAba[chave] ?? .chat`), então
+    /// `isActive` (`showsChat`) sozinho fica `true` em N abas de sessão
+    /// abertas ao mesmo tempo — sem este segundo sinal, o ToolbarItem "…"
+    /// (Detalhes/Renomear) dobrava na mesma navigation bar com duas abas de
+    /// agente abertas, o uso mais comum do app.
+    var paneState: TerminalPaneState = .ativo
     /// Falso quando embutida no `SessionDetailPane` do iPad, que passa a ser
     /// a ÚNICA fonte de `.navigationTitle` (ver `OwnedNavigationTitle.swift`).
     /// Default `true` preserva o iPhone, que monta esta view sozinha e nunca
@@ -302,9 +319,11 @@ struct SessionDetailView: View {
 
     @State private var folhaDeTexto: FolhaPedida?
 
-    init(session: Session, isActive: Bool = true, ownsNavigationTitle: Bool = true) {
+    init(session: Session, isActive: Bool = true, paneState: TerminalPaneState = .ativo,
+         ownsNavigationTitle: Bool = true) {
         _model = StateObject(wrappedValue: SessionDetailViewModel(session: session))
         self.isActive = isActive
+        self.paneState = paneState
         self.ownsNavigationTitle = ownsNavigationTitle
     }
 
@@ -424,7 +443,13 @@ struct SessionDetailView: View {
             }
         }
         .toolbar {
-            if isActive {
+            // [16/08/2026] `isActive` (`showsChat`) sozinho não basta: toda
+            // aba nova nasce em modo chat (`NavigationState.swift`, `modosPorAba[chave]
+            // ?? .chat`), então duas abas de sessão abertas tinham as DUAS
+            // com `isActive == true` ao mesmo tempo — o mesmo ToolbarItem
+            // "…" dobrava na navigation bar compartilhada (decisão #19).
+            // `paneState == .ativo` é o sinal de foco de ABA que faltava.
+            if isActive && paneState == .ativo {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button {
@@ -781,16 +806,31 @@ struct SessionDetailView: View {
                 }
                 return .ignored
             }
-            // ⏎ envia. Não dá para usar onSubmit: o campo é multilinha
-            // (axis: .vertical) e nesse modo o Return só insere `\n` e nunca
-            // dispara onSubmit. Reconhecer o `\n` cobre os DOIS teclados — o de
-            // tela do iPad não passa por onKeyPress nenhum.
+            // ⏎ do teclado DE TELA: ele não passa por onKeyPress nenhum, só injeta
+            // um `\n` no binding — então o sinal aqui é a quebra recém-inserida.
+            // Este caminho está certo desde 13/08 e não pode ser mexido; o que
+            // faltava era o gêmeo do teclado físico, abaixo.
             .onChange(of: draft) { anterior, novo in
                 switch ComposerEnter.acao(anterior: anterior, novo: novo,
                                           quebraIntencional: quebraIntencional) {
                 case .nada: break
                 case .limpar: draft = ""
                 case .enviar(let texto): enviarDraft(texto)
+                }
+                quebraIntencional = false
+            }
+            // ⏎ do teclado FÍSICO: aqui o Return NÃO escreve `\n` — ele dispara só
+            // o onSubmit, e o onChange acima nunca roda. Sem este bloco o Enter do
+            // Magic Keyboard não envia nada (bug de 16/08). Como no onChange, o ⏎
+            // SEMPRE envia e nunca cai no "parar" da sessão rodando — parar é
+            // decisão do botão, que pede confirmação.
+            .onSubmit {
+                switch ComposerEnter.acaoSubmit(texto: draft,
+                                                quebraIntencional: quebraIntencional) {
+                case .nada: break
+                // No físico ninguém escreve a quebra do ⇧⏎ — quem escreve é aqui.
+                case .inserirQuebra: draft += "\n"
+                case .enviar: enviarDraft(draft)
                 }
                 quebraIntencional = false
             }

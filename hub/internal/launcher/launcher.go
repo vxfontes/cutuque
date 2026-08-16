@@ -125,6 +125,14 @@ type Launcher struct {
 	baseCtx    context.Context
 	baseCancel context.CancelFunc
 
+	// reachMu protege o cache de alcance (reach) e o guarda de rodada única
+	// (reachRunning) da aba Máquinas — ver reachability.go. Mutex PRÓPRIA, não
+	// a targetsMu: o cache é preenchido por goroutines de sondagem que só leem
+	// o mapa de alvos (via snapshot/anyTarget), nunca escrevem nele.
+	reachMu      sync.Mutex
+	reach        map[string]reachEntry // nome da máquina → último resultado de sondagem
+	reachRunning bool                  // true enquanto uma rodada de sondagem está em voo
+
 	mu          sync.Mutex
 	closed      bool                          // Shutdown em curso: Launch falha rápido
 	handles     map[string]*claudecode.Handle // canal stdin/stdout por sessão viva
@@ -145,6 +153,7 @@ func New(eng *engine.Engine, reg *registry.Registry, targets map[string]map[stri
 		targets:     targets,
 		baseCtx:     ctx,
 		baseCancel:  cancel,
+		reach:       make(map[string]reachEntry),
 		handles:     make(map[string]*claudecode.Handle),
 		pending:     make(map[string]pending),
 		maxSessions: defaultMaxSessions,
