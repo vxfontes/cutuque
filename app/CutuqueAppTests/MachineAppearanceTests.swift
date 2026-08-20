@@ -316,14 +316,20 @@ final class MachineAppearanceTests: XCTestCase {
     /// usam a MESMA `ChromeDaAba`, e o registro em `NavigationState` é por
     /// CHAVE DE ABA — "terminal" numa não é "terminal" na outra. A ponte de
     /// cada painel converte com o SEU enum (aqui, `MachinePane(rawValue:)`).
+    ///
+    /// 20/08/2026 — a lista cresceu de dois para quatro: `diff` e `codeServer`
+    /// entraram com o painel de Diff nativo e o Editor do iPad (2.8.0). Esta
+    /// expectativa é fixa DE PROPÓSITO — ela é o alarme de que a chrome mudou.
     @MainActor
     func testChromeDaMaquinaUsaOsIdsDeMachinePane() {
         let nav = NavigationState()
         let chave = ChaveDeAba.maquina("macmini")
         nav.definirSegmentos(MachineDetailView.segmentosDeChrome(), de: chave)
         XCTAssertEqual(nav.segmentos(de: chave).map(\.id),
-                       [MachinePane.terminal.rawValue, MachinePane.files.rawValue])
-        XCTAssertEqual(nav.segmentos(de: chave).map(\.titulo), ["Terminal", "Arquivos"])
+                       [MachinePane.terminal.rawValue, MachinePane.files.rawValue,
+                        MachinePane.diff.rawValue, MachinePane.codeServer.rawValue])
+        XCTAssertEqual(nav.segmentos(de: chave).map(\.titulo),
+                       ["Terminal", "Arquivos", "Diff", "Editor"])
     }
 
     /// A lista é `MachinePane.allCases`, então crescer o enum (um terceiro
