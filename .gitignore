@@ -44,3 +44,5 @@ DerivedData/
 # Máquinas — as CHAVES PRIVADAS ssh geradas pelo hub em data/machines/keys.
 # Nada disso pode ir para o repositório.
 /data/
+
+.maestri/
