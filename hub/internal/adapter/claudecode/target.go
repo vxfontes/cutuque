@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/vxfontes/cutuque/hub/internal/adapter/agent"
+	"github.com/vxfontes/cutuque/hub/internal/session"
 )
 
 // Tipos da plataforma de execução, reexportados por alias do pacote agent — o
@@ -28,6 +29,8 @@ type (
 	FileWriter        = agent.FileWriter
 	FileDownloader    = agent.FileDownloader
 	GitDiffer         = agent.GitDiffer
+	CodeServerStarter = agent.CodeServerStarter
+	CodeServer        = session.CodeServer
 	ShellDialer       = agent.ShellDialer
 	Transcriber       = agent.Transcriber
 	TranscriptChunk   = agent.TranscriptChunk

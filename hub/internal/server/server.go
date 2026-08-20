@@ -252,6 +252,11 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		// noção de "responde agora"). Cache do Launcher, nunca bate ssh na hora
 		// do request (ver ReachabilityHandler/launcher.Reachability).
 		mux.Handle("GET /machines/reachability", requireAuth(cfg.Token, ReachabilityHandler(lch)))
+		// Code-server é uma capability opcional do Launcher: só registra a rota
+		// quando o launcher configurado sabe iniciar o serviço remoto.
+		if codeServer, ok := lch.(CodeServerLauncher); ok {
+			mux.Handle("POST /machines/{machine}/code-server", requireAuth(cfg.Token, CodeServerHandler(codeServer)))
+		}
 		mux.Handle("DELETE /sessions/{id}", requireAuth(cfg.Token, DeleteSessionHandler(lch)))
 		mux.Handle("POST /sessions/{id}/resolve", requireAuth(cfg.Token, ResolveHandler(lch)))
 		mux.Handle("POST /sessions/{id}/history", requireAuth(cfg.Token, HistoryHandler(lch)))

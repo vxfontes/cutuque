@@ -60,6 +60,13 @@ type Launcher interface {
 	TmuxNewSession(machine, group, sess, cwd, agent string) (string, error)
 }
 
+// CodeServerLauncher é a capability HTTP opcional para iniciar code-server.
+// Fica separada de Launcher porque nem todo alvo oferece essa operação e os
+// demais handlers não precisam impor o método aos seus fakes/adapters.
+type CodeServerLauncher interface {
+	StartCodeServer(machine, dir string) (session.CodeServer, error)
+}
+
 // tmuxKeyRequest é o corpo de POST /machines/{machine}/tmux/key.
 type tmuxKeyRequest struct {
 	Target string `json:"target"`
@@ -519,6 +526,11 @@ type launchResponse struct {
 	Session session.Session `json:"session"`
 }
 
+// codeServerRequest é o corpo de POST /machines/{machine}/code-server.
+type codeServerRequest struct {
+	Dir string `json:"dir"`
+}
+
 // inputRequest é o corpo de POST /sessions/{id}/input.
 type inputRequest struct {
 	Text string `json:"text"`
@@ -573,6 +585,34 @@ func LaunchHandler(lch Launcher) http.HandlerFunc {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(launchResponse{Session: s})
+		}
+	}
+}
+
+// CodeServerHandler inicia code-server no diretório solicitado e devolve o
+// payload URL/estado produzido pelo adapter. Dir omitido ou vazio é repassado
+// como vazio para o adapter, que usa o HOME da máquina.
+//
+//	POST /machines/{machine}/code-server {"dir":"/workspace"}
+//	→ 200 {"url":"…","state":"…"} | 400 bad_request |
+//	404 unknown_machine | 502 code_server_failed
+func CodeServerHandler(lch CodeServerLauncher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxLaunchBody)
+		var req codeServerRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "bad_request")
+			return
+		}
+
+		result, err := lch.StartCodeServer(r.PathValue("machine"), req.Dir)
+		switch {
+		case errors.Is(err, launcher.ErrUnknownMachine):
+			writeJSONError(w, http.StatusNotFound, "unknown_machine")
+		case err != nil:
+			writeJSONError(w, http.StatusBadGateway, "code_server_failed")
+		default:
+			writeJSONResp(w, http.StatusOK, result)
 		}
 	}
 }

@@ -99,6 +99,17 @@ type GitDiffer interface {
 	GitDiff(ctx context.Context, dir string) (session.GitDiff, error)
 }
 
+// CodeServerStarter é uma capacidade opcional de um Target. O Launcher deve
+// resolvê-la por type assertion, como faz com FileLister/GitDiffer: nem todo
+// alvo precisa oferecer uma IDE web.
+//
+// StartCodeServer é deliberadamente uma operação de início, não um daemon
+// gerenciado pelo hub. O processo é criado sob demanda e a URL HTTPS devolvida
+// serve para a tela do iPad abrir o editor.
+type CodeServerStarter interface {
+	StartCodeServer(ctx context.Context, cwd string) (session.CodeServer, error)
+}
+
 // ShellDialer monta o comando de um shell interativo na máquina (terminal livre
 // da aba Máquinas). Opcional como o FileLister: só os alvos por ssh
 // implementam — a máquina "local" é o próprio hub, e abrir um shell dentro do

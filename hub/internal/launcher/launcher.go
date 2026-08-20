@@ -667,6 +667,28 @@ func (l *Launcher) ListDirs(machine, path string) (session.DirListing, error) {
 	return lister.ListDirs(ctx, path)
 }
 
+// StartCodeServer inicia (ou reutiliza, conforme a política do adapter) o
+// code-server da máquina no diretório pedido. A capability é opcional: um alvo
+// que não a oferece é tratado como desconhecido, preservando o contrato de
+// ErrUnknownMachine usado pelas demais operações de máquina.
+func (l *Launcher) StartCodeServer(machine, dir string) (session.CodeServer, error) {
+	tgt, ok := l.anyTarget(machine)
+	if !ok {
+		return session.CodeServer{}, ErrUnknownMachine
+	}
+	starter, ok := tgt.(claudecode.CodeServerStarter)
+	if !ok {
+		return session.CodeServer{}, ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	result, err := starter.StartCodeServer(ctx, dir)
+	if err != nil {
+		return session.CodeServer{}, err
+	}
+	return session.CodeServer{URL: result.URL, State: string(result.State)}, nil
+}
+
 // ListFiles lista pastas E arquivos de path na máquina (painel Arquivos da aba
 // Máquinas). path vazio → home. ErrUnknownMachine se a máquina não existe ou o
 // agente dela não sabe listar arquivos.
