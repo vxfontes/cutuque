@@ -180,6 +180,26 @@
     align-items: center; color: var(--muted); font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .4px;
   }
   .board-col-head .count { font-variant-numeric: tabular-nums; color: var(--faint); }
+  .board-col-head .head-right { display: inline-flex; align-items: center; gap: 8px; }
+  /* "Mover tudo": discreto até o toque/hover, pra não competir com a contagem. */
+  .col-moveall {
+    background: transparent; border: 1px solid transparent; border-radius: 7px; color: var(--faint);
+    padding: 2px; cursor: pointer; display: inline-flex; opacity: .5; transition: .12s;
+  }
+  .col-moveall:hover, .col-moveall:focus-visible {
+    opacity: 1; color: var(--text); border-color: var(--border); background: var(--panel2);
+  }
+  .col-moveall[hidden] { display: none; }
+  .col-moveall .ic { width: 15px; height: 15px; }
+  /* Lista de destinos do "mover tudo". */
+  .pick-list { display: flex; flex-direction: column; gap: 8px; margin: 0 0 16px; }
+  .pick-list button {
+    font: inherit; font-size: 13px; font-weight: 600; text-align: left; cursor: pointer;
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 9px; padding: 9px 12px; display: flex; align-items: center; gap: 8px;
+  }
+  .pick-list button:hover { border-color: var(--faint); }
+  .pick-list .ic { width: 14px; height: 14px; opacity: .55; }
   .board-col-body { padding: 10px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex: 1; min-height: 80px; }
   .board-col-body.dragover { background: color-mix(in srgb, var(--running) 10%, transparent); outline: 1px dashed var(--running); outline-offset: -4px; }
   .col-empty {
@@ -481,27 +501,27 @@
             <path d="M26 26v10" stroke="#fff" stroke-width="3.6" stroke-linecap="round"/>
             <circle cx="26" cy="42.5" r="2.4" fill="#fff"/>
           </svg>
-          <div class="board-col-head">Encalhadas <span class="count" id="count-encalhadas">0</span></div>
+          <div class="board-col-head">Encalhadas <span class="head-right"><span class="count" id="count-encalhadas">0</span><button type="button" class="col-moveall" data-moveall="encalhadas" title="Mover todos os cards desta coluna" hidden></button></span></div>
           <div class="board-col-body" id="col-encalhadas" data-col="encalhadas"></div>
         </div>
         <div class="board-col" data-col="a_fazer">
-          <div class="board-col-head">A fazer <span class="count" id="count-a_fazer">0</span></div>
+          <div class="board-col-head">A fazer <span class="head-right"><span class="count" id="count-a_fazer">0</span><button type="button" class="col-moveall" data-moveall="a_fazer" title="Mover todos os cards desta coluna" hidden></button></span></div>
           <div class="board-col-body" id="col-a_fazer" data-col="a_fazer"></div>
         </div>
         <div class="board-col" data-col="em_progresso">
-          <div class="board-col-head">Em progresso <span class="count" id="count-em_progresso">0</span></div>
+          <div class="board-col-head">Em progresso <span class="head-right"><span class="count" id="count-em_progresso">0</span><button type="button" class="col-moveall" data-moveall="em_progresso" title="Mover todos os cards desta coluna" hidden></button></span></div>
           <div class="board-col-body" id="col-em_progresso" data-col="em_progresso"></div>
         </div>
         <div class="board-col" data-col="feito">
-          <div class="board-col-head">Feito <span class="count" id="count-feito">0</span></div>
+          <div class="board-col-head">Feito <span class="head-right"><span class="count" id="count-feito">0</span><button type="button" class="col-moveall" data-moveall="feito" title="Mover todos os cards desta coluna" hidden></button></span></div>
           <div class="board-col-body" id="col-feito" data-col="feito"></div>
         </div>
         <div class="board-col" data-col="em_revisao">
-          <div class="board-col-head">Em revisão <span class="count" id="count-em_revisao">0</span></div>
+          <div class="board-col-head">Em revisão <span class="head-right"><span class="count" id="count-em_revisao">0</span><button type="button" class="col-moveall" data-moveall="em_revisao" title="Mover todos os cards desta coluna" hidden></button></span></div>
           <div class="board-col-body" id="col-em_revisao" data-col="em_revisao"></div>
         </div>
         <div class="board-col" data-col="concluido">
-          <div class="board-col-head">Concluído <span class="count" id="count-concluido">0</span></div>
+          <div class="board-col-head">Concluído <span class="head-right"><span class="count" id="count-concluido">0</span><button type="button" class="col-moveall" data-moveall="concluido" title="Mover todos os cards desta coluna" hidden></button></span></div>
           <div class="board-col-body" id="col-concluido" data-col="concluido"></div>
         </div>
       </div>
@@ -543,6 +563,17 @@
     </div>
   </div>
 
+  <div id="moveAllModal" class="modal-overlay" hidden>
+    <div class="confirm" role="dialog" aria-modal="true">
+      <h3 id="moveAllTitle">Mover tudo</h3>
+      <p id="moveAllText"></p>
+      <div class="pick-list" id="moveAllList"></div>
+      <div class="confirm-actions">
+        <button type="button" class="cf-cancel" id="moveAllCancel">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toasts" aria-live="polite"></div>
 
 <script>
@@ -573,6 +604,7 @@
     trash: svg('<path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/>'),
     inbox: svg('<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>'),
     calCheck: svg('<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M9 16l2 2 4-4"/>'),
+    moveAll: svg('<path d="M4 7h9M4 12h9M4 17h9"/><path d="M17 8.5l3.5 3.5-3.5 3.5"/>'),
   };
   const colEmpty = (label) => `<div class="col-empty">${ICONS.inbox}<span>${label}</span></div>`;
 
@@ -663,6 +695,20 @@
   ];
   const tasks = new Map();
   let dragId = null;
+
+  // Faixa "Encalhadas" não é coluna do hub: é o predicado `encalhada == true`.
+  // Este `naFaixa` espelha o do hub (board_http.go) de propósito — "A fazer" não
+  // mostra encalhado, que tem faixa própria, e o "mover tudo" tem de mover
+  // exatamente o que a coluna mostra.
+  const naFaixa = (t, faixa) => faixa === 'encalhadas'
+    ? !!t.encalhada
+    : t.column === faixa && !(faixa === 'a_fazer' && t.encalhada);
+  const FAIXAS = ['encalhadas', ...BOARD_COLUMNS.map(([c]) => c)];
+  const faixaLabel = (f) => f === 'encalhadas' ? 'Encalhadas' : COL_LABEL[f];
+  // Quantos cards a faixa tem de verdade (`total`) e quantos os filtros deixam
+  // ver (`visivel`). O "mover tudo" é do hub e move a coluna inteira, então
+  // confirma com o total — e avisa quando os dois divergem.
+  const faixaTotal = {}, faixaVisivel = {};
 
   const $grid = document.getElementById('grid');
   const $counts = document.getElementById('counts');
@@ -1382,7 +1428,7 @@
       (boardFilters.session === 'all' || t.session === boardFilters.session));
 
     // Coluna Encalhadas (à esquerda): a_fazer marcados como encalhada, com alerta.
-    const enc = list.filter((t) => t.encalhada)
+    const enc = list.filter((t) => naFaixa(t, 'encalhadas'))
       .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
     document.getElementById('count-encalhadas').textContent = enc.length;
     document.getElementById('colEncalhadas').classList.toggle('has-enc', enc.length > 0);
@@ -1395,10 +1441,19 @@
     // Colunas reais (a_fazer exclui os encalhados, que já estão na coluna à esquerda).
     BOARD_COLUMNS.forEach(([col]) => {
       const body = document.getElementById('col-' + col);
-      const items = list.filter((t) => t.column === col && !(col === 'a_fazer' && t.encalhada))
+      const items = list.filter((t) => naFaixa(t, col))
         .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
       document.getElementById('count-' + col).textContent = items.length;
       body.innerHTML = items.length ? items.map(cardHtml).join('') : colEmpty('nada por aqui');
+    });
+
+    // Botão "mover tudo": aparece com o que a coluna MOSTRA (botão em coluna
+    // visualmente vazia não faz sentido), mas confirma com o total real.
+    FAIXAS.forEach((faixa) => {
+      faixaTotal[faixa] = all.filter((t) => naFaixa(t, faixa)).length;
+      faixaVisivel[faixa] = list.filter((t) => naFaixa(t, faixa)).length;
+      const btn = document.querySelector(`[data-moveall="${faixa}"]`);
+      if (btn) btn.hidden = faixaVisivel[faixa] === 0;
     });
   }
 
@@ -1475,6 +1530,73 @@
   const moveTask = (id, col) => patchTask(id, { column: col, actor: 'você' });
   // Marcar como encalhada = volta pra "A fazer" e sinaliza como esquecida.
   const markEncalhada = (id) => patchTask(id, { column: 'a_fazer', encalhada: true, actor: 'você' });
+
+  // --- Mover a coluna inteira (botão no topo da coluna) ---
+  // Um POST só: quem varre a coluna é o hub. Encalhadas serve de ORIGEM (esvaziar
+  // a faixa), nunca de destino — marcar um lote como encalhado não serve pra nada.
+  const $moveAllModal = document.getElementById('moveAllModal');
+  const $moveAllList = document.getElementById('moveAllList');
+  const closeMoveAll = () => { $moveAllModal.hidden = true; };
+  const cards = (n) => `${n} card${n === 1 ? '' : 's'}`;
+
+  function askMoveAll(from) {
+    const total = faixaTotal[from] || 0;
+    if (!total) return;
+    const escondidos = total - (faixaVisivel[from] || 0);
+    $moveAllModal.dataset.from = from;
+    document.getElementById('moveAllTitle').textContent = `Mover tudo de ${faixaLabel(from)}`;
+    document.getElementById('moveAllText').textContent = escondidos > 0
+      ? `${cards(total)} na coluna — os filtros escondem ${escondidos}, mas o hub move a coluna inteira. Para onde?`
+      : `${cards(total)} na coluna. Para onde?`;
+    $moveAllList.innerHTML = BOARD_COLUMNS
+      .filter(([col]) => col !== from)
+      .map(([col, label]) => `<button type="button" data-to="${col}">${ICONS.moveAll}${label}</button>`)
+      .join('');
+    $moveAllModal.hidden = false;
+  }
+
+  $moveAllList.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-to]');
+    if (!btn) return;
+    const to = btn.dataset.to, from = $moveAllModal.dataset.from;
+    closeMoveAll();
+    askConfirm({
+      title: 'Mover tudo?',
+      // "1 card ... vai", "3 cards ... vão" — mesma concordância do app
+      // (`MoveAllPrompt.message`, em BoardMoveLogic.swift).
+      message: `${cards(faixaTotal[from] || 0)} de ${faixaLabel(from)} ${(faixaTotal[from] || 0) === 1 ? 'vai' : 'vão'} para ${faixaLabel(to)}.`,
+      confirmLabel: 'Mover',
+      onConfirm: () => moveAll(from, to),
+    });
+  });
+  document.getElementById('moveAllCancel').addEventListener('click', closeMoveAll);
+  $moveAllModal.addEventListener('click', (e) => { if (e.target === $moveAllModal) closeMoveAll(); });
+
+  $boardCols.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-moveall]');
+    if (btn) askMoveAll(btn.dataset.moveall);
+  });
+  document.querySelectorAll('[data-moveall]').forEach((b) => { b.innerHTML = ICONS.moveAll; });
+
+  async function moveAll(from, to) {
+    try {
+      const res = await fetch(`/board/columns/${encodeURIComponent(from)}/move-all`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to, actor: 'você' }),
+      });
+      if (!res.ok) {
+        toast('Não deu pra mover a coluna', `O hub respondeu ${res.status}. O board continua como está.`, 'err');
+        return;
+      }
+      const r = await res.json();
+      // O eco de cada card chega via WS e re-renderiza; o toast é só o recibo.
+      toast(`${cards(r.moved)} em ${faixaLabel(to)}`, `Saíram de ${faixaLabel(from)}.`);
+    } catch (e) {
+      console.error('move-all erro:', e.message);
+      toast('Não deu pra mover a coluna', 'O hub não respondeu. O board continua como está.', 'err');
+    }
+  }
 
   [[$fGroup, 'group'], [$fType, 'type'], [$fSession, 'session']].forEach(([sel, key]) => {
     sel.addEventListener('change', () => { boardFilters[key] = sel.value; renderBoard(); });
