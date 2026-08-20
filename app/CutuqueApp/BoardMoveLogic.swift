@@ -48,6 +48,54 @@ enum BoardMoveLogic {
         return out
     }
 
+    // MARK: - Mover a coluna inteira ("mover tudo")
+
+    /// `task` aparece na faixa `faixa`? É a MESMA regra que o hub aplica no
+    /// `POST /board/columns/{coluna}/move-all` (`naFaixa`, em
+    /// `hub/internal/server/board_http.go`) e que o dashboard aplica no
+    /// `naFaixa` do `dashboard.html`. As três cópias existem porque cada lado
+    /// precisa dela para renderizar; se mudar aqui, mude nos outros dois.
+    ///
+    /// O detalhe que não é óbvio: card encalhado tem `column == "a_fazer"`,
+    /// mas a coluna "A fazer" não o mostra — ele mora na faixa Encalhadas.
+    /// Mover "A fazer" não pode levá-lo junto.
+    static func naFaixa(_ task: BoardTask, _ faixa: BoardDropTarget) -> Bool {
+        switch faixa {
+        case .encalhadas:
+            return task.isEncalhada
+        case .column(let column):
+            return task.column == column.rawValue && !(task.isEncalhada && column == .aFazer)
+        }
+    }
+
+    /// Para onde a faixa pode despejar os cards. Encalhadas é ORIGEM, nunca
+    /// destino (decisão da Vanessa): "encalhado" é consequência de virar a
+    /// semana sem começar, não um lugar onde se põe card à mão.
+    static func destinos(from faixa: BoardDropTarget) -> [BoardColumn] {
+        switch faixa {
+        case .encalhadas:
+            return BoardColumn.allCases
+        case .column(let origem):
+            return BoardColumn.allCases.filter { $0 != origem }
+        }
+    }
+
+    /// O segmento de URL que o hub espera em `/board/columns/{isto}/move-all`.
+    static func caminho(_ faixa: BoardDropTarget) -> String {
+        switch faixa {
+        case .encalhadas:        return "encalhadas"
+        case .column(let coluna): return coluna.rawValue
+        }
+    }
+
+    /// Como a faixa se chama na tela.
+    static func rotulo(_ faixa: BoardDropTarget) -> String {
+        switch faixa {
+        case .encalhadas:        return "Encalhadas"
+        case .column(let coluna): return coluna.label
+        }
+    }
+
     /// Coluna vizinha, para ⌘← / ⌘→. Nil nas pontas — o board não dá a volta.
     static func adjacentColumn(from column: BoardColumn, offset: Int) -> BoardColumn? {
         guard let i = BoardColumn.allCases.firstIndex(of: column) else { return nil }
@@ -111,4 +159,31 @@ enum BoardLayout {
     static func isRegularWidth(idiom: UIUserInterfaceIdiom, measuredWidth: CGFloat) -> Bool {
         isPad(idiom) && measuredWidth >= columnPagingThreshold
     }
+}
+
+/// Os textos do popup de "mover tudo" — separados da view pelo mesmo motivo do
+/// `CloseWeekPrompt`: contagem, singular/plural e o aviso de filtro são regra,
+/// não desenho, e dá para testar sem tela.
+enum MoveAllPrompt {
+
+    static func title(_ faixa: BoardDropTarget) -> String {
+        "Mover tudo de \(BoardMoveLogic.rotulo(faixa))?"
+    }
+
+    /// `total` é o que o hub vai mover (a coluna inteira); `visivel` é o que a
+    /// tela mostra com os filtros da barra aplicados. Quando divergem, avisa —
+    /// o endpoint não conhece filtro, e a Vanessa pediu confirmação com a
+    /// contagem justamente para não mover o que ela não está vendo sem saber.
+    static func message(total: Int, visivel: Int,
+                        from faixa: BoardDropTarget, to destino: BoardColumn) -> String {
+        let verbo = total == 1 ? "vai" : "vão"
+        var texto = "\(cards(total)) de \(BoardMoveLogic.rotulo(faixa)) \(verbo) para \(destino.label)."
+        let escondidos = max(0, total - visivel)
+        if escondidos > 0 {
+            texto += " Os filtros escondem \(escondidos), mas o hub move a coluna inteira."
+        }
+        return texto
+    }
+
+    static func cards(_ n: Int) -> String { "\(n) card\(n == 1 ? "" : "s")" }
 }

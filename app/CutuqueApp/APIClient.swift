@@ -197,6 +197,34 @@ struct APIClient {
         try await send(request)
     }
 
+    /// Move a coluna INTEIRA de uma vez.
+    /// `POST /board/columns/{faixa}/move-all` (aberto, mesma regra de token do
+    /// PATCH). `faixa` é o `rawValue` da coluna ou `encalhadas`.
+    ///
+    /// Quem varre é o hub — uma requisição só, não um PATCH por card: o app é
+    /// fino e a regra de quem sai da coluna (encalhado não sai de "A fazer")
+    /// vive num lugar só. Devolve quantos cards mudaram de coluna.
+    @discardableResult
+    func moveAllBoard(from faixa: String, to column: String) async throws -> Int {
+        let url = baseURL
+            .appendingPathComponent("board")
+            .appendingPathComponent("columns")
+            .appendingPathComponent(faixa)
+            .appendingPathComponent("move-all")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["to": column, "actor": "você"])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw CutuqueError.unexpected(status: (response as? HTTPURLResponse)?.statusCode ?? -1)
+        }
+        return try JSONDecoder().decode(MovedEnvelope.self, from: data).moved
+    }
+
+    private struct MovedEnvelope: Decodable { let moved: Int }
+
     /// Adiciona um comentário a um card. `POST /board/tasks/{id}/comments` (aberto).
     func addBoardComment(id: String, author: String, text: String) async throws {
         let url = baseURL.appendingPathComponent("board").appendingPathComponent("tasks").appendingPathComponent(id).appendingPathComponent("comments")

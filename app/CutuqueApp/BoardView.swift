@@ -32,6 +32,18 @@ final class BoardModel: ObservableObject {
         catch { errorText = "Falha ao mover o card." }
     }
 
+    /// Mover tudo: despeja a faixa inteira em `column` com UMA requisição — a
+    /// varredura é do hub (ver `moveAllBoard`). Não faz movimento otimista
+    /// como o arraste: aqui não existe card voltando visivelmente pro lugar,
+    /// e mentir sobre 12 cards de uma vez é pior que esperar o `load()`.
+    func moveAll(from faixa: BoardDropTarget, to column: BoardColumn) async {
+        do {
+            _ = try await api.moveAllBoard(from: BoardMoveLogic.caminho(faixa),
+                                           to: column.rawValue)
+            await load()
+        } catch { errorText = "Falha ao mover a coluna." }
+    }
+
     /// Arraste: move na hora, na lista local, e só então fala com o hub. Sem
     /// isto o card voltaria visivelmente pra origem antes de reaparecer no
     /// destino — o board não tem WebSocket, toda ação recarrega tudo.
@@ -101,12 +113,19 @@ final class BoardModel: ObservableObject {
 
     // Agrupamentos (já filtrados).
     var encalhadas: [BoardTask] {
-        tasks.filter { $0.isEncalhada && passesFilters($0) }
+        tasks.filter { BoardMoveLogic.naFaixa($0, .encalhadas) && passesFilters($0) }
             .sorted { ($0.createdAt ?? .distantPast) < ($1.createdAt ?? .distantPast) }
     }
     func inColumn(_ column: BoardColumn) -> [BoardTask] {
-        tasks.filter { $0.column == column.rawValue && !($0.isEncalhada && column == .aFazer) && passesFilters($0) }
+        tasks.filter { BoardMoveLogic.naFaixa($0, .column(column)) && passesFilters($0) }
             .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
+    }
+
+    /// Quantos cards a faixa tem DE VERDADE, sem os filtros da barra — é o que
+    /// o hub move no "mover tudo" (o endpoint não conhece filtro). O botão
+    /// aparece pelo que a coluna MOSTRA; a confirmação fala deste número.
+    func totalNaFaixa(_ faixa: BoardDropTarget) -> Int {
+        tasks.filter { BoardMoveLogic.naFaixa($0, faixa) }.count
     }
     var hasActiveFilter: Bool { filterGroup != "all" || filterType != "all" || filterSession != "all" }
 }
@@ -405,21 +424,29 @@ struct BoardView: View {
                 HStack(alignment: .top, spacing: 12) {
                     if !model.encalhadas.isEmpty {
                         BoardColumnCard(title: "Encalhadas", count: model.encalhadas.count,
+                                        total: model.totalNaFaixa(.encalhadas),
                                         alert: true, tasks: model.encalhadas, width: colWidth,
                                         target: .encalhadas,
                                         onDrop: { id in
                                             guard let t = model.task(id: id) else { return }
                                             Task { await model.drop(t, on: .encalhadas) }
+                                        },
+                                        onMoveAll: { destino in
+                                            Task { await model.moveAll(from: .encalhadas, to: destino) }
                                         }) { selected = $0 }
                     }
                     ForEach(BoardColumn.allCases) { column in
                         let items = model.inColumn(column)
                         BoardColumnCard(title: column.label, count: items.count,
+                                        total: model.totalNaFaixa(.column(column)),
                                         alert: false, tasks: items, width: colWidth,
                                         target: .column(column),
                                         onDrop: { id in
                                             guard let t = model.task(id: id) else { return }
                                             Task { await model.drop(t, on: .column(column)) }
+                                        },
+                                        onMoveAll: { destino in
+                                            Task { await model.moveAll(from: .column(column), to: destino) }
                                         }) { selected = $0 }
                     }
                 }
@@ -530,14 +557,21 @@ struct FilterMenu: View {
 
 private struct BoardColumnCard: View {
     let title: String
+    /// O que a coluna MOSTRA (já filtrado) — é isto que o `count` do topo diz.
     let count: Int
+    /// O que a coluna TEM, sem os filtros da barra: o número que o "mover
+    /// tudo" vai mexer, porque o endpoint do hub não conhece filtro.
+    let total: Int
     let alert: Bool
     let tasks: [BoardTask]
     let width: CGFloat
     let target: BoardDropTarget
     let onDrop: (String) -> Void
+    let onMoveAll: (BoardColumn) -> Void
     let onTap: (BoardTask) -> Void
     @State private var isTargeted = false
+    /// Destino escolhido no menu, esperando a confirmação. `nil` = sem popup.
+    @State private var destinoPendente: BoardColumn?
 
     // [13/08/2026] `Color.accentColor` não lê o `.tint()` da raiz (ver
     // `AppTheme.swift`) — era por isso que o realce do drop-target ficava
@@ -553,6 +587,10 @@ private struct BoardColumnCard: View {
                 Spacer()
                 Text("\(count)").font(.caption).fontWeight(.semibold)
                     .foregroundStyle(alert ? AnyShapeStyle(.red) : AnyShapeStyle(.tertiary))
+                // "Mover tudo" só aparece onde a coluna MOSTRA card — botão em
+                // coluna visualmente vazia não faz sentido. A confirmação é que
+                // fala do total real (e avisa se os filtros escondem alguém).
+                if count > 0 { moveAllMenu }
             }
             .padding(.horizontal, 12).padding(.vertical, 10)
 
@@ -602,6 +640,38 @@ private struct BoardColumnCard: View {
                 .stroke(destaque, lineWidth: isTargeted ? 2.5 : 0)
         )
         .animation(.easeOut(duration: 0.12), value: isTargeted)
+        // Confirma com a contagem antes de mover — pedido da Vanessa. Mesmo
+        // desenho do "Fechar semana": pergunta no título, número na mensagem.
+        .alert(MoveAllPrompt.title(target),
+               isPresented: Binding(get: { destinoPendente != nil },
+                                    set: { if !$0 { destinoPendente = nil } }),
+               presenting: destinoPendente) { destino in
+            Button("Cancelar", role: .cancel) {}
+            Button("Mover") { onMoveAll(destino) }
+        } message: { destino in
+            Text(MoveAllPrompt.message(total: total, visivel: count, from: target, to: destino))
+        }
+    }
+
+    /// O botão do topo da coluna: escolhe o destino, e só então confirma.
+    /// Encalhadas aparece como origem e nunca como destino (ver
+    /// `BoardMoveLogic.destinos`).
+    private var moveAllMenu: some View {
+        Menu {
+            ForEach(BoardMoveLogic.destinos(from: target)) { destino in
+                Button { destinoPendente = destino } label: {
+                    Label(destino.label, systemImage: "arrow.forward")
+                }
+            }
+        } label: {
+            Image(systemName: "text.line.first.and.arrowtriangle.forward")
+                .font(.caption)
+                .foregroundStyle(alert ? AnyShapeStyle(.red) : AnyShapeStyle(.tertiary))
+                // Alvo de toque decente sem empurrar o cabeçalho pra baixo.
+                .frame(width: 26, height: 22)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Mover todos os cards de \(BoardMoveLogic.rotulo(target))")
     }
 }
 
