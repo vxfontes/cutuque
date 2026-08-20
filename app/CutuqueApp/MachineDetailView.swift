@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Um host aberto: terminal livre e navegação de arquivos, no mesmo lugar.
 ///
-/// Os três painéis ficam MONTADOS ao mesmo tempo e alterna-se a opacidade
+/// Os quatro painéis ficam MONTADOS ao mesmo tempo e alterna-se a opacidade
 /// (molde do `SessionDetailPane`). Não é economia de código — é a única forma
 /// de trocar de painel sem consequência: desmontar o terminal fecharia o
 /// WebSocket, e o hub mata o `ssh` junto (sessão efêmera, sem tmux para
@@ -56,10 +56,19 @@ struct MachineDetailView: View {
     private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
     private var fontPt: CGFloat { CGFloat(isPad ? fontPad : fontPhone) }
 
-    private var pane: MachinePane { MachinePane(rawValue: paneRaw) ?? .terminal }
+    private var pane: MachinePane {
+        guard let stored = MachinePane(rawValue: paneRaw) else { return .terminal }
+        // Uma preferência gravada no iPad não pode deixar o painel vazio ao
+        // abrir a mesma máquina no iPhone, onde o Code Server não é oferecido.
+        guard stored != .codeServer || isPad else { return .terminal }
+        return stored
+    }
     private var showsTerminal: Bool { pane == .terminal }
     private var showsFiles: Bool { pane == .files }
     private var showsDiff: Bool { pane == .diff }
+    private var showsCodeServer: Bool {
+        isPad && pane == .codeServer
+    }
 
     /// Identidade desta aba no registro da chrome (`NavigationState`) — MESMA
     /// forma que `RootSplitView` usa pra abrir a aba de máquina
@@ -75,7 +84,7 @@ struct MachineDetailView: View {
     /// (não há UI test aqui).
     private var chaveDaAba: ChaveDeAba { .maquina(machine.name) }
 
-    /// Os três painéis desta aba, para a `ChromeDaAba`. `static` e sem
+    /// Os quatro painéis desta aba, para a `ChromeDaAba`. `static` e sem
     /// depender de `self`: o que existe (Terminal, Arquivos) não muda com a
     /// máquina, só a persistência de qual está escolhido — dá pra testar sem
     /// hospedar a view. Ids são o `rawValue` de `MachinePane` de propósito: é
@@ -83,7 +92,10 @@ struct MachineDetailView: View {
     /// traduzir a escolha da chrome de volta pro enum — se um dia divergirem,
     /// tocar no seletor não muda painel nenhum, silenciosamente.
     static func segmentosDeChrome() -> [SegmentoDeChrome] {
-        return MachinePane.allCases.map {
+        let paineis = UIDevice.current.userInterfaceIdiom == .pad
+            ? MachinePane.allCases
+            : MachinePane.allCases.filter { $0 != .codeServer }
+        return paineis.map {
             SegmentoDeChrome(id: $0.rawValue, titulo: $0.label, simbolo: $0.symbol)
         }
     }
@@ -134,6 +146,12 @@ struct MachineDetailView: View {
                 .opacity(showsDiff ? 1 : 0)
                 .allowsHitTesting(showsDiff)
                 .accessibilityHidden(!showsDiff)
+
+            CodeServerView(machine: machine.name,
+                           isActive: showsCodeServer && paneState == .ativo && naTela)
+                .opacity(showsCodeServer ? 1 : 0)
+                .allowsHitTesting(showsCodeServer)
+                .accessibilityHidden(!showsCodeServer)
 
         }
         // String variável, nunca `if/else` embrulhando o modifier: o `owns`

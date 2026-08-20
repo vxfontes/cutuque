@@ -404,6 +404,14 @@ struct Machine: Decodable, Identifiable, Hashable {
     var displayIcon: String { MachineIcon.symbol(escolhido: icon, os: os) }
 }
 
+/// Resposta do início sob demanda do Code Server.
+/// A URL vem pronta do hub; `URL` mantém a validação e o carregamento nas
+/// APIs do sistema, sem parser próprio no app.
+struct CodeServerStartResponse: Codable, Equatable {
+    let url: URL
+    let state: String
+}
+
 /// Alcance de uma máquina — o que `GET /machines/reachability` devolve, uma
 /// linha por máquina cadastrada como alvo.
 ///

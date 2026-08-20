@@ -462,6 +462,41 @@ struct APIClient {
         )
     }
 
+    /// Inicia o Code Server na máquina e devolve a URL HTTPS da instância.
+    /// `POST /machines/{machine}/code-server` (Bearer), corpo `{"dir": ...}`.
+    func startCodeServer(machine: String, dir: String) async throws -> CodeServerStartResponse {
+        let url = baseURL
+            .appendingPathComponent("machines")
+            .appendingPathComponent(machine)
+            .appendingPathComponent("code-server")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = try JSONEncoder().encode(["dir": dir])
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        switch http.statusCode {
+        case 200, 201:
+            let result = try JSONDecoder.cutuque.decode(CodeServerStartResponse.self, from: data)
+            guard result.url.scheme?.lowercased() == "https", result.url.host != nil else {
+                throw URLError(.unsupportedURL)
+            }
+            return result
+        case 404:
+            throw CutuqueError.notFound
+        case 502, 503:
+            throw CutuqueError.server(status: http.statusCode,
+                                      message: "a máquina não respondeu (tente de novo)")
+        default:
+            throw CutuqueError.unexpected(status: http.statusCode)
+        }
+    }
+
     // MARK: - Aba Máquinas
 
     /// GET autenticado que decodifica JSON, usado pelos endpoints da aba

@@ -63,13 +63,14 @@ enum PaneMode: String, CaseIterable {
 /// Fica **por host** (`@AppStorage`, chave por nome): quem usa uma máquina para
 /// editar arquivo e outra para rodar comando não quer o mesmo painel nas duas.
 enum MachinePane: String, CaseIterable {
-    case terminal, files, diff
+    case terminal, files, diff, codeServer
 
     var label: String {
         switch self {
         case .terminal: return "Terminal"
         case .files:    return "Arquivos"
         case .diff:     return "Diff"
+        case .codeServer: return "Editor"
         }
     }
 
@@ -78,6 +79,7 @@ enum MachinePane: String, CaseIterable {
         case .terminal: return "apple.terminal"
         case .files:    return "folder"
         case .diff:     return "arrow.left.arrow.right"
+        case .codeServer: return "chevron.left.forwardslash.chevron.right"
         }
     }
 
