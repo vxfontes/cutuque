@@ -5,10 +5,50 @@ enviar o build pelo App Store Connect.
 
 ## Estado atual (já pronto no repo)
 
-- [x] **Versão / build:** `CFBundleShortVersionString 2.7.2`, `CFBundleVersion 22`
+- [x] **Versão / build:** `CFBundleShortVersionString 2.8.0`, `CFBundleVersion 25`
       (iOS, watchOS e widget alinhados — ver `app/project.yml`). Lembrete: subir o
       `CFBundleVersion` a cada upload novo ao TestFlight — o número precisa ser
       único **dentro do trem daquela versão curta**, não globalmente.
+      **2.8.0 aberta em 2026-08-20**, no `master`: **minor** — três capacidades
+      novas e visíveis, nenhum conserto de app no meio. (1) **Painel Diff** por
+      máquina na aba Máquinas (`dc7c884`), nativo, iPhone e iPad. (2) **Painel
+      Editor** (`ef07f1c`), code-server sob demanda numa WebView, **só no iPad**.
+      (3) **"Mover tudo"** no topo de cada coluna do board — um toque move a coluna
+      inteira para outra, com confirmação que diz a contagem; existe no app e no
+      dashboard, e a Encalhadas serve **só como origem**. Suíte **603/603**, e
+      revalidada depois de regerar os dois `.xcodeproj` com xcodegen.
+      ⚠️ **Esta versão depende de hub novo, e o hub novo NÃO está no ar.** Os três
+      recursos batem em endpoints que existem só no `master` **local** — sem push e
+      sem deploy no macmini: o git diff por máquina (`5b77b97`), o code-server sob
+      demanda (`39ba2b9`) e o `POST /board/columns/{coluna}/move-all`. Instalar a
+      2.8.0 sem subir a imagem dá Diff vazio, Editor que não abre e "mover tudo"
+      **silencioso** — no board do app o `errorText` só é desenhado quando a lista
+      está vazia, então falha de rede com cards na tela não mostra nada (buraco
+      antigo, vale para `move` e `drop` também). Deploy **antes** de conferir no
+      aparelho.
+      ⚠️ **O app do relógio não foi compilado nesta máquina.** O SDK watchOS 26.2
+      existe, mas **não há runtime de watchsimulator instalado**, e sem ele o
+      catálogo de assets do `CutuqueWatch` não compila — é a mesma razão de existir
+      o `project.testes.yml` (projeto irmão sem a dependência do relógio, usado pra
+      rodar a suíte). O bump do relógio foi feito e conferido no plist; a compilação
+      dele fica pro archive, na máquina dela.
+      ⚠️ **O build 24 pode ter subido.** A 2.7.4 fechou escopo e o card do archive
+      dela (`b9424c76a005fca8`) está arquivado — nas levas anteriores isso significou
+      que ela gerou o archive. Risco assimétrico, o mesmo raciocínio do bump da
+      2.7.4: se o 24 não subiu, bumpar não custa nada; se subiu, não bumpar quebra o
+      upload. Bumpado.
+      **2.7.4 (24) e 2.7.3 (23) — registradas aqui retroativamente em 2026-08-20.**
+      O bump das duas foi feito na época e o texto nesta seção não; por isso o
+      cabeçalho acima ficou parado na 2.7.2/22 por quatro versões. A **2.7.3**
+      (`b03034e`): indicador de alcance na aba Máquinas e seletor da chrome
+      centralizado no iPad. A **2.7.4** (`3eab9b9`): aviso quando o swipe "Concluir"
+      é recusado (`1bdc473`), espelho ao vivo reagindo ao movimento em vez de esperar
+      o relógio (`e1f6706`) e navegador de arquivos subindo de pasta (`1fc0f48`),
+      com suíte 587/587 na época. ⚠️ Não dá para afirmar daqui qual imagem de hub
+      está em produção — o `/health` do 100.100.125.103:8787 só responde
+      `{"service":"cutuque-hub","status":"ok"}`, sem versão. A leva da 2.7.4 mexeu no
+      hub junto (`df10ced`, CAS no Resolve), então **se** aquela imagem não subiu, o
+      aviso do swipe "Concluir" da 2.7.4 também está esperando deploy.
       **2.7.2 aberta em 2026-08-13 (madrugada)**, no `master`: **patch** — um
       conserto só. **⌘⇧T era no-op silencioso numa aba ao vivo**: o atalho escrevia
       `paneMode = .chat` na mão, o painel clampava de volta pra `.terminal` ao
