@@ -236,3 +236,148 @@ func mustTime(t *testing.T, day string) time.Time {
 	}
 	return d
 }
+
+// TestBoardMoveAllMoveColunaInteira é o caminho felizardo do botão "mover
+// tudo" do topo da coluna: todos os cards da origem chegam no destino, e a
+// resposta diz quantos foram.
+func TestBoardMoveAllMoveColunaInteira(t *testing.T) {
+	st := board.New()
+	a := st.Add(board.NewTask{Title: "a", Group: "g", Session: "s"})
+	b := st.Add(board.NewTask{Title: "b", Group: "g", Session: "s"})
+	feito := "feito"
+	st.Update(a.ID, &feito, nil, nil, nil, "cutuque")
+	st.Update(b.ID, &feito, nil, nil, nil, "cutuque")
+	// Um card fora da origem, para provar que o lote não varre o quadro todo.
+	fora := st.Add(board.NewTask{Title: "fora", Group: "g", Session: "s"})
+
+	req := httptest.NewRequest(http.MethodPost, "/board/columns/feito/move-all",
+		bytes.NewBufferString(`{"to":"concluido","actor":"cutuque"}`))
+	req.SetPathValue("column", "feito")
+	rec := httptest.NewRecorder()
+	BoardMoveAllHandler(st).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d (body %s)", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Moved int `json:"moved"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if out.Moved != 2 {
+		t.Fatalf("moved: %d, queria 2 (body %s)", out.Moved, rec.Body.String())
+	}
+	for _, id := range []string{a.ID, b.ID} {
+		got, _ := st.Get(id)
+		if got.Column != "concluido" {
+			t.Fatalf("card %s ficou em %q, queria concluido", got.Title, got.Column)
+		}
+	}
+	if got, _ := st.Get(fora.ID); got.Column != "a_fazer" {
+		t.Fatalf("card de fora da origem foi movido: %q", got.Column)
+	}
+}
+
+// TestBoardMoveAllNaoVarreEncalhadosDeAFazer: no dashboard e no app "A fazer"
+// exclui os encalhados (`!(col === 'a_fazer' && t.encalhada)`), que aparecem
+// numa faixa própria. O lote move o que a coluna MOSTRA — então encalhado não
+// vai junto.
+func TestBoardMoveAllNaoVarreEncalhadosDeAFazer(t *testing.T) {
+	st := board.New()
+	normal := st.Add(board.NewTask{Title: "normal", Group: "g", Session: "s"})
+	preso := st.Add(board.NewTask{Title: "preso", Group: "g", Session: "s"})
+	st.SetEncalhada(preso.ID, true, "cutuque")
+
+	req := httptest.NewRequest(http.MethodPost, "/board/columns/a_fazer/move-all",
+		bytes.NewBufferString(`{"to":"em_progresso","actor":"cutuque"}`))
+	req.SetPathValue("column", "a_fazer")
+	rec := httptest.NewRecorder()
+	BoardMoveAllHandler(st).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d (body %s)", rec.Code, rec.Body.String())
+	}
+	if got, _ := st.Get(normal.ID); got.Column != "em_progresso" {
+		t.Fatalf("card normal não moveu: %q", got.Column)
+	}
+	got, _ := st.Get(preso.ID)
+	if got.Column != "a_fazer" || !got.Encalhada {
+		t.Fatalf("encalhado foi varrido junto: column=%q encalhada=%v", got.Column, got.Encalhada)
+	}
+}
+
+// TestBoardMoveAllEncalhadasComoOrigem: "Encalhadas" não é coluna do hub, é o
+// predicado `encalhada == true`. Como ORIGEM vale (esvaziar a faixa); o move
+// já limpa a marca.
+func TestBoardMoveAllEncalhadasComoOrigem(t *testing.T) {
+	st := board.New()
+	preso := st.Add(board.NewTask{Title: "preso", Group: "g", Session: "s"})
+	st.SetEncalhada(preso.ID, true, "cutuque")
+	normal := st.Add(board.NewTask{Title: "normal", Group: "g", Session: "s"})
+
+	req := httptest.NewRequest(http.MethodPost, "/board/columns/encalhadas/move-all",
+		bytes.NewBufferString(`{"to":"em_progresso","actor":"cutuque"}`))
+	req.SetPathValue("column", "encalhadas")
+	rec := httptest.NewRecorder()
+	BoardMoveAllHandler(st).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d (body %s)", rec.Code, rec.Body.String())
+	}
+	got, _ := st.Get(preso.ID)
+	if got.Column != "em_progresso" || got.Encalhada {
+		t.Fatalf("encalhado não foi movido/limpo: column=%q encalhada=%v", got.Column, got.Encalhada)
+	}
+	if n, _ := st.Get(normal.ID); n.Column != "a_fazer" {
+		t.Fatalf("card não-encalhado foi movido: %q", n.Column)
+	}
+}
+
+// TestBoardMoveAllRecusaDestinoInvalido cobre a decisão dela: Encalhadas serve
+// de origem, nunca de destino (marcar um lote como encalhado não é operação
+// útil). Coluna inexistente cai no mesmo guard.
+func TestBoardMoveAllRecusaDestinoInvalido(t *testing.T) {
+	for _, destino := range []string{"encalhadas", "zzz", ""} {
+		st := board.New()
+		st.Add(board.NewTask{Title: "a", Group: "g", Session: "s"})
+		req := httptest.NewRequest(http.MethodPost, "/board/columns/a_fazer/move-all",
+			bytes.NewBufferString(`{"to":"`+destino+`"}`))
+		req.SetPathValue("column", "a_fazer")
+		rec := httptest.NewRecorder()
+		BoardMoveAllHandler(st).ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("destino %q: status %d, queria 400", destino, rec.Code)
+		}
+	}
+}
+
+// TestBoardMoveAllRecusaOrigemIgualDestino: mover a coluna para ela mesma não
+// é operação — seria só poluir o log de atividade de todo card.
+func TestBoardMoveAllRecusaOrigemIgualDestino(t *testing.T) {
+	st := board.New()
+	a := st.Add(board.NewTask{Title: "a", Group: "g", Session: "s"})
+	req := httptest.NewRequest(http.MethodPost, "/board/columns/a_fazer/move-all",
+		bytes.NewBufferString(`{"to":"a_fazer"}`))
+	req.SetPathValue("column", "a_fazer")
+	rec := httptest.NewRecorder()
+	BoardMoveAllHandler(st).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, queria 400", rec.Code)
+	}
+	if got, _ := st.Get(a.ID); len(got.Activity) != 1 {
+		t.Fatalf("log de atividade poluído: %d entradas", len(got.Activity))
+	}
+}
+
+// TestBoardMoveAllRecusaOrigemInvalida: origem tem que ser coluna do hub ou a
+// faixa "encalhadas".
+func TestBoardMoveAllRecusaOrigemInvalida(t *testing.T) {
+	st := board.New()
+	req := httptest.NewRequest(http.MethodPost, "/board/columns/zzz/move-all",
+		bytes.NewBufferString(`{"to":"feito"}`))
+	req.SetPathValue("column", "zzz")
+	rec := httptest.NewRecorder()
+	BoardMoveAllHandler(st).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, queria 400", rec.Code)
+	}
+}

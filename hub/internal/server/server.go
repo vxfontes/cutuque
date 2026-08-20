@@ -366,6 +366,10 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		if !rc.publico {
 			mux.Handle("POST /board/tasks", BoardCreateHandler(rc.board))
 			mux.Handle("PATCH /board/tasks/{id}", BoardPatchHandler(rc.board))
+			// Mover a coluna inteira de uma vez (botão no topo da coluna, no
+			// dashboard e no app). É escrita como o PATCH, então segue a mesma
+			// regra de token: some junto no modo público.
+			mux.Handle("POST /board/columns/{column}/move-all", BoardMoveAllHandler(rc.board))
 			mux.Handle("POST /board/tasks/{id}/comments", BoardCommentHandler(rc.board))
 		}
 		// DELETE exige token: só a mantenedora (dashboard/app, com token injetado) apaga

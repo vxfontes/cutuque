@@ -212,3 +212,62 @@ func BoardDeleteHandler(st board.Store) http.HandlerFunc {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
+
+// encalhadasLane é a faixa "Encalhadas" do board. NÃO é coluna do hub: é o
+// predicado `encalhada == true` sobre cards que seguem em a_fazer.
+const encalhadasLane = "encalhadas"
+
+// naFaixa diz se t aparece na faixa `from` do quadro. Espelha a regra que os
+// dois clientes já aplicam ao render — dashboard
+// (`!(col === 'a_fazer' && t.encalhada)`) e app
+// (`!($0.isEncalhada && column == .aFazer)`): "A fazer" NÃO mostra encalhado,
+// que tem faixa própria. O lote move o que a coluna mostra, então a regra
+// precisa ser a mesma; agora ela existe num lugar só.
+func naFaixa(t board.Task, from string) bool {
+	if from == encalhadasLane {
+		return t.Encalhada
+	}
+	return t.Column == from && !(from == "a_fazer" && t.Encalhada)
+}
+
+// BoardMoveAllHandler move de uma vez todos os cards de uma coluna para outra
+// (botão "mover tudo" no topo da coluna, no dashboard e no app).
+func BoardMoveAllHandler(st board.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		from := r.PathValue("column")
+		if from != encalhadasLane && !board.ValidColumn(from) {
+			writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "invalid_column"})
+			return
+		}
+		var in struct {
+			To    string `json:"to"`
+			Actor string `json:"actor"` // quem fez a ação (log de atividade)
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in) != nil {
+			writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+			return
+		}
+		// Encalhadas serve de ORIGEM (esvaziar a faixa), nunca de destino: marcar
+		// um lote como encalhado não é operação útil. Como não é coluna do hub,
+		// ValidColumn já a recusa aqui — junto com qualquer nome inexistente.
+		if !board.ValidColumn(in.To) {
+			writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "invalid_column"})
+			return
+		}
+		// Mover a coluna para ela mesma só poluiria o log de atividade de todo card.
+		if in.To == from {
+			writeJSONResp(w, http.StatusBadRequest, map[string]string{"error": "same_column"})
+			return
+		}
+		moved := 0
+		for _, t := range st.List() {
+			if !naFaixa(t, from) {
+				continue
+			}
+			if _, ok := st.Update(t.ID, &in.To, nil, nil, nil, in.Actor); ok {
+				moved++
+			}
+		}
+		writeJSONResp(w, http.StatusOK, map[string]int{"moved": moved})
+	}
+}
