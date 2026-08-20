@@ -11,6 +11,7 @@ import (
 	"github.com/vxfontes/cutuque/hub/internal/adapter/claudecode"
 	"github.com/vxfontes/cutuque/hub/internal/launcher"
 	"github.com/vxfontes/cutuque/hub/internal/machine"
+	"github.com/vxfontes/cutuque/hub/internal/session"
 )
 
 // MachinesHandler lista as máquinas que o hub conhece, como recurso rico (nome,
@@ -66,6 +67,34 @@ func FilesHandler(lch Launcher) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadGateway, "fs_failed")
 		default:
 			writeJSONResp(w, http.StatusOK, listing)
+		}
+	}
+}
+
+// GitDiffHandler devolve status e diff ANSI de um diretório Git. A consulta é
+// um único request ao alvo; ausência de repositório é um estado 200 retornado
+// pelo adapter, não uma falha HTTP.
+//
+//	GET /machines/{machine}/git/diff?dir=/Users/vx/projeto
+//	→ 200 {dir,root,state,files,diff,truncated} | 400 | 404 | 502
+func GitDiffHandler(lch Launcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		dir := r.URL.Query().Get("dir")
+		if dir == "" {
+			writeJSONError(w, http.StatusBadRequest, "bad_request")
+			return
+		}
+		result, err := lch.GitDiff(r.PathValue("machine"), dir)
+		switch {
+		case errors.Is(err, launcher.ErrUnknownMachine):
+			writeJSONError(w, http.StatusNotFound, "unknown_machine")
+		case err != nil:
+			writeJSONError(w, http.StatusBadGateway, "git_failed")
+		default:
+			if result.Files == nil {
+				result.Files = []session.GitFileChange{}
+			}
+			writeJSONResp(w, http.StatusOK, result)
 		}
 	}
 }

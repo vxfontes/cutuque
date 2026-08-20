@@ -35,6 +35,20 @@ type scriptTarget struct {
 	lastModel string
 }
 
+type gitDiffTarget struct {
+	*scriptTarget
+	result session.GitDiff
+	err    error
+	gotDir string
+	gotCtx context.Context
+}
+
+func (t *gitDiffTarget) GitDiff(ctx context.Context, dir string) (session.GitDiff, error) {
+	t.gotCtx = ctx
+	t.gotDir = dir
+	return t.result, t.err
+}
+
 func (s *scriptTarget) Name() string { return s.name }
 
 func (s *scriptTarget) Kind() string { return "claude-code" }
@@ -128,6 +142,32 @@ func TestLaunchUnknownMachine(t *testing.T) {
 	_, err := l.Launch(context.Background(), "inexistente", "claude-code", "faça algo", "", "", "", "")
 	if err != ErrUnknownMachine {
 		t.Errorf("err = %v, quero ErrUnknownMachine", err)
+	}
+}
+
+func TestGitDiffDelegatesToTargetWithDiscoverTimeout(t *testing.T) {
+	base := &scriptTarget{name: "macbook", run: permissionScript, captured: make(chan string, 1)}
+	tgt := &gitDiffTarget{scriptTarget: base, result: session.GitDiff{State: "clean"}}
+	l, _ := newTestLauncher(tgt)
+
+	got, err := l.GitDiff("macbook", "/workspace/projeto")
+	if err != nil {
+		t.Fatalf("GitDiff falhou: %v", err)
+	}
+	if got.State != "clean" || tgt.gotDir != "/workspace/projeto" {
+		t.Fatalf("resultado/diretório incorretos: %+v, %q", got, tgt.gotDir)
+	}
+	deadline, ok := tgt.gotCtx.Deadline()
+	if !ok || time.Until(deadline) > discoverTimeout || time.Until(deadline) <= 0 {
+		t.Fatalf("contexto não recebeu discoverTimeout: %v", deadline)
+	}
+}
+
+func TestGitDiffUnknownMachine(t *testing.T) {
+	l, _ := newTestLauncher(nil)
+	_, err := l.GitDiff("inexistente", "/repo")
+	if err != ErrUnknownMachine {
+		t.Fatalf("err = %v, quero ErrUnknownMachine", err)
 	}
 }
 

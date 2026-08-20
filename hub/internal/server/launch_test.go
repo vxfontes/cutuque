@@ -40,6 +40,8 @@ type fakeLauncher struct {
 
 	fileListing session.FileListing
 	fsErr       error
+	gitDiff     session.GitDiff
+	gitErr      error
 	fileContent session.FileContent
 	readErr     error
 	fileWrite   session.FileWrite
@@ -79,6 +81,7 @@ type fakeLauncher struct {
 	gotHistoryID                            string
 	gotDirsMachine, gotDirsPath             string
 	gotFsMachine, gotFsPath                 string
+	gotGitMachine, gotGitDir                string
 	gotReadMachine, gotReadPath             string
 	gotWriteMachine, gotWritePath           string
 	gotWriteContent                         []byte
@@ -117,6 +120,10 @@ func (f *fakeLauncher) ListDirs(machine, path string) (session.DirListing, error
 func (f *fakeLauncher) ListFiles(machine, path string) (session.FileListing, error) {
 	f.gotFsMachine, f.gotFsPath = machine, path
 	return f.fileListing, f.fsErr
+}
+func (f *fakeLauncher) GitDiff(machine, dir string) (session.GitDiff, error) {
+	f.gotGitMachine, f.gotGitDir = machine, dir
+	return f.gitDiff, f.gitErr
 }
 func (f *fakeLauncher) ReadFile(machine, path string) (session.FileContent, error) {
 	f.gotReadMachine, f.gotReadPath = machine, path
@@ -240,6 +247,66 @@ func do(t *testing.T, lch Launcher, method, path, body string) *httptest.Respons
 	rec := httptest.NewRecorder()
 	Router(cfg, reg, lch).ServeHTTP(rec, req)
 	return rec
+}
+
+func TestGetGitDiffDevolveStatusEDiff(t *testing.T) {
+	f := &fakeLauncher{gitDiff: session.GitDiff{
+		Dir: "/repo", Root: "/repo", State: "changes",
+		Files: []session.GitFileChange{{Path: "main.go", Worktree: "modified"}},
+		Diff:  "\x1b[31m-old\n\x1b[32m+new",
+	}}
+	rec := do(t, f, http.MethodGet, "/machines/macbook/git/diff?dir=%2Frepo", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, esperava 200: %s", rec.Code, rec.Body.String())
+	}
+	if f.gotGitMachine != "macbook" || f.gotGitDir != "/repo" {
+		t.Fatalf("machine/dir repassados errados: %q %q", f.gotGitMachine, f.gotGitDir)
+	}
+	var got session.GitDiff
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("json inválido: %v", err)
+	}
+	if got.State != "changes" || len(got.Files) != 1 || !strings.Contains(got.Diff, "\x1b[") {
+		t.Fatalf("retrato incorreto: %+v", got)
+	}
+}
+
+func TestGetGitDiffNaoRepositorioDevolve200ComEstado(t *testing.T) {
+	f := &fakeLauncher{gitDiff: session.GitDiff{Dir: "/tmp", State: "not_a_repository", Files: []session.GitFileChange{}}}
+	rec := do(t, f, http.MethodGet, "/machines/macbook/git/diff?dir=%2Ftmp", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, esperava 200: %s", rec.Code, rec.Body.String())
+	}
+	var got session.GitDiff
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.State != "not_a_repository" || got.Files == nil || got.Diff != "" {
+		t.Fatalf("estado não-repo incorreto: %+v", got)
+	}
+}
+
+func TestGetGitDiffSemDirDa400(t *testing.T) {
+	rec := do(t, &fakeLauncher{}, http.MethodGet, "/machines/macbook/git/diff", "")
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "bad_request") {
+		t.Fatalf("esperava 400 bad_request, veio %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetGitDiffMaquinaDesconhecidaDa404(t *testing.T) {
+	f := &fakeLauncher{gitErr: launcher.ErrUnknownMachine}
+	rec := do(t, f, http.MethodGet, "/machines/nope/git/diff?dir=%2Frepo", "")
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "unknown_machine") {
+		t.Fatalf("esperava 404 unknown_machine, veio %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetGitDiffFalhaRemotaDa502(t *testing.T) {
+	f := &fakeLauncher{gitErr: errors.New("ssh: timeout")}
+	rec := do(t, f, http.MethodGet, "/machines/macbook/git/diff?dir=%2Frepo", "")
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "git_failed") {
+		t.Fatalf("esperava 502 git_failed, veio %d: %s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestLaunchCreated(t *testing.T) {

@@ -266,6 +266,7 @@ func Router(cfg config.Config, reg *registry.Registry, lch Launcher, opts ...Rou
 		mux.Handle("GET /machines/{machine}/fs/read", requireAuth(cfg.Token, FileReadHandler(lch)))
 		mux.Handle("PUT /machines/{machine}/fs/write", requireAuth(cfg.Token, FileWriteHandler(lch)))
 		mux.Handle("GET /machines/{machine}/fs/download", requireAuth(cfg.Token, FileDownloadHandler(lch)))
+		mux.Handle("GET /machines/{machine}/git/diff", requireAuth(cfg.Token, GitDiffHandler(lch)))
 		// Terminal livre: WebSocket, bytes crus nos dois sentidos.
 		mux.Handle("GET /machines/{machine}/pty", requireAuth(cfg.Token, PTYHandler(lch, rc.wsTimeouts)))
 		mux.Handle("POST /machines/{machine}/adopt", requireAuth(cfg.Token, AdoptHandler(lch)))

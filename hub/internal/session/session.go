@@ -177,6 +177,27 @@ type FileListing struct {
 	Entries []FileEntry `json:"entries"`
 }
 
+// GitDiff é o retrato de alterações de um diretório Git remoto. O diff contém
+// SGR ANSI de propósito: o app já sabe renderizar essas sequências por meio de
+// Ansi.attributed, então o hub não interpreta nem recolore o texto.
+type GitDiff struct {
+	Dir       string          `json:"dir"`
+	Root      string          `json:"root"`
+	State     string          `json:"state"` // clean | changes | not_a_repository
+	Files     []GitFileChange `json:"files"`
+	Diff      string          `json:"diff"`
+	Truncated bool            `json:"truncated"`
+}
+
+// GitFileChange preserva as duas colunas do porcelain status sem expor o
+// código de um caractere do Git para o app. Cada coluna usa os estados
+// unchanged, modified, added, deleted, renamed, copied, untracked ou conflicted.
+type GitFileChange struct {
+	Path     string `json:"path"`
+	Index    string `json:"index"`
+	Worktree string `json:"worktree"`
+}
+
 // FileContent é o conteúdo de um arquivo lido na máquina. Binary sempre implica
 // Content vazio — o app oferece baixar em vez de renderizar. Truncated também
 // implicava Content vazio, até 12/08/2026: agora, para texto acima do teto de

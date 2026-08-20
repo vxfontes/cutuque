@@ -93,6 +93,12 @@ type FileDownloader interface {
 	DownloadFile(ctx context.Context, path string) (io.ReadCloser, error)
 }
 
+// GitDiffer lê o status e o diff de trabalho de um diretório. É opcional como
+// os demais recursos da aba Máquinas: o Launcher resolve por type assertion.
+type GitDiffer interface {
+	GitDiff(ctx context.Context, dir string) (session.GitDiff, error)
+}
+
 // ShellDialer monta o comando de um shell interativo na máquina (terminal livre
 // da aba Máquinas). Opcional como o FileLister: só os alvos por ssh
 // implementam — a máquina "local" é o próprio hub, e abrir um shell dentro do

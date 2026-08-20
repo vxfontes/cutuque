@@ -684,6 +684,23 @@ func (l *Launcher) ListFiles(machine, path string) (session.FileListing, error) 
 	return lister.ListFiles(ctx, path)
 }
 
+// GitDiff lê status e diff de um diretório Git na máquina. É uma consulta
+// curta, não um fluxo de download, portanto usa o mesmo discoverTimeout de
+// ListFiles/ReadFile.
+func (l *Launcher) GitDiff(machine, dir string) (session.GitDiff, error) {
+	tgt, ok := l.anyTarget(machine)
+	if !ok {
+		return session.GitDiff{}, ErrUnknownMachine
+	}
+	differ, ok := tgt.(claudecode.GitDiffer)
+	if !ok {
+		return session.GitDiff{}, ErrUnknownMachine
+	}
+	ctx, cancel := context.WithTimeout(l.baseCtx, discoverTimeout)
+	defer cancel()
+	return differ.GitDiff(ctx, dir)
+}
+
 // ReadFile lê um arquivo de texto na máquina (visualizador da aba Máquinas).
 // Binário volta sem conteúdo, marcado — não é erro. Texto acima do teto volta
 // com a CAUDA do arquivo (ver session.FileContent.Tail), não mais vazio

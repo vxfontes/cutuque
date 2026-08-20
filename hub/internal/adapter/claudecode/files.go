@@ -53,6 +53,125 @@ func runFiles(cmd *exec.Cmd) (session.FileListing, error) {
 	return parseFileListing(out)
 }
 
+// gitDiffScript faz status e diff dentro de um único processo remoto de
+// python3. Assim uma abertura da tela paga uma única conexão SSH, mas o
+// resultado continua sendo JSON seguro para o handler HTTP.
+const gitDiffScript = `
+import json, os, subprocess, sys
+
+MAX_DIFF_BYTES = 1048576
+requested = sys.argv[1] if len(sys.argv) > 1 else ''
+env = os.environ.copy()
+env['LC_ALL'] = 'C'
+env['LANG'] = 'C'
+
+def emit(value):
+    print(json.dumps(value, ensure_ascii=False))
+
+def fail():
+    emit({'error': 'git_failed'})
+
+def run(args):
+    try:
+        return subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    except OSError:
+        return None
+
+def status_name(code):
+    return {
+        ' ': 'unchanged', 'M': 'modified', 'A': 'added', 'D': 'deleted',
+        'R': 'renamed', 'C': 'copied', 'U': 'conflicted', '?': 'untracked'
+    }.get(code, 'conflicted')
+
+base = ['git', '-C', requested]
+root = run(base + ['rev-parse', '--show-toplevel'])
+if root is None:
+    fail()
+    sys.exit(0)
+if root.returncode != 0:
+    message = root.stderr.decode('utf-8', 'replace').lower()
+    if 'not a git repository' in message:
+        emit({'dir': requested, 'root': '', 'state': 'not_a_repository', 'files': [], 'diff': '', 'truncated': False})
+    else:
+        fail()
+    sys.exit(0)
+
+status = run(base + ['status', '--porcelain=v1', '-z', '--untracked-files=normal'])
+if status is None or status.returncode != 0:
+    fail()
+    sys.exit(0)
+
+files = []
+parts = status.stdout.split(b'\0')
+i = 0
+while i < len(parts):
+    raw = parts[i]
+    i += 1
+    if not raw:
+        continue
+    text = raw.decode('utf-8', 'replace')
+    code = text[:2]
+    path = text[3:] if len(text) > 3 else ''
+    if code == '??':
+        files.append({'path': path, 'index': 'unchanged', 'worktree': 'untracked'})
+    else:
+        files.append({'path': path, 'index': status_name(code[:1]), 'worktree': status_name(code[1:2])})
+        if code[:1] in ('R', 'C') and i < len(parts):
+            i += 1
+
+diff_cmd = ['git', '--no-pager', '-c', 'color.ui=always', '-C', requested, 'diff', '--no-ext-diff', '--']
+try:
+    process = subprocess.Popen(diff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    data = process.stdout.read(MAX_DIFF_BYTES + 1)
+    truncated = len(data) > MAX_DIFF_BYTES
+    if truncated:
+        process.kill()
+        process.communicate()
+        data = data[:MAX_DIFF_BYTES]
+    else:
+        _, stderr = process.communicate()
+        if process.returncode != 0:
+            fail()
+            sys.exit(0)
+except OSError:
+    fail()
+    sys.exit(0)
+
+diff = data.decode('utf-8', 'replace')
+if truncated:
+    diff += '\x1b[0m'
+emit({'dir': requested, 'root': root.stdout.decode('utf-8', 'replace').strip(),
+      'state': 'changes' if files else 'clean', 'files': files, 'diff': diff,
+      'truncated': truncated})
+`
+
+func runGitDiff(cmd *exec.Cmd) (session.GitDiff, error) {
+	cmd.Env = childEnv()
+	cmd.Stdin = strings.NewReader(gitDiffScript)
+	out, err := cmd.Output()
+	if err != nil {
+		return session.GitDiff{}, err
+	}
+	return parseGitDiff(out)
+}
+
+func parseGitDiff(out []byte) (session.GitDiff, error) {
+	var result struct {
+		session.GitDiff
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return session.GitDiff{}, err
+	}
+	if result.Error != "" {
+		return session.GitDiff{}, fmt.Errorf("git: %s", result.Error)
+	}
+	if result.Files == nil {
+		result.Files = []session.GitFileChange{}
+	}
+	return result.GitDiff, nil
+}
+
 // parseFileListing converte o JSON emitido pelo script em session.FileListing.
 // Saída vazia devolve listagem vazia sem erro.
 func parseFileListing(out []byte) (session.FileListing, error) {
@@ -265,6 +384,11 @@ func (t *LocalTarget) WriteFile(ctx context.Context, path string, content []byte
 	return runWrite(exec.CommandContext(ctx, "python3", "-", path), content)
 }
 
+// GitDiff lê status e diff de um diretório na máquina LOCAL.
+func (t *LocalTarget) GitDiff(ctx context.Context, dir string) (session.GitDiff, error) {
+	return runGitDiff(exec.CommandContext(ctx, "python3", "-", dir))
+}
+
 // DownloadFile traz os bytes crus de um arquivo na máquina LOCAL, EM FLUXO. Usa
 // cat em vez do python3: aqui não há nada para decidir, e cat não carrega o
 // arquivo inteiro na memória do processo filho. Atualizado em 12/08/2026: o hub
@@ -298,6 +422,17 @@ func (t *SSHTarget) ReadFile(ctx context.Context, path string) (session.FileCont
 func (t *SSHTarget) WriteFile(ctx context.Context, path string, content []byte) (session.FileWrite, error) {
 	args := append(t.sshOpts(), "--", t.dest, "python3 - "+singleQuote(path))
 	return runWrite(exec.CommandContext(ctx, t.prog, args...), content)
+}
+
+// gitDiffArgs monta os argumentos do SSH para a consulta Git. O diretório é
+// um argumento da shell remota, nunca texto interpolado sem singleQuote.
+func (t *SSHTarget) gitDiffArgs(dir string) []string {
+	return append(t.sshOpts(), "--", t.dest, "python3 - "+singleQuote(dir))
+}
+
+// GitDiff lê status e diff de um diretório remoto em uma única conexão SSH.
+func (t *SSHTarget) GitDiff(ctx context.Context, dir string) (session.GitDiff, error) {
+	return runGitDiff(exec.CommandContext(ctx, t.prog, t.gitDiffArgs(dir)...))
 }
 
 // downloadArgs monta os args do ssh do download. Isolado para ser testável sem

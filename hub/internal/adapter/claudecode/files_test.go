@@ -70,6 +70,90 @@ func TestSSHListFilesArgsMandamCaminhoComoArgumentoQuotado(t *testing.T) {
 	}
 }
 
+func TestSSHGitDiffArgsMandamDiretorioComoArgumentoQuotado(t *testing.T) {
+	tgt := NewSSHTarget("macbook", "vx@host")
+	args := tgt.gitDiffArgs("/tmp/projeto a'; echo pwned")
+	last := args[len(args)-1]
+	if !strings.HasPrefix(last, "python3 - ") {
+		t.Fatalf("último arg deve rodar o python3 com o diretório: %q", last)
+	}
+	if !strings.Contains(last, `'\''`) {
+		t.Errorf("a aspa simples do diretório não foi escapada: %q", last)
+	}
+	if strings.HasSuffix(last, "echo pwned") {
+		t.Errorf("o diretório terminou fora das aspas: %q", last)
+	}
+}
+
+func TestParseGitDiffChangesANSIETiposDeStatus(t *testing.T) {
+	out := []byte(`{"dir":"/repo","root":"/repo","state":"changes","files":[
+{"path":"a.swift","index":"unchanged","worktree":"modified"},
+{"path":"novo.txt","index":"unchanged","worktree":"untracked"}],
+"diff":"\u001b[31m-old\n\u001b[32m+new","truncated":false}`)
+	got, err := parseGitDiff(out)
+	if err != nil {
+		t.Fatalf("parse falhou: %v", err)
+	}
+	if got.State != "changes" || got.Root != "/repo" || len(got.Files) != 2 {
+		t.Fatalf("envelope incorreto: %+v", got)
+	}
+	if got.Files[1].Worktree != "untracked" || !strings.Contains(got.Diff, "\x1b") {
+		t.Errorf("status/diff ANSI incorretos: %+v", got)
+	}
+}
+
+func TestParseGitDiffNaoRepositorioEVazio(t *testing.T) {
+	got, err := parseGitDiff([]byte(`{"dir":"/tmp","root":"","state":"not_a_repository","files":[],"diff":"","truncated":false}`))
+	if err != nil {
+		t.Fatalf("não repositório não deve ser erro: %v", err)
+	}
+	if got.State != "not_a_repository" || got.Diff != "" || len(got.Files) != 0 {
+		t.Errorf("estado inesperado: %+v", got)
+	}
+}
+
+func TestLocalGitDiffExecutaStatusEDiffColorido(t *testing.T) {
+	dir := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v falhou: %v (%s)", args, err, out)
+		}
+	}
+	runGit("-C", dir, "init", "-q")
+	runGit("-C", dir, "config", "user.email", "test@example.com")
+	runGit("-C", dir, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("antes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("-C", dir, "add", "tracked.txt")
+	runGit("-C", dir, "commit", "-qm", "initial")
+	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("depois\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "novo.txt"), []byte("novo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := NewLocalTarget("local").GitDiff(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("GitDiff falhou: %v", err)
+	}
+	expectedRoot, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != "changes" || got.Root != expectedRoot || len(got.Files) != 2 {
+		t.Fatalf("retrato incorreto: %+v", got)
+	}
+	if got.Files[0].Worktree != "modified" || got.Files[1].Worktree != "untracked" {
+		t.Fatalf("status incorreto: %+v", got.Files)
+	}
+	if !strings.Contains(got.Diff, "\x1b[") || !strings.Contains(got.Diff, "depois") {
+		t.Fatalf("diff não veio colorido/com conteúdo: %q", got.Diff)
+	}
+}
+
 func TestParseFileContentTexto(t *testing.T) {
 	fc, err := parseFileContent([]byte(`{"path":"/a.txt","size":5,"binary":false,"truncated":false,"content":"olá\n"}`))
 	if err != nil {

@@ -14,22 +14,23 @@ import (
 // código (e os testes) que já referenciam claudecode.Handle/Target/… seguem
 // compilando sem mudança, e o codex compartilha a mesma base.
 type (
-	Handle           = agent.Handle
-	Meta             = agent.Meta
-	Applier          = agent.Applier
-	Runner           = agent.Runner
-	Target           = agent.Target
-	Discoverer       = agent.Discoverer
-	Liver            = agent.Liver
-	TranscriptLister = agent.TranscriptLister
-	DirLister        = agent.DirLister
-	FileLister       = agent.FileLister
-	FileReader       = agent.FileReader
-	FileWriter       = agent.FileWriter
-	FileDownloader   = agent.FileDownloader
-	ShellDialer      = agent.ShellDialer
-	Transcriber      = agent.Transcriber
-	TranscriptChunk  = agent.TranscriptChunk
+	Handle            = agent.Handle
+	Meta              = agent.Meta
+	Applier           = agent.Applier
+	Runner            = agent.Runner
+	Target            = agent.Target
+	Discoverer        = agent.Discoverer
+	Liver             = agent.Liver
+	TranscriptLister  = agent.TranscriptLister
+	DirLister         = agent.DirLister
+	FileLister        = agent.FileLister
+	FileReader        = agent.FileReader
+	FileWriter        = agent.FileWriter
+	FileDownloader    = agent.FileDownloader
+	GitDiffer         = agent.GitDiffer
+	ShellDialer       = agent.ShellDialer
+	Transcriber       = agent.Transcriber
+	TranscriptChunk   = agent.TranscriptChunk
 )
 
 // childEnv/singleQuote: finos wrappers dos helpers compartilhados do pacote

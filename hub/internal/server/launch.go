@@ -39,6 +39,7 @@ type Launcher interface {
 	Live(machine, agent string) ([]session.Discovered, error)
 	ListDirs(machine, path string) (session.DirListing, error)
 	ListFiles(machine, path string) (session.FileListing, error)
+	GitDiff(machine, dir string) (session.GitDiff, error)
 	ReadFile(machine, path string) (session.FileContent, error)
 	WriteFile(machine, path string, content []byte) (session.FileWrite, error)
 	// DownloadFile devolve o arquivo EM FLUXO (12/08/2026) — quem chama tem que
