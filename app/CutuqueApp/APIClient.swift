@@ -454,6 +454,14 @@ struct APIClient {
         }
     }
 
+    /// Lê o estado Git e o diff de um diretório na máquina. `GET /machines/{machine}/git/diff?dir=`.
+    func gitDiff(machine: String, dir: String) async throws -> GitDiff {
+        try await getJSON(
+            ["machines", machine, "git", "diff"],
+            query: [URLQueryItem(name: "dir", value: dir)]
+        )
+    }
+
     // MARK: - Aba Máquinas
 
     /// GET autenticado que decodifica JSON, usado pelos endpoints da aba

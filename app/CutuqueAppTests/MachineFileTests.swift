@@ -190,6 +190,43 @@ final class MachineFileTests: XCTestCase {
         XCTAssertEqual(l.entries[1].size, 1024)
     }
 
+    // MARK: - Git diff
+
+    func testGitDiffEstadoCleanDecodifica() throws {
+        let diff: GitDiff = try decode(#"{"dir":"/repo","root":"/repo","state":"clean","files":[],"diff":"","truncated":false}"#)
+        XCTAssertEqual(diff.dir, "/repo")
+        XCTAssertEqual(diff.root, "/repo")
+        XCTAssertEqual(diff.state, "clean")
+        XCTAssertTrue(diff.files.isEmpty)
+        XCTAssertTrue(diff.diff.isEmpty)
+        XCTAssertFalse(diff.truncated)
+    }
+
+    func testGitDiffEstadoChangesDecodificaArquivosEDiff() throws {
+        let diff: GitDiff = try decode(##"""
+        {"dir":"/repo/app","root":"/repo","state":"changes","files":[
+          {"path":"Sources/App.swift","index":"unchanged","worktree":"modified"},
+          {"path":"README.md","index":"added","worktree":"unchanged"}
+        ],"diff":"\u001b[31m-old\n\u001b[32m+new","truncated":true}
+        """##)
+        XCTAssertEqual(diff.state, "changes")
+        XCTAssertEqual(diff.files.count, 2)
+        XCTAssertEqual(diff.files[0].path, "Sources/App.swift")
+        XCTAssertEqual(diff.files[0].index, "unchanged")
+        XCTAssertEqual(diff.files[0].worktree, "modified")
+        XCTAssertEqual(diff.files[1].index, "added")
+        XCTAssertEqual(diff.diff, "\u{1B}[31m-old\n\u{1B}[32m+new")
+        XCTAssertTrue(diff.truncated)
+    }
+
+    func testGitDiffEstadoNotARepositoryDecodificaSemDiff() throws {
+        let diff: GitDiff = try decode(#"{"dir":"/tmp","root":"","state":"not_a_repository","files":[],"diff":"","truncated":false}"#)
+        XCTAssertEqual(diff.state, "not_a_repository")
+        XCTAssertTrue(diff.files.isEmpty)
+        XCTAssertTrue(diff.diff.isEmpty)
+        XCTAssertFalse(diff.truncated)
+    }
+
     /// Pasta não tem tamanho para mostrar (o hub manda 0) — exibir "Zero KB"
     /// seria mentira.
     func testPastaNaoTemRotuloDeTamanho() throws {

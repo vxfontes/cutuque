@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Um host aberto: terminal livre e navegação de arquivos, no mesmo lugar.
 ///
-/// Os dois painéis ficam MONTADOS ao mesmo tempo e alterna-se a opacidade
+/// Os três painéis ficam MONTADOS ao mesmo tempo e alterna-se a opacidade
 /// (molde do `SessionDetailPane`). Não é economia de código — é a única forma
 /// de trocar de painel sem consequência: desmontar o terminal fecharia o
 /// WebSocket, e o hub mata o `ssh` junto (sessão efêmera, sem tmux para
@@ -58,6 +58,8 @@ struct MachineDetailView: View {
 
     private var pane: MachinePane { MachinePane(rawValue: paneRaw) ?? .terminal }
     private var showsTerminal: Bool { pane == .terminal }
+    private var showsFiles: Bool { pane == .files }
+    private var showsDiff: Bool { pane == .diff }
 
     /// Identidade desta aba no registro da chrome (`NavigationState`) — MESMA
     /// forma que `RootSplitView` usa pra abrir a aba de máquina
@@ -73,7 +75,7 @@ struct MachineDetailView: View {
     /// (não há UI test aqui).
     private var chaveDaAba: ChaveDeAba { .maquina(machine.name) }
 
-    /// Os dois painéis desta aba, para a `ChromeDaAba`. `static` e sem
+    /// Os três painéis desta aba, para a `ChromeDaAba`. `static` e sem
     /// depender de `self`: o que existe (Terminal, Arquivos) não muda com a
     /// máquina, só a persistência de qual está escolhido — dá pra testar sem
     /// hospedar a view. Ids são o `rawValue` de `MachinePane` de propósito: é
@@ -81,7 +83,9 @@ struct MachineDetailView: View {
     /// traduzir a escolha da chrome de volta pro enum — se um dia divergirem,
     /// tocar no seletor não muda painel nenhum, silenciosamente.
     static func segmentosDeChrome() -> [SegmentoDeChrome] {
-        MachinePane.allCases.map { SegmentoDeChrome(id: $0.rawValue, titulo: $0.label, simbolo: $0.symbol) }
+        return MachinePane.allCases.map {
+            SegmentoDeChrome(id: $0.rawValue, titulo: $0.label, simbolo: $0.symbol)
+        }
     }
 
     /// O que o terminal deve estar fazendo agora — ver `MachineTerminalLifecycle`.
@@ -113,7 +117,7 @@ struct MachineDetailView: View {
                 .accessibilityHidden(!showsTerminal)
 
             FileBrowserView(machine: machine.name, path: "",
-                            ownsNavigationTitle: false, isActive: !showsTerminal,
+                            ownsNavigationTitle: false, isActive: showsFiles,
                             carregaAgora: MachineTerminalLifecycle.carregaArquivos(
                                 paneState: paneState, pane: pane, naTela: naTela),
                             // Foco da ABA, e nada mais: `naTela` não serve aqui
@@ -121,9 +125,16 @@ struct MachineDetailView: View {
                             // empilhado por cima — que é exatamente quando um
                             // vídeo estaria tocando.
                             abaAtiva: paneState == .ativo)
-                .opacity(showsTerminal ? 0 : 1)
-                .allowsHitTesting(!showsTerminal)
-                .accessibilityHidden(showsTerminal)
+                .opacity(showsFiles ? 1 : 0)
+                .allowsHitTesting(showsFiles)
+                .accessibilityHidden(!showsFiles)
+
+            GitDiffView(machine: machine.name,
+                        isActive: showsDiff && paneState == .ativo && naTela)
+                .opacity(showsDiff ? 1 : 0)
+                .allowsHitTesting(showsDiff)
+                .accessibilityHidden(!showsDiff)
+
         }
         // String variável, nunca `if/else` embrulhando o modifier: o `owns`
         // fixo do `OwnedNavigationTitle` não se aplica aqui (esta view não usa
@@ -280,7 +291,7 @@ struct MachineDetailView: View {
         // muda pela mão da usuária, então uma escrita por montagem basta).
         .task {
             nav.definirSegmentos(Self.segmentosDeChrome(), de: chaveDaAba)
-            nav.escolher(paneRaw, de: chaveDaAba)
+            nav.escolher(pane.rawValue, de: chaveDaAba)
         }
         // A chrome escreveu: aplica no `@AppStorage` desta máquina — uma
         // direção só (a chrome nunca lê `paneRaw` direto, só o que este

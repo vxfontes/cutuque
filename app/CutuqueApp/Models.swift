@@ -634,6 +634,26 @@ struct FileListing: Decodable {
     }
 }
 
+/// Retrato do estado Git de um diretório remoto. O `diff` pode conter sequências
+/// ANSI SGR: o hub preserva o texto e a UI decide como renderizá-lo.
+struct GitDiff: Decodable {
+    let dir: String
+    let root: String
+    /// `clean`, `changes` ou `not_a_repository`.
+    let state: String
+    let files: [GitFileChange]
+    let diff: String
+    let truncated: Bool
+}
+
+/// Uma linha do `git status --porcelain` já traduzida pelo hub para estados
+/// legíveis, separando o estado do índice do estado do worktree.
+struct GitFileChange: Decodable {
+    let path: String
+    let index: String
+    let worktree: String
+}
+
 /// Conteúdo de um arquivo lido da máquina. Binário e acima do teto voltam
 /// marcados e sem conteúdo — quem decide o que mostrar é o app.
 /// Resultado de salvar um arquivo: o tamanho novo, para a tela se atualizar sem
