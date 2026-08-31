@@ -56,10 +56,24 @@ func runFiles(cmd *exec.Cmd) (session.FileListing, error) {
 // gitDiffScript faz status e diff dentro de um único processo remoto de
 // python3. Assim uma abertura da tela paga uma única conexão SSH, mas o
 // resultado continua sendo JSON seguro para o handler HTTP.
+//
+// 31/08/2026 — duas mudanças na leva do iPad:
+//
+//  1. O diff passou a ser contra HEAD (`git diff HEAD`), não contra o índice.
+//     `git diff` puro esconde o que já foi para o `git add` — inclusive um
+//     arquivo NOVO adicionado, que aparecia na lista de arquivos mas com diff
+//     vazio, o jeito mais confuso possível de errar. Repositório sem nenhum
+//     commit não tem HEAD para resolver, e aí cai de volta no `git diff` de
+//     antes.
+//  2. O diff sai SEM cor (`color.ui=never`). Quem monta a cor agora é o app,
+//     que parseia o unified diff em arquivos/hunks/linhas para poder numerar
+//     linha e navegar por arquivo — coisas que a sopa de ANSI não permitia. O
+//     app ainda tolera receber ANSI (hub antigo), mas não gera mais o custo de
+//     limpar por padrão.
 const gitDiffScript = `
 import json, os, subprocess, sys
 
-MAX_DIFF_BYTES = 1048576
+MAX_DIFF_BYTES = 4194304
 requested = sys.argv[1] if len(sys.argv) > 1 else ''
 env = os.environ.copy()
 env['LC_ALL'] = 'C'
@@ -119,7 +133,19 @@ while i < len(parts):
         if code[:1] in ('R', 'C') and i < len(parts):
             i += 1
 
-diff_cmd = ['git', '--no-pager', '-c', 'color.ui=always', '-C', requested, 'diff', '--no-ext-diff', '--']
+has_head = run(base + ['rev-parse', '--verify', '--quiet', 'HEAD'])
+against_head = has_head is not None and has_head.returncode == 0
+
+# --no-color, e nao so color.ui=never: na precedencia do git, um color.diff
+# explicito no gitconfig (local ou global) VENCE o color.ui passado por -c, e
+# a saida volta cheia de ANSI. O app tolera isso (DiffUnificado limpa o texto
+# antes de parsear), mas tolerar nao e o mesmo que nao acontecer: cada byte de
+# escape viaja pela rede e e reparseado no aparelho. --no-color e a flag que
+# nao perde para config nenhuma.
+diff_cmd = ['git', '--no-pager', '-c', 'color.ui=never', '-C', requested, 'diff', '--no-color', '--no-ext-diff']
+if against_head:
+    diff_cmd.append('HEAD')
+diff_cmd.append('--')
 try:
     process = subprocess.Popen(diff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     data = process.stdout.read(MAX_DIFF_BYTES + 1)
@@ -138,8 +164,6 @@ except OSError:
     sys.exit(0)
 
 diff = data.decode('utf-8', 'replace')
-if truncated:
-    diff += '\x1b[0m'
 emit({'dir': requested, 'root': root.stdout.decode('utf-8', 'replace').strip(),
       'state': 'changes' if files else 'clean', 'files': files, 'diff': diff,
       'truncated': truncated})

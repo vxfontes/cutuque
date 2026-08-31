@@ -112,7 +112,13 @@ func TestParseGitDiffNaoRepositorioEVazio(t *testing.T) {
 	}
 }
 
-func TestLocalGitDiffExecutaStatusEDiffColorido(t *testing.T) {
+// O diff sai SEM cor e contra HEAD (31/08/2026, leva do iPad). Os dois pontos
+// estão no MESMO teste de propósito: são a mesma decisão vista de dois lados —
+// quem colore e navega o diff agora é o app, que precisa do unified diff cru
+// para parsear arquivo/hunk/linha, e para isso o diff tem de conter também o
+// que já foi para o índice (senão um arquivo novo já adicionado aparece na
+// lista de arquivos com diff vazio, o jeito mais confuso possível de errar).
+func TestLocalGitDiffSemCorEContraHEAD(t *testing.T) {
 	dir := t.TempDir()
 	runGit := func(args ...string) {
 		t.Helper()
@@ -134,6 +140,12 @@ func TestLocalGitDiffExecutaStatusEDiffColorido(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "novo.txt"), []byte("novo\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Arquivo NOVO já adicionado ao índice: é o caso que `git diff` puro
+	// escondia por completo.
+	if err := os.WriteFile(filepath.Join(dir, "staged.txt"), []byte("staged\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("-C", dir, "add", "staged.txt")
 
 	got, err := NewLocalTarget("local").GitDiff(context.Background(), dir)
 	if err != nil {
@@ -143,14 +155,49 @@ func TestLocalGitDiffExecutaStatusEDiffColorido(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.State != "changes" || got.Root != expectedRoot || len(got.Files) != 2 {
+	if got.State != "changes" || got.Root != expectedRoot || len(got.Files) != 3 {
 		t.Fatalf("retrato incorreto: %+v", got)
 	}
-	if got.Files[0].Worktree != "modified" || got.Files[1].Worktree != "untracked" {
-		t.Fatalf("status incorreto: %+v", got.Files)
+	status := map[string][2]string{}
+	for _, f := range got.Files {
+		status[f.Path] = [2]string{f.Index, f.Worktree}
 	}
-	if !strings.Contains(got.Diff, "\x1b[") || !strings.Contains(got.Diff, "depois") {
-		t.Fatalf("diff não veio colorido/com conteúdo: %q", got.Diff)
+	if status["tracked.txt"] != [2]string{"unchanged", "modified"} {
+		t.Errorf("tracked.txt: %+v", status["tracked.txt"])
+	}
+	if status["novo.txt"] != [2]string{"unchanged", "untracked"} {
+		t.Errorf("novo.txt: %+v", status["novo.txt"])
+	}
+	if status["staged.txt"] != [2]string{"added", "unchanged"} {
+		t.Errorf("staged.txt: %+v", status["staged.txt"])
+	}
+	if strings.Contains(got.Diff, "\x1b[") {
+		t.Errorf("diff veio com ANSI e não deveria: %q", got.Diff)
+	}
+	if !strings.Contains(got.Diff, "+depois") {
+		t.Errorf("diff sem a alteração do worktree: %q", got.Diff)
+	}
+	if !strings.Contains(got.Diff, "staged.txt") || !strings.Contains(got.Diff, "+staged") {
+		t.Errorf("diff sem o arquivo já no índice (deveria ser contra HEAD): %q", got.Diff)
+	}
+}
+
+// Repositório recém-criado não tem HEAD para resolver: o script cai de volta
+// no `git diff` sem revisão em vez de falhar com git_failed.
+func TestLocalGitDiffSemCommitNaoFalha(t *testing.T) {
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init falhou: %v (%s)", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := NewLocalTarget("local").GitDiff(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("GitDiff falhou num repo sem commit: %v", err)
+	}
+	if got.State != "changes" || len(got.Files) != 1 {
+		t.Fatalf("retrato incorreto: %+v", got)
 	}
 }
 
@@ -611,5 +658,45 @@ func TestDownloadCloseSemLerTudoAindaAssimEspera(t *testing.T) {
 	}
 	if cmd.ProcessState == nil {
 		t.Error("Close() não esperou o processo (cmd.Wait)")
+	}
+}
+
+// Um `color.diff` explícito no gitconfig do repositório VENCE o `color.ui`
+// passado por `-c` — é a precedência documentada do git, e é o furo que o teste
+// acima não pegava, porque ele nunca seta color.diff. Sem `--no-color` aqui o
+// diff volta cheio de ANSI mesmo com color.ui=never na linha de comando.
+func TestLocalGitDiffIgnoraColorDiffDoConfig(t *testing.T) {
+	dir := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v falhou: %v (%s)", args, err, out)
+		}
+	}
+	runGit("-C", dir, "init", "-q")
+	runGit("-C", dir, "config", "user.email", "test@example.com")
+	runGit("-C", dir, "config", "user.name", "Test")
+	// A configuração que quebra: cor ligada à força, no nível mais específico.
+	runGit("-C", dir, "config", "color.diff", "always")
+	runGit("-C", dir, "config", "color.ui", "always")
+
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("antes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("-C", dir, "add", "a.txt")
+	runGit("-C", dir, "commit", "-qm", "initial")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("depois\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := NewLocalTarget("local").GitDiff(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("GitDiff falhou: %v", err)
+	}
+	if strings.Contains(got.Diff, "\x1b[") {
+		t.Errorf("color.diff=always vazou ANSI para o app: %q", got.Diff)
+	}
+	if !strings.Contains(got.Diff, "-antes") || !strings.Contains(got.Diff, "+depois") {
+		t.Errorf("diff sem o conteúdo esperado: %q", got.Diff)
 	}
 }

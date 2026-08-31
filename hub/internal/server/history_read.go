@@ -43,7 +43,7 @@ func queryLimit(r *http.Request, def, max int) int {
 // histórico. 200 {"sessions":[...]} | 500 history_error.
 func PastSessionsHandler(h HistoryReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ss, err := h.RecentSessions(r.Context(), queryLimit(r, 100, 500))
+		ss, err := h.RecentSessions(r.Context(), queryLimit(r, 200, 2000))
 		if err != nil {
 			writeJSONResp(w, http.StatusInternalServerError, map[string]string{"error": "history_error"})
 			return

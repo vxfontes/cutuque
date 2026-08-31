@@ -136,6 +136,14 @@ func tmuxLocalArgs(socket string, rest ...string) []string {
 
 // tmuxScrollback é quantas linhas de histórico são capturadas (scrollback do
 // tmux; note que TUIs em tela alternada não têm scrollback — ver PageUp no app).
+//
+// 31/08/2026 — este número NÃO acompanhou a subida de 500 para 2000 do
+// `maxOutputChunks`, e não é esquecimento. O espelho é um POLL: o app recaptura
+// a tela inteira a cada 500 ms enquanto ela muda (`PollPacer.piso`), então cada
+// linha a mais aqui é linha a mais trafegada duas vezes por segundo e
+// re-parseada em ANSI no aparelho. O chunk de chat é o oposto — chega uma vez e
+// fica. Subir os dois pelo mesmo motivo trocaria contexto de leitura por um
+// espelho lento, que é justamente o que a leva quer evitar.
 const tmuxScrollback = 500
 
 // tmuxAllowedKeys são as teclas nomeadas que o app pode enviar (allowlist estrita).

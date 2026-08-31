@@ -19,7 +19,7 @@ import (
 //
 // Percorre message/<sid>/*.json ordenado por time.created e, para cada mensagem,
 // suas partes em part/<msgID>/*.json ordenadas por time.start. Recebe o sid como
-// argv[1] (python3 - <sid>). Mantém só os últimos 500 chunks (teto do registry).
+// argv[1] (python3 - <sid>). Mantém só os últimos 2000 chunks (teto do registry).
 const transcriptScript = `import os,json,glob,sys
 sid=sys.argv[1] if len(sys.argv)>1 else ''
 base=os.path.expanduser('~/.local/share/opencode/storage')
@@ -68,7 +68,7 @@ if sid:
                 o=st.get('output')
                 if isinstance(o,str) and o.strip():
                     out.append({'kind':'tool_result','text':trunc(o,200)})
-print(json.dumps(out[-500:]))
+print(json.dumps(out[-2000:]))
 `
 
 // runTranscript executa o comando (python3 lendo o script pelo stdin, sid em

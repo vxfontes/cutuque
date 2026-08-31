@@ -22,7 +22,7 @@ import (
 //
 // Mensagens vêm de event_msg (texto limpo, sem o system prompt "developer") e
 // tools de response_item — fontes distintas, então não duplicam. Recebe o id
-// como argv[1] (python3 - <id>). Mantém só os últimos 500 chunks (teto do registry).
+// como argv[1] (python3 - <id>). Mantém só os últimos 2000 chunks (teto do registry).
 const transcriptScript = `import os,json,glob,sys
 sid=sys.argv[1] if len(sys.argv)>1 else ''
 def trunc(s,n):
@@ -72,7 +72,7 @@ for f in matches[:1]:
                     elif pt in ('function_call_output','custom_tool_call_output'):
                         out.append({'kind':'tool_result','text':out_text(p.get('output'))})
     except Exception: pass
-print(json.dumps(out[-500:]))
+print(json.dumps(out[-2000:]))
 `
 
 // runTranscript executa o comando (python3 lendo o script pelo stdin, id em

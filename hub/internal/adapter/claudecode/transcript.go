@@ -17,7 +17,7 @@ import (
 //   - mensagem do usuário  -> kind "user"        (pula caveats de slash-command)
 //   - thinking             -> ignorado
 //
-// Recebe o id da sessão como argv[1] (python3 - <id>). Mantém só os últimos 500
+// Recebe o id da sessão como argv[1] (python3 - <id>). Mantém só os últimos 2000
 // chunks (casa com o teto do registry). python3 do sistema (macOS e ZimaOS).
 const transcriptScript = `import os,json,glob,sys,re
 sid=sys.argv[1] if len(sys.argv)>1 else ''
@@ -77,7 +77,7 @@ for f in matches[:1]:
                             elif b.get('type')=='tool_use':
                                 out.append({'kind':'tool','text':tool_summary(b.get('name'),b.get('input'))})
     except Exception: pass
-print(json.dumps(out[-500:]))
+print(json.dumps(out[-2000:]))
 `
 
 // runTranscript executa o comando (python3 lendo o script pelo stdin, com o id
