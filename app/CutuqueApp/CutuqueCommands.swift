@@ -9,6 +9,10 @@ import SwiftUI
 /// contexto; os que são só estado mexem no `NavigationState` direto.
 struct CutuqueCommands: Commands {
     @ObservedObject var nav: NavigationState
+    /// As abas entram aqui porque com teclado a barra passa a ser navegável sem
+    /// o dedo — e mexer nelas é estado puro, sem contexto de view nenhum, então
+    /// não precisa passar por `AppIntent`.
+    @ObservedObject var tabs: OpenTabsStore
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -44,6 +48,31 @@ struct CutuqueCommands: Commands {
             .keyboardShortcut("f", modifiers: [.command, .control])
             Button("Parar o agente") { nav.send(.interrupt) }
                 .keyboardShortcut(".")
+
+            Divider()
+
+            // Atalhos de navegador para a barra de abas. ⌘⇧] / ⌘⇧[ e ⌘W são os
+            // do Safari e do Chrome; reabrir ficou em ⌘⌥T, e NÃO no ⌘⇧T de
+            // costume, porque este já era o "Próximo painel" desde a versão do
+            // iPad — trocar um atalho que ela já tem no dedo custa mais do que
+            // ganhar o padrão do navegador aqui.
+            Button("Próxima aba", systemImage: "chevron.right") { tabs.mutar { $0.irPara(passo: 1) } }
+                .keyboardShortcut("]", modifiers: [.command, .shift])
+                .disabled(tabs.tabs.abas.count < 2)
+            Button("Aba anterior", systemImage: "chevron.left") { tabs.mutar { $0.irPara(passo: -1) } }
+                .keyboardShortcut("[", modifiers: [.command, .shift])
+                .disabled(tabs.tabs.abas.count < 2)
+            Button("Fechar aba", systemImage: "xmark") {
+                guard let atual = tabs.tabs.selecionada else { return }
+                tabs.mutar { $0.fechar(atual) }
+            }
+            .keyboardShortcut("w")
+            .disabled(tabs.tabs.selecionada == nil)
+            Button("Reabrir aba fechada", systemImage: "arrow.uturn.backward") {
+                tabs.mutar { $0.reabrirUltimaFechada() }
+            }
+            .keyboardShortcut("t", modifiers: [.command, .option])
+            .disabled(tabs.tabs.fechadasRecentemente.isEmpty)
 
             Divider()
 

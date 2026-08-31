@@ -9,6 +9,29 @@ final class SessionDetailViewModel: ObservableObject {
     /// Chunks de output acumulados (histórico + chunks ao vivo), já
     /// classificados por `kind` para o transcrito estilo chat.
     @Published var chunks: [OutputChunk] = []
+    /// O mesmo conteúdo já agrupado em itens de transcrito.
+    ///
+    /// [31/08/2026] Antes isto era uma propriedade COMPUTADA da view
+    /// (`ChatItem.grouping(model.chunks)`), o que significava reagrupar a
+    /// conversa inteira a cada avaliação de `body` — inclusive a cada tecla
+    /// digitada no campo de resposta, que também mora nesta view. Com 500
+    /// chunks passava despercebido; a 2000 é trabalho suficiente para engasgar
+    /// a digitação. Agora o agrupamento acontece uma vez por mudança de
+    /// conteúdo, que é quando o resultado de fato muda.
+    @Published fileprivate private(set) var itens: [ChatItem] = []
+    /// Sobe a cada escrita no transcrito. É o sinal de "chegou conteúdo novo".
+    ///
+    /// [31/08/2026] Nem `itens.count` nem `chunks.count` servem para isso, e os
+    /// dois falham no caso que mais importa — o agente escrevendo uma resposta
+    /// longa numa sessão viva:
+    ///   - `itens.count` não muda, porque `ChatItem.grouping` funde `.assistant`
+    ///     consecutivos no MESMO item (e `tool_result` preenche uma tool que já
+    ///     existe). Quem estava colado no fim parava de ser acompanhado bem no
+    ///     meio da resposta que estava lendo.
+    ///   - `chunks.count` trava em 2000 assim que o teto enche: sai um da frente,
+    ///     entra um atrás, a contagem fica parada com a tela mudando.
+    /// Um contador monotônico não tem nenhum dos dois pontos cegos.
+    @Published fileprivate private(set) var revisaoDoConteudo = 0
     /// Uma ação (aprovar/negar/enviar) está em andamento — desabilita botões.
     @Published var actionInProgress = false
     /// Aviso transitório para a UI (ex.: estado mudou no 409).
@@ -46,16 +69,24 @@ final class SessionDetailViewModel: ObservableObject {
             await api.importHistory(sessionID: session.id)
             history = (try? await api.output(sessionID: session.id)) ?? []
         }
-        chunks = Array(history.suffix(Self.maxChunks))
+        definirChunks(Array(history.suffix(Self.maxChunks)))
         // Encerrada e AINDA vazia após tentar importar → não há transcript no
         // Mac pra recuperar (ex.: uma sessão que deu erro antes de salvar nada).
         recapUnavailable = history.isEmpty && concluded
         startLiveUpdates(hub: hub)
     }
 
-    /// Teto de chunks mantidos, alinhado ao `maxOutputChunks` do hub (500) para
-    /// caber o histórico importado ao adotar uma sessão do Mac.
-    static let maxChunks = 500
+    /// Teto de chunks mantidos, alinhado ao `maxOutputChunks` do hub (2000)
+    /// para caber o histórico importado ao adotar uma sessão do Mac.
+    ///
+    /// 31/08/2026 — 500 para 2000 a pedido dela ("aumente o view de mensagens
+    /// antigas... pode subir pra 2000 para dar pra ver bastante contexto").
+    /// O número tem de ser o MESMO do hub: com o app cortando antes, a conversa
+    /// aparecia menor no aparelho do que o hub tinha para dar; com o app
+    /// cortando depois, o teto extra era memória reservada para chunk que nunca
+    /// chegava. O que segura o custo de tela não é este teto e sim o
+    /// `LazyVStack` do transcript, que só materializa o que está à vista.
+    static let maxChunks = 2000
 
     /// Assina o `LiveHub` (uma conexão `/ws` para todas as abas — chain H) e
     /// reage a mudanças de estado e a chunks da sessão aberta. Antes desta
@@ -77,13 +108,15 @@ final class SessionDetailViewModel: ObservableObject {
                     self.session = updated
                 case .outputChunk(let sessionID, let kind, let text) where sessionID == self.session.id:
                     // Appenda apenas chunks da sessão aberta, espelhando o teto
-                    // do hub (maxChunks=500) para não crescer sem limite e não
+                    // do hub (maxChunks=2000) para não crescer sem limite e não
                     // descartar o histórico importado (review #2).
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        self.chunks.append(OutputChunk(kind: kind, text: text))
+                    var novos = self.chunks
+                    novos.append(OutputChunk(kind: kind, text: text))
+                    if novos.count > Self.maxChunks {
+                        novos.removeFirst(novos.count - Self.maxChunks)
                     }
-                    if self.chunks.count > Self.maxChunks {
-                        self.chunks.removeFirst(self.chunks.count - Self.maxChunks)
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        self.definirChunks(novos)
                     }
                 case .snapshot(let all):
                     // Um snapshot pode trazer estado mais recente da sessão aberta.
@@ -95,6 +128,16 @@ final class SessionDetailViewModel: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Único ponto que escreve `chunks` — e por isso o único que precisa
+    /// lembrar de reagrupar. Dois caminhos alimentam o transcrito (carga
+    /// inicial e chunk ao vivo); com dois lugares fazendo a atualização à mão,
+    /// um deles esqueceria e a tela ficaria parada sem nada quebrar.
+    private func definirChunks(_ novos: [OutputChunk]) {
+        chunks = novos
+        itens = ChatItem.grouping(novos)
+        revisaoDoConteudo &+= 1
     }
 
     /// Encerra o stream ao sair da tela.
@@ -265,12 +308,39 @@ struct SessionDetailView: View {
     /// Default `true` preserva o iPhone, que monta esta view sozinha e nunca
     /// passa nada aqui.
     var ownsNavigationTitle: Bool = true
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    /// Tamanho que o SISTEMA pede — o ajuste do app anda a partir daqui em vez
+    /// de substituí-lo, para não atropelar a preferência de acessibilidade do
+    /// aparelho. Ver `EscalaDeLeitura`.
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// Tamanho do texto do chat, em passos a partir do que o sistema pede — ver
+    /// `EscalaDeLeitura`. Uma chave por classe de aparelho.
+    @AppStorage(EscalaDeLeitura.chaveTelefone) private var leituraTelefone = 0
+    @AppStorage(EscalaDeLeitura.chaveTablet) private var leituraTablet = 0
+    /// Fonte dos blocos de código dentro da resposta do agente. Compartilha a
+    /// chave com o diff e o preview de arquivo de propósito: é a mesma pergunta
+    /// ("quão grande eu leio código neste aparelho") feita em três telas.
+    @AppStorage(TamanhoDeCodigo.chaveTelefone) private var codigoTelefone = TamanhoDeCodigo.padrao(pad: false)
+    @AppStorage(TamanhoDeCodigo.chaveTablet) private var codigoTablet = TamanhoDeCodigo.padrao(pad: true)
+    @AppStorage("cutuque.chatNumeraLinhas") private var numeraLinhasDoCodigo = false
     @State private var draft = ""
     /// Marca de uso ÚNICO: o `.onKeyPress` vê o ⇧⏎ antes de o TextField inserir a
     /// quebra, e é só assim que o `.onChange` seguinte sabe distinguir "quebra
     /// pedida de propósito" de "Enter para enviar" — ver ComposerEnter.
     @State private var quebraIntencional = false
     @State private var showScrollToBottom = false
+    /// A usuária está com o fim do transcrito à vista? É o que autoriza o
+    /// auto-scroll — ver `RolagemDoTranscrito` para por que ele deixou de ser
+    /// incondicional.
+    @State private var coladoNoFim = true
+    /// Itens que chegaram enquanto ela estava lendo mais acima. Vira a bolinha
+    /// em cima do botão de descer, para "chegou coisa nova" não depender de ela
+    /// perceber a barra de rolagem encolher.
+    @State private var naoLidas = 0
+    /// Quantos itens havia na última vez que o fim esteve à vista. Contar por
+    /// diferença (e não incrementando no `onChange`) mantém o número certo
+    /// mesmo quando vários chunks entram na mesma transação.
+    @State private var itensQuandoNoFim = 0
     @State private var renaming = false
     @State private var renameText = ""
     @State private var showingDetails = false
@@ -328,6 +398,19 @@ struct SessionDetailView: View {
     }
 
     /// Título a exibir (apelido local, se houver, senão o original).
+    private var isPadLayout: Bool { horizontalSizeClass == .regular }
+
+    private var passosDeLeitura: Int { isPadLayout ? leituraTablet : leituraTelefone }
+    private var passosDeLeituraBinding: Binding<Int> { isPadLayout ? $leituraTablet : $leituraTelefone }
+    private var tamanhoDoCodigo: Double { isPadLayout ? codigoTablet : codigoTelefone }
+    private var tamanhoDoCodigoBinding: Binding<Double> { isPadLayout ? $codigoTablet : $codigoTelefone }
+
+    /// Tamanho efetivo do texto do chat: o do sistema, deslocado pelos passos
+    /// que ela escolheu.
+    private var tamanhoDeLeitura: DynamicTypeSize {
+        EscalaDeLeitura.aplicado(dynamicTypeSize, passos: passosDeLeitura)
+    }
+
     private var displayTitle: String { namer.displayTitle(for: model.session) }
 
     /// Detent sob medida — a altura que o card pediu pra caber inteiro.
@@ -347,7 +430,7 @@ struct SessionDetailView: View {
     /// papel (usuário/assistente) se fundem num só bloco; tool + tool_result
     /// viram um grupo recolhível — é o que resolve a reclamação de tool call
     /// "competindo" visualmente com a resposta do agente.
-    private var chatItems: [ChatItem] { ChatItem.grouping(model.chunks) }
+    private var chatItems: [ChatItem] { model.itens }
 
     /// Perguntas de seleção pendentes (ferramenta AskUserQuestion), quando o
     /// pedido pendente NÃO é uma permissão comum sim/não. SÓ para sessões
@@ -463,6 +546,14 @@ struct SessionDetailView: View {
                         } label: {
                             Label("Renomear", systemImage: "pencil")
                         }
+                        // [31/08/2026] Leitura vive AQUI, e não numa barra
+                        // própria, por dois motivos: o menu já existe e é o
+                        // único ToolbarItem desta view (decisão #19 — nada de
+                        // `if` novo na árvore de toolbar), e afinar o tamanho é
+                        // coisa que se faz uma vez por aparelho, não a cada
+                        // resposta.
+                        Divider()
+                        menuDeLeitura
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
@@ -563,6 +654,60 @@ struct SessionDetailView: View {
             Button("OK", role: .cancel) {}
         } message: { notice in
             Text(notice)
+        }
+    }
+
+    // MARK: Controles de leitura
+
+    /// Tamanho do texto, tamanho do código e numeração — o que decide quanto
+    /// contexto cabe na tela sem pedir resumo para ninguém.
+    @ViewBuilder
+    private var menuDeLeitura: some View {
+        Menu {
+            Section("Texto (\(EscalaDeLeitura.rotulo(passosDeLeitura)))") {
+                Button {
+                    passosDeLeituraBinding.wrappedValue = EscalaDeLeitura.dentroDaFaixa(passosDeLeitura + 1)
+                } label: {
+                    Label("Aumentar o texto", systemImage: "textformat.size.larger")
+                }
+                .disabled(!EscalaDeLeitura.podeAumentar(passosDeLeitura))
+
+                Button {
+                    passosDeLeituraBinding.wrappedValue = EscalaDeLeitura.dentroDaFaixa(passosDeLeitura - 1)
+                } label: {
+                    Label("Diminuir o texto", systemImage: "textformat.size.smaller")
+                }
+                .disabled(!EscalaDeLeitura.podeDiminuir(passosDeLeitura))
+
+                Button {
+                    passosDeLeituraBinding.wrappedValue = 0
+                } label: {
+                    Label("Voltar ao tamanho do sistema", systemImage: "arrow.counterclockwise")
+                }
+                .disabled(passosDeLeitura == 0)
+            }
+
+            Section("Código (\(Int(tamanhoDoCodigo)) pt)") {
+                Button {
+                    tamanhoDoCodigoBinding.wrappedValue = TamanhoDeCodigo.ajustado(tamanhoDoCodigo, por: TamanhoDeCodigo.passo)
+                } label: {
+                    Label("Aumentar o código", systemImage: "chevron.up")
+                }
+                .disabled(!TamanhoDeCodigo.podeAumentar(tamanhoDoCodigo))
+
+                Button {
+                    tamanhoDoCodigoBinding.wrappedValue = TamanhoDeCodigo.ajustado(tamanhoDoCodigo, por: -TamanhoDeCodigo.passo)
+                } label: {
+                    Label("Diminuir o código", systemImage: "chevron.down")
+                }
+                .disabled(!TamanhoDeCodigo.podeDiminuir(tamanhoDoCodigo))
+
+                Toggle(isOn: $numeraLinhasDoCodigo) {
+                    Label("Numerar as linhas", systemImage: "list.number")
+                }
+            }
+        } label: {
+            Label("Leitura", systemImage: "textformat.size")
         }
     }
 
@@ -946,6 +1091,11 @@ struct SessionDetailView: View {
                         // card d1a0796400fb73f0).
                     }
                 }
+                // A escala vale para o TRANSCRITO inteiro, não para a tela:
+                // o campo de digitar, o cabeçalho e os botões continuam no
+                // tamanho do sistema — encolher afordância de toque para caber
+                // mais texto seria trocar um problema por outro.
+                .dynamicTypeSize(tamanhoDeLeitura)
                 .scrollDismissesKeyboard(.interactively)
                 .coordinateSpace(name: "term")
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -955,37 +1105,83 @@ struct SessionDetailView: View {
                 // causaria um "pulo" duplo), enquanto a VStack externa continua
                 // empurrando a interactionBar pra cima normalmente.
                 .ignoresSafeArea(.keyboard, edges: .bottom)
-                // Botão flutuante "descer": aparece quando o fim não está visível.
+                // Botão flutuante "descer": aparece quando o fim não está
+                // visível, com a contagem do que chegou enquanto isso.
                 .overlay(alignment: .bottomTrailing) {
                     if showScrollToBottom {
                         Button {
-                            withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                            descerAteOFim(proxy)
                         } label: {
                             Image(systemName: "arrow.down")
                                 .font(.headline)
                                 .padding(12)
                                 .background(.ultraThinMaterial, in: Circle())
                                 .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
+                                .overlay(alignment: .topTrailing) {
+                                    if let aviso = RolagemDoTranscrito.aviso(naoLidas: naoLidas) {
+                                        Text(aviso)
+                                            .font(.caption2.weight(.bold).monospacedDigit())
+                                            .foregroundStyle(.white)
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 2)
+                                            .background(destaque, in: Capsule())
+                                            .offset(x: 4, y: -2)
+                                    }
+                                }
                         }
                         .padding()
                         .transition(.opacity.combined(with: .scale))
-                        .accessibilityLabel("Descer para o fim")
+                        .accessibilityLabel(naoLidas > 0
+                                            ? "Descer para o fim, \(naoLidas) novas"
+                                            : "Descer para o fim")
                     }
                 }
-                .onChange(of: chatItems.count) { _, _ in
-                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                // [31/08/2026] O auto-scroll deixou de ser incondicional. Antes,
+                // subir para reler durava até o próximo chunk chegar — numa
+                // sessão viva, segundos. Agora quem já estava no fim continua
+                // sendo levado junto; quem subiu fica onde parou e recebe a
+                // contagem no botão. Ver `RolagemDoTranscrito`.
+                // Observa `revisaoDoConteudo`, não `chatItems.count`: o texto de
+                // uma resposta em andamento cresce DENTRO do mesmo item, então a
+                // contagem de itens fica parada o turno inteiro. Acompanhar por
+                // ela deixava quem estava no fim plantado no meio da resposta.
+                // A CONTAGEM do aviso continua sendo de itens — "7 novas" quer
+                // dizer sete mensagens, não sete pedaços da mesma frase.
+                .onChange(of: model.revisaoDoConteudo) { _, _ in
+                    let novoTotal = chatItems.count
+                    if RolagemDoTranscrito.deveAcompanhar(estavaNoFim: coladoNoFim) {
+                        itensQuandoNoFim = novoTotal
+                        naoLidas = 0
+                        withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                    } else {
+                        naoLidas = max(0, novoTotal - itensQuandoNoFim)
+                    }
                 }
                 .onChange(of: isRunning) { _, _ in
+                    guard RolagemDoTranscrito.deveAcompanhar(estavaNoFim: coladoNoFim) else { return }
                     withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
                 // Fim visível quando sua posição cai dentro da altura do viewport.
                 .onPreferenceChange(BottomOffsetKey.self) { bottomY in
+                    let noFim = RolagemDoTranscrito.estaNoFim(fimY: bottomY, altura: outer.size.height)
+                    coladoNoFim = noFim
+                    if noFim {
+                        naoLidas = 0
+                        itensQuandoNoFim = chatItems.count
+                    }
                     withAnimation(.easeInOut(duration: 0.2)) {
-                        showScrollToBottom = bottomY > outer.size.height + 40
+                        showScrollToBottom = !noFim
                     }
                 }
             }
         }
+    }
+
+    private func descerAteOFim(_ proxy: ScrollViewProxy) {
+        coladoNoFim = true
+        naoLidas = 0
+        itensQuandoNoFim = chatItems.count
+        withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
     }
 
     /// Estado vazio convidativo antes do primeiro chunk chegar.
@@ -1104,7 +1300,9 @@ struct SessionDetailView: View {
     private func assistantBlock(_ text: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             AgentAvatar()
-            MarkdownText(text: text)
+            MarkdownText(text: text,
+                         tamanhoDoCodigo: tamanhoDoCodigo,
+                         numeraLinhas: numeraLinhasDoCodigo)
                 .foregroundStyle(.primary)
                 // [12/08/2026] Mesma razão de `userBubble`, e aqui o custo de
                 // manter era ainda menor: este `.textSelection` valia para os
@@ -1270,8 +1468,16 @@ private struct ChatItem: Identifiable {
     /// `.user`) se fundia visualmente nele com "\n" — dois envios distintos e
     /// corretos, mas mostrados como um só. tool + tool_result que vêm em
     /// seguida viram um único grupo recolhível.
+    /// [31/08/2026] `cursorDeTool` entrou junto com o teto de 2000 chunks. O
+    /// pareamento é FIFO, então quando uma tool ganha resultado TODAS as
+    /// anteriores já ganharam o delas — varrer do começo a cada `tool_result`
+    /// era relido de tudo que já estava resolvido. Com 500 chunks isso era
+    /// invisível; com 2000, e uma passada dessas por chunk que chega ao vivo,
+    /// vira quadro perdido no meio do streaming. O cursor só anda para a
+    /// frente, o que faz a passada inteira ser linear.
     static func grouping(_ chunks: [OutputChunk]) -> [ChatItem] {
         var items: [ChatItem] = []
+        var cursorDeTool = 0
         for chunk in chunks {
             switch chunk.kind {
             case .user:
@@ -1294,13 +1500,14 @@ private struct ChatItem: Identifiable {
                 // tool_result chegam na ordem das chamadas (FIFO). Reusa o id
                 // do item da tool (não o do chunk de resultado) — a identidade
                 // da linha continua sendo a da tool call, só o conteúdo muda.
-                if let idx = items.firstIndex(where: {
+                if let idx = items[cursorDeTool...].firstIndex(where: {
                     if case .tool(_, let r) = $0.content { return r == nil }
                     return false
                 }) {
                     if case .tool(let command, _) = items[idx].content {
                         items[idx].content = .tool(command: command, result: chunk.text)
                     }
+                    cursorDeTool = idx
                 } else {
                     // Borda: tool_result sem tool anterior (histórico truncado).
                     items.append(ChatItem(id: chunk.id, content: .tool(command: "resultado", result: chunk.text)))

@@ -28,6 +28,16 @@ struct FileViewerView: View {
     @State private var actionError: String?
     private let api = APIClient()
 
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    /// Mesma fonte da leitura (`VisualizadorDeTexto`): entrar no modo edição não
+    /// pode devolver o texto ao tamanho de fábrica depois de ela ter ajustado.
+    @AppStorage(TamanhoDeCodigo.chaveTelefone) private var fonteTelefone = TamanhoDeCodigo.padrao(pad: false)
+    @AppStorage(TamanhoDeCodigo.chaveTablet) private var fonteTablet = TamanhoDeCodigo.padrao(pad: true)
+
+    private var tamanhoDaFonte: Double {
+        horizontalSizeClass == .regular ? fonteTablet : fonteTelefone
+    }
+
     /// Há mudança não salva? Só então o botão Salvar fica ativo.
     private var dirty: Bool { editing && draft != (content?.content ?? "") }
 
@@ -39,7 +49,7 @@ struct FileViewerView: View {
                                         abaAtiva: abaAtiva) { actionError = $0 }
                 } else if editing {
                     TextEditor(text: $draft)
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(.system(size: tamanhoDaFonte, design: .monospaced))
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                         .padding(4)

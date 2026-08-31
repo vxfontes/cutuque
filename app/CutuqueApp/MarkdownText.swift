@@ -8,6 +8,15 @@ import SwiftUI
 /// rodar no device sem alterar o build.
 struct MarkdownText: View {
     let text: String
+    /// Tamanho da fonte dos BLOCOS DE CÓDIGO, em pontos. A prosa continua em
+    /// `.body` (escala com o Dynamic Type, e o chat ainda desloca isso com
+    /// `EscalaDeLeitura`); código é o oposto — o que se quer dele é caber a
+    /// linha inteira sem quebrar, e por isso ele tem controle próprio, o mesmo
+    /// do diff e do preview de arquivo (`TamanhoDeCodigo`).
+    var tamanhoDoCodigo: Double = TamanhoDeCodigo.padrao(pad: false)
+    /// Numerar as linhas do bloco. Vale a pena no iPad, onde sobra largura e o
+    /// número ajuda a falar sobre o trecho; no iPhone come colunas preciosas.
+    var numeraLinhas = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -73,6 +82,13 @@ struct MarkdownText: View {
     @ViewBuilder
     private func codeCard(lang: String, code: String) -> some View {
         let isDiff = Self.looksLikeDiff(lang: lang, code: code)
+        // [31/08/2026] O bloco de código do chat passou a ser colorido. O
+        // `RealceDeSintaxe` já existia e já era usado no preview de arquivo —
+        // faltava só ligar a cerca (```swift) à tabela de apelidos, agora
+        // pública em `Linguagem.deApelido`. Acima de 200 KiB (o teto do próprio
+        // realce) ele devolve sem cor sozinho, então não há bloco grande demais
+        // para colar aqui.
+        let linguagem = Linguagem.deApelido(lang)
         VStack(alignment: .leading, spacing: 0) {
             // [12/08/2026] A barra passa a existir sempre que há bloco de
             // código; o que é opcional é o RÓTULO da linguagem. Antes a barra
@@ -85,6 +101,11 @@ struct MarkdownText: View {
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
+                if !isDiff, Self.contaLinhas(code) > 1 {
+                    Text("\(Self.contaLinhas(code)) linhas")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
                 Spacer(minLength: 0)
                 BotaoDeCopiar(texto: code)
                     .font(.caption)
@@ -93,9 +114,14 @@ struct MarkdownText: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 if isDiff {
                     diffBody(code)
+                } else if numeraLinhas {
+                    codigoNumerado(code, linguagem: linguagem)
                 } else {
-                    Text(code)
-                        .font(.system(.caption, design: .monospaced))
+                    // Um `Text` só, com o `AttributedString` inteiro dentro: é
+                    // o contrato do `RealceDeSintaxe` e é o que mantém a
+                    // seleção nativa funcionando de ponta a ponta do bloco.
+                    Text(RealceDeSintaxe.aplicar(code, linguagem: linguagem))
+                        .font(.system(size: tamanhoDoCodigo, design: .monospaced))
                         .textSelection(.enabled)
                         .padding(10)
                 }
@@ -104,13 +130,43 @@ struct MarkdownText: View {
         .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
+    /// Mesmo bloco, com calha de números à esquerda.
+    ///
+    /// Aqui a seleção nativa **atravessa apenas uma linha** (é um `Text` por
+    /// linha), e é um preço consciente: quem liga a numeração quer falar sobre
+    /// a linha 42, e para copiar o bloco inteiro existe o botão de copiar na
+    /// barra, que é o texto cru e completo.
+    private func codigoNumerado(_ code: String, linguagem: Linguagem?) -> some View {
+        let linhas = code.components(separatedBy: "\n")
+        let calha = max(22, Double(String(linhas.count).count) * tamanhoDoCodigo * TamanhoDeCodigo.razaoDeAvanco + 10)
+        return VStack(alignment: .leading, spacing: 1) {
+            ForEach(Array(linhas.enumerated()), id: \.offset) { idx, linha in
+                HStack(alignment: .top, spacing: 8) {
+                    Text("\(idx + 1)")
+                        .font(.system(size: max(9, tamanhoDoCodigo - 1), design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: calha, alignment: .trailing)
+                    Text(RealceDeSintaxe.aplicar(linha.isEmpty ? " " : linha, linguagem: linguagem))
+                        .font(.system(size: tamanhoDoCodigo, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .padding(.vertical, 10)
+        .padding(.trailing, 10)
+    }
+
+    private static func contaLinhas(_ code: String) -> Int {
+        code.isEmpty ? 0 : code.components(separatedBy: "\n").count
+    }
+
     /// Renderiza um diff colorindo + (verde) / - (vermelho) / @@ (destaque).
     private func diffBody(_ code: String) -> some View {
         let lines = code.components(separatedBy: "\n")
         return VStack(alignment: .leading, spacing: 1) {
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                 Text(line.isEmpty ? " " : line)
-                    .font(.system(.caption, design: .monospaced))
+                    .font(.system(size: tamanhoDoCodigo, design: .monospaced))
                     .foregroundStyle(Self.diffColor(line))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)

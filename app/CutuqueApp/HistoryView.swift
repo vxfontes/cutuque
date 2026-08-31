@@ -49,7 +49,7 @@ struct HistoryView: View {
         loadError = nil
         defer { loading = false }
         do {
-            sessions = try await api.history(limit: 200)
+            sessions = try await api.history(limit: 500)
         } catch {
             loadError = error.localizedDescription
         }

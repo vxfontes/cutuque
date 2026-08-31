@@ -650,7 +650,10 @@ struct GitDiff: Decodable {
     /// `clean`, `changes` ou `not_a_repository`.
     let state: String
     let files: [GitFileChange]
-    let diff: String
+    /// `var` de propósito: depois do parse a tela zera este campo. É o texto
+    /// cru do diff, até 4 MiB, e mantê-lo ao lado da estrutura já parseada
+    /// duplicaria o arquivo inteiro em memória sem ninguém para lê-lo.
+    var diff: String
     let truncated: Bool
 }
 

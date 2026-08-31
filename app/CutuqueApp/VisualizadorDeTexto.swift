@@ -17,6 +17,12 @@ import SwiftUI
 /// é exatamente por isso que o botão "ver fonte" existe: é ele que devolve a
 /// seleção do arquivo inteiro de uma vez, para quando o texto corrido do
 /// markdown não bastar.
+///
+/// [31/08/2026] A segunda exceção é o **modo linha** (`modoLinha`): numeração e
+/// busca precisam de uma âncora por linha, e não existe âncora dentro de um
+/// `Text` só. Ela é sempre PEDIDA — ligar a numeração ou digitar na busca — e
+/// some sozinha quando a busca é limpa, então o padrão do arquivo continua
+/// sendo o `Text` inteiro com a seleção contínua.
 struct VisualizadorDeTexto: View {
     let entry: FileEntry
     let content: FileContent
@@ -27,6 +33,64 @@ struct VisualizadorDeTexto: View {
     /// para "esquecer": esta view nasce de novo a cada arquivo aberto (é um
     /// `FileViewerView` novo por navegação), então o estado já nasce limpo.
     @State private var verFonte = false
+
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    /// Mesma chave do diff e do bloco de código do chat: "quão grande eu leio
+    /// código neste aparelho" é uma pergunta só, feita em três telas.
+    @AppStorage(TamanhoDeCodigo.chaveTelefone) private var fonteTelefone = TamanhoDeCodigo.padrao(pad: false)
+    @AppStorage(TamanhoDeCodigo.chaveTablet) private var fonteTablet = TamanhoDeCodigo.padrao(pad: true)
+    @AppStorage("cutuque.fonteNumeraLinhas") private var numeraLinhas = false
+    @AppStorage("cutuque.fonteQuebraLinha") private var quebraLinha = false
+
+    @State private var busca = ""
+    @State private var indiceDaOcorrencia = 0
+
+    private var isPadLayout: Bool { horizontalSizeClass == .regular }
+    private var tamanhoDaFonte: Double { isPadLayout ? fonteTablet : fonteTelefone }
+    private var fonteBinding: Binding<Double> { isPadLayout ? $fonteTablet : $fonteTelefone }
+    private var buscaAtiva: String { busca.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// O texto do modo fonte já quebrado em linhas, e as linhas que casam com a
+    /// busca — os dois em `@State`, calculados por mudança e não por render.
+    ///
+    /// Já foram propriedades computadas, e a conta saía três vezes por quadro
+    /// (contador de linhas, barra de busca, corpo). Num arquivo grande isso é
+    /// dividir megabytes a cada tecla digitada: aqui a divisão acontece uma vez
+    /// por arquivo e a busca uma vez por termo.
+    @State private var linhasDoFonte: [String] = []
+    @State private var achados: [Int] = []
+
+    /// A linha para onde a busca está apontando agora, se houver alguma.
+    private var linhaAlvo: Int? {
+        guard !achados.isEmpty else { return nil }
+        return achados[BuscaEmTexto.indiceSeguro(indiceDaOcorrencia, total: achados.count)]
+    }
+
+    private func recalcularLinhas() {
+        linhasDoFonte = Self.textoParaExibir(content.content, tipo: tipo).components(separatedBy: "\n")
+        recalcularBusca()
+    }
+
+    private func recalcularBusca() {
+        achados = BuscaEmTexto.linhasComOcorrencia(linhasDoFonte, termo: buscaAtiva)
+        indiceDaOcorrencia = BuscaEmTexto.indiceSeguro(indiceDaOcorrencia, total: achados.count)
+    }
+
+    /// Modo linha: cada linha vira um `Text` próprio, com número à esquerda.
+    ///
+    /// **Isto contradiz de propósito a regra do topo do arquivo** (um `Text` só,
+    /// para a seleção nativa atravessar o arquivo inteiro), e o critério para
+    /// ligar é justamente que a usuária tenha PEDIDO algo que exige linha:
+    /// numeração, ou uma busca em andamento — sem linha não há âncora para
+    /// pular para a ocorrência nem lugar para pintar o achado. Fora desses dois
+    /// casos o arquivo continua saindo num `Text` inteiro, e sair da busca
+    /// devolve a seleção contínua sozinho.
+    ///
+    /// Duas coisas se perdem no modo linha e as duas são conscientes: a seleção
+    /// para de atravessar linhas (para copiar tudo existem Compartilhar e a
+    /// edição), e o realce passa a enxergar uma linha por vez — comentário de
+    /// bloco e string multi-linha ficam sem cor a partir da segunda linha.
+    private var modoLinha: Bool { numeraLinhas || !buscaAtiva.isEmpty }
 
     /// Como abrir, decidido pela extensão. `TipoDeArquivo` e o QuickLook leem a
     /// mesma pista, então as duas metades da tela nunca discordam.
@@ -51,8 +115,14 @@ struct VisualizadorDeTexto: View {
             if tipo == .markdown && !content.ehCauda {
                 alternadorDeFonte
             }
+            if case .fonte = modo {
+                barraDeCodigo
+            }
             corpo
         }
+        .onAppear { recalcularLinhas() }
+        // O conteúdo troca sem a view morrer quando a cauda é recarregada.
+        .onChange(of: content.content) { _, _ in recalcularLinhas() }
     }
 
     @ViewBuilder
@@ -67,17 +137,130 @@ struct VisualizadorDeTexto: View {
                     .padding(12)
             }
         case .fonte(let linguagem):
-            ScrollView([.vertical, .horizontal]) {
-                Text(RealceDeSintaxe.aplicar(
-                    Self.textoParaExibir(content.content, tipo: tipo),
-                    linguagem: linguagem
-                ))
-                .font(.system(size: 12, design: .monospaced))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
+            if modoLinha {
+                fonteNumerado(linguagem)
+            } else {
+                ScrollView(quebraLinha ? .vertical : [.vertical, .horizontal]) {
+                    Text(RealceDeSintaxe.aplicar(
+                        Self.textoParaExibir(content.content, tipo: tipo),
+                        linguagem: linguagem
+                    ))
+                    .font(.system(size: tamanhoDaFonte, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                }
             }
         }
+    }
+
+    /// Modo linha — ver `modoLinha` para o que ele troca e por quê.
+    private func fonteNumerado(_ linguagem: Linguagem?) -> some View {
+        let linhas = linhasDoFonte
+        let marcadas = Set(achados)
+        let alvo = linhaAlvo
+        let calha = max(28, Double(String(linhas.count).count) * tamanhoDaFonte * TamanhoDeCodigo.razaoDeAvanco + 12)
+        return ScrollViewReader { proxy in
+            ScrollView(quebraLinha ? .vertical : [.vertical, .horizontal]) {
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    ForEach(Array(linhas.enumerated()), id: \.offset) { indice, linha in
+                        HStack(alignment: .top, spacing: 10) {
+                            Text("\(indice + 1)")
+                                .font(.system(size: max(9, tamanhoDaFonte - 1), design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                                .frame(width: calha, alignment: .trailing)
+                            Text(RealceDeSintaxe.aplicar(linha.isEmpty ? " " : linha, linguagem: linguagem))
+                                .font(.system(size: tamanhoDaFonte, design: .monospaced))
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: !quebraLinha, vertical: true)
+                                .frame(maxWidth: quebraLinha ? .infinity : nil, alignment: .leading)
+                            if !quebraLinha { Spacer(minLength: 0) }
+                        }
+                        .background(indice == alvo ? Color.yellow.opacity(0.28)
+                                    : (marcadas.contains(indice) ? Color.yellow.opacity(0.12) : Color.clear))
+                        .id(indice)
+                    }
+                }
+                .padding(.vertical, 12)
+                .padding(.trailing, 12)
+            }
+            .onChange(of: alvo) { _, novo in
+                guard let novo else { return }
+                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(novo, anchor: .center) }
+            }
+        }
+    }
+
+    /// Fonte, numeração, quebra de linha e busca — o que transforma "dá para
+    /// ver o arquivo" em "dá para achar o trecho".
+    private var barraDeCodigo: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 10) {
+                Button {
+                    numeraLinhas.toggle()
+                } label: {
+                    Image(systemName: numeraLinhas ? "list.number" : "list.bullet")
+                }
+                .accessibilityLabel(numeraLinhas ? "Esconder os números de linha" : "Numerar as linhas")
+
+                Button {
+                    quebraLinha.toggle()
+                } label: {
+                    Image(systemName: quebraLinha ? "text.alignleft" : "arrow.left.and.right")
+                }
+                .accessibilityLabel(quebraLinha ? "Desligar quebra de linha" : "Quebrar linhas longas")
+
+                Spacer(minLength: 0)
+
+                Text("\(linhasDoFonte.count) linhas")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+
+                ControleDeTamanhoDeCodigo(tamanho: fonteBinding, mostraValor: isPadLayout)
+            }
+            .buttonStyle(.borderless)
+            .font(.callout)
+
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                TextField("Buscar no arquivo", text: $busca)
+                    .textFieldStyle(.plain)
+                    .font(.caption)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .onChange(of: busca) { _, _ in
+                        indiceDaOcorrencia = 0
+                        recalcularBusca()
+                    }
+                if !buscaAtiva.isEmpty {
+                    Text(BuscaEmTexto.rotulo(indice: indiceDaOcorrencia, achados: achados.count))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(achados.isEmpty ? .secondary : .primary)
+                    Button {
+                        indiceDaOcorrencia = BuscaEmTexto.anterior(indiceDaOcorrencia, total: achados.count)
+                    } label: { Image(systemName: "chevron.up") }
+                        .disabled(achados.isEmpty)
+                        .accessibilityLabel("Ocorrência anterior")
+                    Button {
+                        indiceDaOcorrencia = BuscaEmTexto.proximo(indiceDaOcorrencia, total: achados.count)
+                    } label: { Image(systemName: "chevron.down") }
+                        .disabled(achados.isEmpty)
+                        .accessibilityLabel("Próxima ocorrência")
+                    Button {
+                        busca = ""
+                    } label: { Image(systemName: "xmark.circle.fill") }
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Limpar a busca")
+                }
+            }
+            .buttonStyle(.borderless)
+            .font(.caption)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color(.secondarySystemGroupedBackground))
     }
 
     /// Faixa de aviso quando o hub mandou só o **fim** do arquivo (12/08/2026 —

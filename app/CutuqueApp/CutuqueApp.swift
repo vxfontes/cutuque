@@ -67,7 +67,7 @@ struct CutuqueApp: App {
                 await PushManager.shared.requestAuthorization()
             }
         }
-        .commands { CutuqueCommands(nav: nav) }
+        .commands { CutuqueCommands(nav: nav, tabs: tabsStore) }
         .onChange(of: scenePhase) { _, phase in
             ForegroundReporter.shared.update(phase)
         }

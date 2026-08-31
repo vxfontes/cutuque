@@ -738,24 +738,11 @@ enum RealceDeSintaxe {
 
         /// Apelidos comuns de linguagem em cerca de código (` ```js `,
         /// ` ```sh `...) que não batem com o `rawValue` do `Linguagem` direto.
+        /// Delegado a `Linguagem.deApelido` — a tabela mora lá desde 31/08/2026
+        /// para que a cerca do chat e a cerca do arquivo .md leiam a MESMA
+        /// tabela. Ver o comentário lá.
         private static func linguagemPorApelido(_ tagBruta: String) -> Linguagem? {
-            let tag = tagBruta.lowercased()
-            guard !tag.isEmpty else { return nil }
-            if let direta = Linguagem(rawValue: tag) { return direta }
-            let apelidos: [String: Linguagem] = [
-                "js": .javascript, "jsx": .javascript, "mjs": .javascript, "node": .javascript,
-                "tsx": .typescript,
-                "py": .python, "py3": .python,
-                "rb": .ruby,
-                "rs": .rust,
-                "kt": .kotlin, "kts": .kotlin,
-                "c++": .cpp, "cxx": .cpp,
-                "sh": .shell, "bash": .shell, "zsh": .shell, "console": .shell,
-                "yml": .yaml,
-                "xml": .html, "htm": .html,
-                "md": .markdown,
-            ]
-            return apelidos[tag]
+            Linguagem.deApelido(tagBruta)
         }
     }
 }

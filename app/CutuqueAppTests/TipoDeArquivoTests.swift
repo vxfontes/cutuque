@@ -136,4 +136,33 @@ final class TipoDeArquivoTests: XCTestCase {
     func testRealceDeTextoVazioNaoQuebra() {
         XCTAssertEqual(String(RealceDeSintaxe.aplicar("", linguagem: nil).characters), "")
     }
+
+    // MARK: - Apelido de cerca de código (```py, ```bash)
+
+    /// [31/08/2026] A tabela era privada do `RealceMarkdown` e virou pública em
+    /// `Linguagem.deApelido` para o bloco de código do CHAT ler a mesma coisa
+    /// que a cerca dentro de um .md. Duas tabelas divergindo dariam ```py
+    /// colorido num lugar e cru no outro, sem nada quebrar para avisar.
+    func testApelidoResolveOsNomesQueOAgenteEscreve() {
+        XCTAssertEqual(Linguagem.deApelido("py"), .python)
+        XCTAssertEqual(Linguagem.deApelido("js"), .javascript)
+        XCTAssertEqual(Linguagem.deApelido("tsx"), .typescript)
+        XCTAssertEqual(Linguagem.deApelido("bash"), .shell)
+        XCTAssertEqual(Linguagem.deApelido("golang"), .go)
+        XCTAssertEqual(Linguagem.deApelido("yml"), .yaml)
+    }
+
+    func testApelidoAceitaONomeDiretoEIgnoraCaixaEEspaco() {
+        XCTAssertEqual(Linguagem.deApelido("swift"), .swift)
+        XCTAssertEqual(Linguagem.deApelido("Swift"), .swift)
+        XCTAssertEqual(Linguagem.deApelido("  PYTHON  "), .python)
+    }
+
+    /// Cerca sem linguagem é o caso mais comum na saída do agente: tem de cair
+    /// em "sem cor", não em uma linguagem chutada.
+    func testCercaSemLinguagemNaoViraLinguagem() {
+        XCTAssertNil(Linguagem.deApelido(""))
+        XCTAssertNil(Linguagem.deApelido("   "))
+        XCTAssertNil(Linguagem.deApelido("brainfuck"))
+    }
 }

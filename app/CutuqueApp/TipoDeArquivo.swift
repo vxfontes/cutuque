@@ -6,6 +6,44 @@ import Foundation
 enum Linguagem: String, CaseIterable, Equatable {
     case swift, go, typescript, javascript, python, ruby, rust, java, kotlin
     case c, cpp, shell, yaml, toml, sql, html, css, json, markdown
+
+    /// Linguagem a partir da tag de uma **cerca de markdown** (```py, ```bash).
+    ///
+    /// [31/08/2026] Esta tabela morava privada dentro do `RealceMarkdown`, onde
+    /// só a cerca DENTRO de um arquivo .md a enxergava. O bloco de código do
+    /// chat precisa exatamente da mesma leitura — e duas tabelas de apelido
+    /// divergindo significaria ```py colorido num lugar e cru no outro, sem
+    /// nada quebrar para avisar. É o mesmo motivo pelo qual `Ansi.plain` é
+    /// construído em cima de `Ansi.attributed`: um leitor só.
+    ///
+    /// Tag vazia devolve `nil` (bloco cercado sem linguagem — o mais comum na
+    /// saída do agente), e aí quem chama mostra o texto sem cor.
+    static func deApelido(_ tagBruta: String) -> Linguagem? {
+        let tag = tagBruta.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !tag.isEmpty else { return nil }
+        if let direta = Linguagem(rawValue: tag) { return direta }
+        return apelidos[tag]
+    }
+
+    private static let apelidos: [String: Linguagem] = [
+        "js": .javascript, "jsx": .javascript, "mjs": .javascript, "cjs": .javascript,
+        "node": .javascript,
+        "ts": .typescript, "tsx": .typescript, "mts": .typescript, "cts": .typescript,
+        "py": .python, "py3": .python, "python3": .python,
+        "rb": .ruby, "rake": .ruby,
+        "rs": .rust,
+        "kt": .kotlin, "kts": .kotlin,
+        "c++": .cpp, "cxx": .cpp, "cc": .cpp, "hpp": .cpp, "objc": .c, "h": .c,
+        "sh": .shell, "bash": .shell, "zsh": .shell, "fish": .shell,
+        "console": .shell, "shell-session": .shell, "terminal": .shell,
+        "yml": .yaml,
+        "xml": .html, "htm": .html, "plist": .html, "svg": .html,
+        "md": .markdown, "mdx": .markdown,
+        "scss": .css, "sass": .css, "less": .css,
+        "postgres": .sql, "postgresql": .sql, "mysql": .sql, "sqlite": .sql,
+        "golang": .go,
+        "jsonc": .json, "json5": .json,
+    ]
 }
 
 /// Como um arquivo da máquina deve ser aberto, decidido pela **extensão do

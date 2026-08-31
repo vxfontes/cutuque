@@ -102,6 +102,25 @@ struct OpenTabs: Equatable {
     private(set) var selecionada: ChaveDeAba?
     private var contadorDeFoco = 0
 
+    /// Abas fechadas nesta sessão do app, da mais recente para a mais antiga —
+    /// o ⌘⇧T do navegador.
+    ///
+    /// [31/08/2026] Fechar era a única ação da barra sem volta, e com o modelo
+    /// de navegador (abrir nunca substitui) fechar por engano custa reabrir o
+    /// caminho inteiro: achar a máquina, achar a sessão, esperar o pane. Guarda
+    /// `AbaPersistida` e não `AbaAberta` pelo mesmo motivo da persistência: o
+    /// conteúdo é o que envelhece, e reabrir passa pela reconciliação como
+    /// qualquer aba restaurada — reabrir NÃO recria pane (D2).
+    ///
+    /// Não vai para o disco de propósito: "desfazer o fechamento" é uma ação de
+    /// arrependimento imediato, não um histórico. Restaurar do disco uma aba que
+    /// ela fechou ontem seria o contrário do que fechar significa.
+    private(set) var fechadasRecentemente: [AbaPersistida] = []
+
+    /// Fundo da pilha de desfazer. Dez é folgado para o arrependimento e curto
+    /// o bastante para não virar um segundo estado de abas vivendo em memória.
+    static let maxFechadasLembradas = 10
+
     // MARK: abrir e selecionar
 
     /// [13/08/2026] Modelo de navegador: abrir NUNCA substitui aba nenhuma. Antes
@@ -137,6 +156,30 @@ struct OpenTabs: Equatable {
 
     func aba(_ chave: ChaveDeAba) -> AbaAberta? {
         abas.first { $0.chave == chave }
+    }
+
+    /// Seleciona pela POSIÇÃO na barra (base 0). Fora da faixa não faz nada —
+    /// ⌘5 com quatro abas abertas é um engano, não um pedido para fechar nada.
+    mutating func selecionar(indice: Int) {
+        guard abas.indices.contains(indice) else { return }
+        selecionar(abas[indice].chave)
+    }
+
+    /// Anda `passo` abas a partir da escolhida, dando a volta nas pontas — o
+    /// ⌘⇧] / ⌘⇧[ do navegador.
+    ///
+    /// Circular pelo mesmo motivo da busca: quem está na última e pede a próxima
+    /// quer a primeira, não um atalho que não faz nada. Sem nenhuma escolhida,
+    /// escolhe a primeira: é o que "próxima" significa quando não há atual.
+    mutating func irPara(passo: Int) {
+        guard !abas.isEmpty else { return }
+        guard let atual = selecionada.flatMap({ chave in abas.firstIndex { $0.chave == chave } }) else {
+            selecionar(abas[0].chave)
+            return
+        }
+        let total = abas.count
+        let alvo = ((atual + passo) % total + total) % total
+        selecionar(abas[alvo].chave)
     }
 
     // MARK: teto de vivas (G2)
@@ -177,6 +220,7 @@ struct OpenTabs: Equatable {
     mutating func fechar(_ chave: ChaveDeAba) {
         guard let i = abas.firstIndex(where: { $0.chave == chave }) else { return }
         let eraAEscolhida = selecionada == chave
+        lembrarFechada(abas[i])
         abas.remove(at: i)
         guard eraAEscolhida else { return }
         // Vizinha da esquerda; sem esquerda, a da direita; sem nenhuma, nada
@@ -190,17 +234,56 @@ struct OpenTabs: Equatable {
     }
 
     mutating func fecharOutras(_ chave: ChaveDeAba) {
+        // Da direita para a esquerda: a pilha de desfazer fica com a da
+        // esquerda no topo, que é a ordem em que ⌘⇧T repetido as devolve.
+        for aba in abas.reversed() where aba.chave != chave && !aba.fixa {
+            lembrarFechada(aba)
+        }
         abas.removeAll { $0.chave != chave && !$0.fixa }
         if abas.contains(where: { $0.chave == chave }) { selecionar(chave) }
     }
 
     mutating func fecharTodas() {
+        for aba in abas.reversed() where !aba.fixa { lembrarFechada(aba) }
         abas.removeAll { !$0.fixa }
         if let primeira = abas.first {
             selecionar(primeira.chave)
         } else {
             selecionada = nil
         }
+    }
+
+    private mutating func lembrarFechada(_ aba: AbaAberta) {
+        // Mesma chave duas vezes na pilha não acrescenta nada: reabrir a
+        // primeira já traz a aba de volta, e a segunda viraria um ⌘⇧T que não
+        // faz nada visível.
+        fechadasRecentemente.removeAll { $0.chave == aba.chave }
+        fechadasRecentemente.insert(AbaPersistida(chave: aba.chave, titulo: aba.titulo, fixa: aba.fixa), at: 0)
+        if fechadasRecentemente.count > Self.maxFechadasLembradas {
+            fechadasRecentemente.removeLast(fechadasRecentemente.count - Self.maxFechadasLembradas)
+        }
+    }
+
+    /// Traz de volta a última aba fechada e a escolhe. Devolve a chave reaberta,
+    /// ou `nil` se não havia nada para desfazer.
+    ///
+    /// Volta com o conteúdo de uma aba restaurada do disco — `.board` resolvido,
+    /// o resto `.pendente` para o `AbasResolver` casar com o que está vivo. É a
+    /// regra D2 de novo: desfazer o fechamento reabre a ABA, e nunca recria o
+    /// pane que fechar derrubou.
+    @discardableResult
+    mutating func reabrirUltimaFechada() -> ChaveDeAba? {
+        while let candidata = fechadasRecentemente.first {
+            fechadasRecentemente.removeFirst()
+            // Já foi reaberta por outro caminho (a Vanessa clicou na sessão de
+            // novo): pula e tenta a de antes, em vez de gastar o ⌘⇧T à toa.
+            guard !abas.contains(where: { $0.chave == candidata.chave }) else { continue }
+            abrir(chave: candidata.chave, titulo: candidata.titulo,
+                  conteudo: Self.conteudoInicial(candidata.chave))
+            if candidata.fixa { fixar(candidata.chave) }
+            return candidata.chave
+        }
+        return nil
     }
 
     // MARK: persistência e reconciliação (G4)

@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 @testable import CutuqueApp
 
@@ -320,26 +321,43 @@ final class MachineAppearanceTests: XCTestCase {
     /// 20/08/2026 — a lista cresceu de dois para quatro: `diff` e `codeServer`
     /// entraram com o painel de Diff nativo e o Editor do iPad (2.8.0). Esta
     /// expectativa é fixa DE PROPÓSITO — ela é o alarme de que a chrome mudou.
+    ///
+    /// [31/08/2026] O esperado depende do aparelho porque a chrome depende:
+    /// `segmentosDeChrome()` tira o Editor fora do iPad (o Code Server não é
+    /// oferecido no iPhone). Antes a expectativa era fixa em quatro e a suíte
+    /// passava no simulador de iPad e falhava no de iPhone — um teste que só
+    /// vale em metade dos alvos não é alarme, é ruído.
     @MainActor
     func testChromeDaMaquinaUsaOsIdsDeMachinePane() {
         let nav = NavigationState()
         let chave = ChaveDeAba.maquina("macmini")
         nav.definirSegmentos(MachineDetailView.segmentosDeChrome(), de: chave)
-        XCTAssertEqual(nav.segmentos(de: chave).map(\.id),
-                       [MachinePane.terminal.rawValue, MachinePane.files.rawValue,
-                        MachinePane.diff.rawValue, MachinePane.codeServer.rawValue])
-        XCTAssertEqual(nav.segmentos(de: chave).map(\.titulo),
-                       ["Terminal", "Arquivos", "Diff", "Editor"])
+        var idsEsperados = [MachinePane.terminal.rawValue, MachinePane.files.rawValue,
+                            MachinePane.diff.rawValue]
+        var titulosEsperados = ["Terminal", "Arquivos", "Diff"]
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            idsEsperados.append(MachinePane.codeServer.rawValue)
+            titulosEsperados.append("Editor")
+        }
+        XCTAssertEqual(nav.segmentos(de: chave).map(\.id), idsEsperados)
+        XCTAssertEqual(nav.segmentos(de: chave).map(\.titulo), titulosEsperados)
     }
 
-    /// A lista é `MachinePane.allCases`, então crescer o enum (um terceiro
-    /// painel, um dia) cresce a chrome sozinho — sem lembrar de tocar aqui
+    /// A lista é `MachinePane.allCases` (menos o Editor fora do iPad), então
+    /// crescer o enum cresce a chrome sozinho — sem lembrar de tocar aqui
     /// também. Este teste falha primeiro se algum dia isso divergir.
     func testSegmentosSeguemTodosOsCasosDoMachinePane() {
         let s = MachineDetailView.segmentosDeChrome()
-        XCTAssertEqual(s.count, MachinePane.allCases.count)
-        for pane in MachinePane.allCases {
+        let esperados = UIDevice.current.userInterfaceIdiom == .pad
+            ? MachinePane.allCases
+            : MachinePane.allCases.filter { $0 != .codeServer }
+        XCTAssertEqual(s.count, esperados.count)
+        for pane in esperados {
             XCTAssertTrue(s.contains { $0.id == pane.rawValue && $0.simbolo == pane.symbol })
+        }
+        // O Editor não pode aparecer onde não existe painel para ele.
+        if UIDevice.current.userInterfaceIdiom != .pad {
+            XCTAssertFalse(s.contains { $0.id == MachinePane.codeServer.rawValue })
         }
     }
 }
