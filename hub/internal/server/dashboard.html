@@ -10,7 +10,11 @@
   :root {
     color-scheme: dark;
     --bg: #0b0e14; --bg2: #131a28; --panel: #12161f; --panel2: #171c27; --border: #262d3a;
-    --text: #e6edf3; --muted: #8b98ac; --faint: #5b6675;
+    /* [31/08/2026] --faint subiu de #5b6675: em 11–12px sobre o painel ele
+       ficava abaixo do contraste mínimo de texto (WCAG AA), e é justamente o
+       tom dos rótulos de seção, contadores e carimbos de tempo — informação
+       pequena que a pessoa lê de relance, no celular, com brilho baixo. */
+    --text: #e6edf3; --muted: #8b98ac; --faint: #7c8798;
     --running: #2d7ff9; --needs_you: #f5a623; --done: #3dc46a; --error: #e5484d; --idle: #6b7280;
     --header-bg: rgba(11,14,20,.85);
     --prompt-text: #ffe9c2; --type-text: #c9b8ff; --type-base: #8b5cf6; --warn-text: #f5a623;
@@ -19,13 +23,23 @@
   :root[data-theme="light"] {
     color-scheme: light;
     --bg: #f5f7fb; --bg2: #e6edfa; --panel: #ffffff; --panel2: #eef2f9; --border: #d7dEe8;
-    --text: #17202e; --muted: #56617a; --faint: #8a95a8;
+    /* [31/08/2026] --faint claro subiu de #6b7688 pelo mesmo motivo do tom
+       escuro logo acima: 4.09:1 sobre --panel2 (#eef2f9) e 3.91:1 sobre o
+       --bg2 do gradiente reprovavam no AA (4.5:1) justo nos rótulos de
+       seção, contadores e carimbos de tempo — 11–12px lidos de relance.
+       #5c6678 dá 5.16:1 sobre --panel2 e 4.92:1 sobre --bg2, e continua
+       mais claro que --muted (5.52:1), que é o que a hierarquia pede. */
+    --text: #17202e; --muted: #56617a; --faint: #5c6678;
     --header-bg: rgba(245,247,251,.85);
     --prompt-text: #7a4b00; --type-text: #6d28d9; --type-base: #8b5cf6; --warn-text: #9a6600;
     --shadow: 0 1px 2px rgba(20,30,50,.07), 0 8px 24px rgba(20,30,50,.10);
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
+  /* [31/08/2026] `dvh` acompanha a barra de endereço do Safari móvel, que
+     entra e sai conforme a rolagem; com `vh` o modal era medido pela tela SEM
+     a barra e o rodapé (compositor do chat, linha de digitar do terminal) ia
+     parar embaixo dela. `vh` fica de reserva para quem não tem `dvh`. */
   body {
     background: radial-gradient(1200px 600px at 20% -10%, var(--bg2) 0%, var(--bg) 55%) fixed;
     color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -173,7 +187,10 @@
   .board-col {
     flex: 1 1 240px; min-width: 220px; max-width: 300px;
     background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
-    display: flex; flex-direction: column; max-height: calc(100vh - 220px); box-shadow: var(--shadow);
+    /* `vh` de reserva antes do `dvh`, como no resto do arquivo: onde `dvh`
+       não existe, a declaração cai e a coluna fica sem teto nenhum — a
+       rolagem interna da coluna some e o board vira uma página só. */
+    display: flex; flex-direction: column; max-height: calc(100vh - 220px); max-height: calc(100dvh - 220px); box-shadow: var(--shadow);
   }
   .board-col-head {
     padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between;
@@ -256,14 +273,14 @@
      tmux, nunca os dois — mesma separação Chat x Espelho do app iOS, porque
      digitar num pane externo pelo canal errado criaria um agente paralelo
      (ver launcher.SendText). */
-  .session-modal { max-width: 720px; display: flex; flex-direction: column; max-height: 88vh; }
+  .session-modal { max-width: 720px; display: flex; flex-direction: column; max-height: 88vh; max-height: 88dvh; }
   /* [16/08/2026] Pseudo-tela-cheia do terminal (botão na .term-toolbar, ver
      renderTerminalBody): classe .term-full alternada via JS, NÃO a Fullscreen
      API real do browser — suporte inconsistente em Safari iOS pra elemento
      arbitrário, e a API real dispara seu próprio Esc nativo por fora do
      keydown listener abaixo, correndo com a cascata confirmModal > cardModal
      > sessionModal. CSS puro dá controle total do Esc (ver handler). */
-  .session-modal.term-full { max-width: min(1400px, 96vw); max-height: 96vh; }
+  .session-modal.term-full { max-width: min(1400px, 96vw); max-height: 96vh; max-height: 96dvh; }
   .sess-tags { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 4px; }
   .sess-tags .state-tag { color: var(--tc, var(--text)); border-color: color-mix(in srgb, var(--tc, var(--border)) 40%, transparent); background: color-mix(in srgb, var(--tc, transparent) 14%, transparent); }
   .sess-pending { margin-top: 10px; }
@@ -283,13 +300,16 @@
   .sess-deny:hover { border-color: var(--error); }
   .sess-body { margin-top: 14px; display: flex; flex-direction: column; flex: 1; min-height: 0; }
   /* Chat (sessão sem pane): bolhas por kind (user/assistant/tool/tool_result). */
-  .chat-log { flex: 1; min-height: 220px; max-height: 46vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 4px 2px; }
-  .chat-msg { max-width: 88%; padding: 8px 11px; border-radius: 10px; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+  /* [31/08/2026] `--fs-chat` / `--fs-term` (definidas no :root e gravadas no
+     localStorage) trocaram os tamanhos fixos: no celular a mesma tela precisa
+     caber mais texto, e no monitor precisa ser legível de longe. */
+  .chat-log { flex: 1; min-height: 220px; max-height: 46vh; max-height: 46dvh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 4px 2px; }
+  .chat-msg { max-width: 88%; padding: 8px 11px; border-radius: 10px; font-size: var(--fs-chat, 13px); white-space: pre-wrap; word-break: break-word; }
   .chat-msg.user { align-self: flex-end; background: color-mix(in srgb, var(--running) 16%, var(--panel2)); border: 1px solid color-mix(in srgb, var(--running) 30%, transparent); }
   .chat-msg.assistant { align-self: flex-start; background: var(--panel2); border: 1px solid var(--border); }
   .chat-msg.tool, .chat-msg.tool_result {
     align-self: stretch; background: var(--panel); border: 1px dashed var(--border); color: var(--muted);
-    font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: calc(var(--fs-chat, 13px) - 1px); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   .chat-empty, .chat-loading { color: var(--faint); font-style: italic; text-align: center; padding: 20px; }
   .chat-compose { display: flex; gap: 8px; margin-top: 10px; }
@@ -297,9 +317,9 @@
   .chat-compose button { background: var(--running); border: none; color: #fff; border-radius: 9px; padding: 0 14px; font-weight: 600; cursor: pointer; }
   /* Terminal (sessão com pane): espelho do tmux (poll) + barra de teclas (/tmux/key) + linha de texto (/tmux/keys). */
   .term-screen {
-    flex: 1; min-height: 260px; max-height: 46vh; overflow: auto; background: #05070b; color: #c9d1d9;
+    flex: 1; min-height: 260px; max-height: 46vh; max-height: 46dvh; overflow: auto; background: #05070b; color: #c9d1d9;
     border-radius: 9px; border: 1px solid var(--border); padding: 10px 12px;
-    font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre;
+    font: var(--fs-term, 12px)/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre;
   }
   /* [16/08/2026] 46vh não é arbitrário: dentro do orçamento de 88vh do modal
      (96vh em .term-full), o que sobra pro .sess-body é dividido com o
@@ -339,6 +359,25 @@
   .cf-alt { background: var(--panel2); color: var(--text); }
   .cf-alt:hover { border-color: var(--faint); }
   /* Avisos do rodapé — o que o alert() do navegador fazia, sem travar a página. */
+  /* [31/08/2026] Card, card do board e chip são <div>/<span> com clique: sem
+     isto, tabular pela página passa direto por eles e a página inteira do
+     board fica inalcançável por teclado. `role`/`tabindex` vão no HTML; aqui
+     mora só o anel de foco, que o navegador não desenha sozinho em elemento
+     não-nativo. */
+  .card:focus-visible, .task-card:focus-visible, .chip:focus-visible {
+    outline: 2px solid var(--running); outline-offset: 2px;
+  }
+  /* Pílula de "chegou mensagem enquanto eu lia mais acima" — o equivalente web
+     do aviso do app. Ancorada em `.chat-body-wrap` (e não dentro do próprio
+     log) de propósito: dentro da área rolável ela subiria junto com o texto,
+     e o aviso precisa ficar parado onde o olho está. */
+  .chat-new {
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: 10px; z-index: 5;
+    background: var(--running); color: #fff; border: none; border-radius: 999px;
+    padding: 6px 13px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+    box-shadow: var(--shadow);
+  }
+  .chat-body-wrap { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
   #toasts { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 50;
             display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
   .toast { pointer-events: auto; display: flex; align-items: flex-start; gap: 10px;
@@ -538,21 +577,21 @@
   </section>
 
   <div id="cardModal" class="modal-overlay" hidden>
-    <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="cardTitle">
       <button class="modal-close" id="cardModalClose" aria-label="Fechar">✕</button>
       <div id="cardModalBody"></div>
     </div>
   </div>
 
   <div id="sessionModal" class="modal-overlay" hidden>
-    <div class="modal session-modal" id="sessionModalPanel" role="dialog" aria-modal="true">
+    <div class="modal session-modal" id="sessionModalPanel" role="dialog" aria-modal="true" aria-labelledby="sessTitle">
       <button class="modal-close" id="sessionModalClose" aria-label="Fechar">✕</button>
       <div id="sessionModalBody"></div>
     </div>
   </div>
 
   <div id="confirmModal" class="modal-overlay" hidden>
-    <div class="confirm" role="dialog" aria-modal="true">
+    <div class="confirm" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
       <h3 id="confirmTitle">Confirmar?</h3>
       <p id="confirmText">Esta ação não pode ser desfeita.</p>
       <div class="confirm-actions" id="confirmActions">
@@ -564,7 +603,7 @@
   </div>
 
   <div id="moveAllModal" class="modal-overlay" hidden>
-    <div class="confirm" role="dialog" aria-modal="true">
+    <div class="confirm" role="dialog" aria-modal="true" aria-labelledby="moveAllTitle">
       <h3 id="moveAllTitle">Mover tudo</h3>
       <p id="moveAllText"></p>
       <div class="pick-list" id="moveAllList"></div>
@@ -710,6 +749,79 @@
   // confirma com o total — e avisa quando os dois divergem.
   const faixaTotal = {}, faixaVisivel = {};
 
+  // ---- Foco dentro do modal (acessibilidade) ----
+  // [31/08/2026] Abrir um modal era só `hidden = false`: o painel aparecia e o
+  // foco continuava no card lá atrás. Quem navega por teclado ou por leitor de
+  // tela seguia tabulando POR BAIXO do overlay — acionando botões cobertos,
+  // sem nunca ouvir que um diálogo abriu. `inert` no fundo resolve os dois
+  // lados de uma vez: tira o resto da página da ordem de Tab E da árvore de
+  // acessibilidade, sem precisar de um laço manual prendendo o Tab.
+  //
+  // A pilha existe porque estes modais se empilham de verdade: "mover tudo"
+  // abre o confirmar por cima de si, e o card abre o confirmar de apagar.
+  // Fechar o de cima devolve o foco ao de baixo, não à página.
+  const pilhaDeModais = [];
+  const regioesDeFundo = () => [
+    document.querySelector('header'),
+    document.getElementById('sessionsView'),
+    document.getElementById('boardView'),
+    document.getElementById('arquivoView'),
+  ].filter(Boolean);
+
+  // Só o modal do topo fica alcançável; fundo e modais de baixo saem do caminho.
+  function sincronizarInerte() {
+    const topo = pilhaDeModais.length ? pilhaDeModais[pilhaDeModais.length - 1].overlay : null;
+    regioesDeFundo().forEach((el) => { el.inert = topo !== null; });
+    pilhaDeModais.forEach((m) => { m.overlay.inert = m.overlay !== topo; });
+  }
+
+  // Foca o PAINEL (role="dialog"), não o primeiro botão: o leitor de tela
+  // anuncia o diálogo e seu título em vez de largar a pessoa num "✕" solto —
+  // e nenhum botão destrutivo chega pré-armado no Enter.
+  function focarDentroDe(overlay) {
+    const painel = overlay.querySelector('[role="dialog"]') || overlay;
+    painel.tabIndex = -1;
+    painel.focus({ preventScroll: true });
+  }
+
+  // Seletor de reserva para reencontrar quem abriu o modal DEPOIS de o board
+  // se redesenhar: `render()` troca os nós dos cards a cada evento do WS, e a
+  // referência guardada vira um nó órfão justamente no caso comum (ficar lendo
+  // um card enquanto os agentes mexem no board). `data-id` é estável.
+  function comoVoltarPara(el) {
+    if (!el || el === document.body) return null;
+    if (el.dataset && el.dataset.id) return `[data-id="${CSS.escape(el.dataset.id)}"]`;
+    if (el.id) return `#${CSS.escape(el.id)}`;
+    return null;
+  }
+
+  function abrirModal(overlay) {
+    if (!overlay.hidden) return; // já aberto: não empilha duas vezes
+    const anterior = document.activeElement;
+    pilhaDeModais.push({ overlay, anterior, seletor: comoVoltarPara(anterior) });
+    overlay.hidden = false;
+    sincronizarInerte();
+    focarDentroDe(overlay);
+  }
+
+  function fecharModal(overlay) {
+    overlay.hidden = true;
+    const i = pilhaDeModais.findIndex((m) => m.overlay === overlay);
+    if (i < 0) return;
+    const [saiu] = pilhaDeModais.splice(i, 1);
+    sincronizarInerte();
+    // Devolve o foco a quem abriu: o nó original se ainda estiver na página, ou
+    // o mesmo card reencontrado pelo `data-id` depois de um redesenho. Só se
+    // nem isso existir é que o foco cai no modal de baixo (se houver) — nunca
+    // fica perdido atrás do overlay.
+    const topo = pilhaDeModais.length ? pilhaDeModais[pilhaDeModais.length - 1].overlay : null;
+    const volta = (saiu.anterior && saiu.anterior.isConnected)
+      ? saiu.anterior
+      : (saiu.seletor ? document.querySelector(saiu.seletor) : null);
+    if (volta && typeof volta.focus === 'function') volta.focus({ preventScroll: true });
+    else if (topo) focarDentroDe(topo);
+  }
+
   const $grid = document.getElementById('grid');
   const $counts = document.getElementById('counts');
   const $filters = document.getElementById('filters');
@@ -760,7 +872,7 @@
     // filters
     const chips = [['all', 'Tudo', all.length], ...ORDER.map((s) => [s, STATES[s].label, by[s]])];
     $filters.innerHTML = chips.map(([key, lbl, n]) =>
-      `<span class="chip ${filter === key ? 'active' : ''}" data-f="${key}">${key !== 'all' ? `<span class="dot" style="background:${STATES[key].color}"></span>` : ''}${lbl} · ${n}</span>`
+      `<span class="chip ${filter === key ? 'active' : ''}" data-f="${key}" role="radio" tabindex="0" aria-checked="${filter === key}">${key !== 'all' ? `<span class="dot" style="background:${STATES[key].color}"></span>` : ''}${lbl} · ${n}</span>`
     ).join('');
 
     // cards
@@ -776,7 +888,7 @@
       const proj = projectName(s.cwd);
       const heading = proj || s.title || s.id;
       const subtitle = proj && s.title ? esc(s.title) : '';
-      return `<div class="card ${s.state}" style="--st:${st.color}" data-id="${esc(s.id)}">
+      return `<div class="card ${s.state}" style="--st:${st.color}" data-id="${esc(s.id)}" role="button" tabindex="0" aria-label="Abrir ${esc(heading)}">
         <div class="glyph">${st.glyph}</div>
         <div class="body">
           <div class="title">${esc(heading)}</div>
@@ -801,6 +913,23 @@
     const card = e.target.closest('.card'); if (!card) return;
     openSessionCard(card.dataset.id);
   });
+
+  // [31/08/2026] Card e chip são <div>/<span> com clique — desenho deliberado
+  // (o card tem estrutura interna que um <button> achata), mas até aqui isso
+  // custava a página inteira ao teclado: sem foco e sem Enter, quem navega por
+  // Tab não abria sessão nenhuma. `role`/`tabindex` estão no HTML; este
+  // handler é a outra metade — Enter e Espaço fazem o que o clique faz, que é
+  // o contrato que `role="button"` promete a quem lê por leitor de tela.
+  function ativarComTeclado(raiz, seletor, acao) {
+    raiz.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const alvo = e.target.closest(seletor); if (!alvo) return;
+      e.preventDefault(); // Espaço rolaria a página.
+      acao(alvo);
+    });
+  }
+  ativarComTeclado($filters, '.chip', (chip) => { filter = chip.dataset.f; render(); });
+  ativarComTeclado($grid, '.card', (card) => openSessionCard(card.dataset.id));
 
   // ---- Painel de sessão (clique no card) ----
   // Duas telas mutuamente exclusivas por sessão, decididas por session.pane:
@@ -845,13 +974,13 @@
       <div class="sess-body" id="sessBody"></div>
     `;
     syncSessionModal(s);
-    $sessionModal.hidden = false;
+    abrirModal($sessionModal);
   }
   function closeSessionModal() {
     stopScreenPoll();
     openSessionId = null;
     openSessionMode = null;
-    $sessionModal.hidden = true;
+    fecharModal($sessionModal);
     // [16/08/2026] .term-full vive no painel (fora do sessBody, que é
     // remontado a cada abertura) — se não zerasse aqui, a PRÓXIMA sessão
     // aberta (mesmo em chat) herdaria o modal ampliado sem o botão bater.
@@ -953,18 +1082,36 @@
   // --- Chat (sessão sem pane) ---
   function renderChatBody() {
     document.getElementById('sessBody').innerHTML = `
-      <div class="chat-log" id="chatLog"><div class="chat-loading">Carregando transcrito…</div></div>
+      <div class="term-toolbar">
+        <button type="button" class="term-key" data-fs="chat:-1" title="Diminuir a fonte do chat" aria-label="Diminuir a fonte do chat">A−</button>
+        <button type="button" class="term-key" data-fs="chat:1" title="Aumentar a fonte do chat" aria-label="Aumentar a fonte do chat">A+</button>
+      </div>
+      <div class="chat-body-wrap">
+        <div class="chat-log" id="chatLog"><div class="chat-loading">Carregando transcrito…</div></div>
+        <button type="button" class="chat-new" id="chatNew" hidden>Mensagens novas ↓</button>
+      </div>
       <form class="chat-compose" id="chatForm">
         <input id="chatInput" placeholder="Digitar para o agente…" autocomplete="off" />
         <button type="submit">Enviar</button>
       </form>
     `;
+    ligarBotoesDeFonte(document.getElementById('sessBody'));
+    naoLidasNoChat = 0;
+    const log = document.getElementById('chatLog');
+    const pill = document.getElementById('chatNew');
+    // Chegar ao fim rolando já é o "eu li tudo": some o aviso sem precisar de clique.
+    log.addEventListener('scroll', () => {
+      if (estaNoFim(log)) { naoLidasNoChat = 0; pill.hidden = true; }
+    });
+    pill.addEventListener('click', () => { rolarAteOFim(log); naoLidasNoChat = 0; pill.hidden = true; });
     document.getElementById('chatForm').addEventListener('submit', (e) => {
       e.preventDefault();
       const inp = document.getElementById('chatInput');
       const v = inp.value.trim();
       if (!v || !openSessionId) return;
       inp.value = '';
+      // Mandar é declarar que quer ver a resposta: volta pro fim de propósito.
+      rolarAteOFim(document.getElementById('chatLog'));
       sendChatInput(openSessionId, v);
     });
   }
@@ -988,12 +1135,27 @@
   }
   // Chamado pelo output_chunk do WS: transcrito ao vivo sem polling (o hub já
   // empurra pelo mesmo socket que o dashboard mantém aberto).
+  let naoLidasNoChat = 0;
   function appendChatChunk(sessionId, kind, text) {
     if (openSessionId !== sessionId || openSessionMode !== 'chat') return;
     const log = document.getElementById('chatLog'); if (!log) return;
     const empty = log.querySelector('.chat-empty'); if (empty) empty.remove();
+    // Medido ANTES de inserir: depois da inserção o fim já se afastou e toda
+    // chegada pareceria "a pessoa subiu".
+    const acompanhar = estaNoFim(log);
     log.insertAdjacentHTML('beforeend', chatChunkHtml({ kind, text }));
-    log.scrollTop = log.scrollHeight;
+    if (acompanhar) {
+      rolarAteOFim(log);
+      naoLidasNoChat = 0;
+    } else {
+      naoLidasNoChat++;
+    }
+    const pill = document.getElementById('chatNew');
+    if (pill) {
+      pill.hidden = naoLidasNoChat === 0;
+      pill.textContent = naoLidasNoChat > 99 ? 'Mensagens novas (99+) ↓'
+        : `Mensagens novas (${naoLidasNoChat}) ↓`;
+    }
   }
   async function sendChatInput(id, text) {
     try {
@@ -1256,11 +1418,24 @@
     btn.textContent = on ? 'Sair da tela cheia' : 'Tela cheia';
   }
 
+  // Um handler para os dois pares de A−/A+ (chat e terminal): o alvo e o passo
+  // vêm do próprio `data-fs`, então acrescentar um terceiro lugar com controle
+  // de fonte não pede código novo.
+  function ligarBotoesDeFonte(raiz) {
+    if (!raiz) return;
+    raiz.querySelectorAll('[data-fs]').forEach((b) => {
+      const [qual, passo] = b.dataset.fs.split(':');
+      b.addEventListener('click', () => { ajustarFonte(qual, parseInt(passo, 10)); });
+    });
+  }
+
   function renderTerminalBody(s) {
     document.getElementById('sessBody').innerHTML = `
       <div class="term-toolbar" id="termToolbar">
         <button type="button" class="term-key" id="termFullBtn" title="Alternar tela cheia do terminal" aria-label="Alternar tela cheia do terminal" aria-pressed="false">Tela cheia</button>
         <button type="button" class="term-key" id="termWrapBtn" title="Alternar quebra de linha" aria-label="Alternar quebra de linha automática" aria-pressed="false">Quebrar linha</button>
+        <button type="button" class="term-key" data-fs="term:-1" title="Diminuir a fonte do terminal" aria-label="Diminuir a fonte do terminal">A−</button>
+        <button type="button" class="term-key" data-fs="term:1" title="Aumentar a fonte do terminal" aria-label="Aumentar a fonte do terminal">A+</button>
       </div>
       <pre class="term-screen" id="termScreen">Carregando tela…</pre>
       <div class="term-keys" id="termKeys">${TERM_KEYS.map(([label, key]) => `<button type="button" class="term-key" data-key="${esc(key)}">${esc(label)}</button>`).join('')}</div>
@@ -1274,6 +1449,7 @@
     // a aparência do botão novo sem mexer na classe (senão fechava a tela cheia
     // sozinho ao só trocar de aba/sessão).
     setTermFull($sessionModalPanel.classList.contains('term-full'));
+    ligarBotoesDeFonte(document.getElementById('termToolbar'));
     document.getElementById('termFullBtn').addEventListener('click', () => {
       setTermFull(!$sessionModalPanel.classList.contains('term-full'));
     });
@@ -1304,10 +1480,27 @@
   // é uma tela de terminal de TERCEIRO, e as únicas tags no resultado são
   // <span> que o próprio parser cria a partir de SGR já validado, nunca uma
   // tag/atributo refletindo bytes crus do terminal.
+  // O poll do terminal falhando em silêncio deixa uma tela CONGELADA que parece
+  // uma tela viva e parada — a pior forma de errar, porque leva a esperar por
+  // uma saída que não vem. Um aviso por RAJADA de falhas, não um por tick: a
+  // cada segundo seria a página inteira coberta de aviso.
+  let telaFalhando = false;
+  function avisarTelaParada(motivo) {
+    if (telaFalhando) return;
+    telaFalhando = true;
+    toast('A tela do terminal parou de atualizar', `${motivo}. O que está aí é a última captura.`, 'err');
+  }
   function renderScreen(text) {
+    telaFalhando = false;
     const el = document.getElementById('termScreen'); if (!el) return;
+    // [31/08/2026] O poll redesenha a tela inteira de segundo em segundo. Com a
+    // rolagem incondicional, subir para ler o que passou durava menos de um
+    // segundo. Agora só acompanha quem estava no fim — e, para quem subiu, a
+    // posição é preservada em vez de saltar (a altura muda a cada captura).
+    const acompanhar = estaNoFim(el);
+    const antes = el.scrollTop;
     el.innerHTML = parseAnsiToHtml(text);
-    el.scrollTop = el.scrollHeight;
+    el.scrollTop = acompanhar ? el.scrollHeight : antes;
   }
   let screenPollTimer = null;
   let screenPollTick = null;
@@ -1321,8 +1514,8 @@
       try {
         const res = await fetch(`/machines/${encodeURIComponent(machine)}/tmux/screen?target=${encodeURIComponent(pane)}`, { headers: authHeader() });
         if (res.ok) { const data = await res.json(); renderScreen(data.screen || ''); }
-        else console.error('tmux screen falhou:', res.status);
-      } catch (e) { console.error('tmux screen erro:', e.message); }
+        else { console.error('tmux screen falhou:', res.status); avisarTelaParada(`o hub respondeu ${res.status}`); }
+      } catch (e) { console.error('tmux screen erro:', e.message); avisarTelaParada('o hub não respondeu'); }
     };
     screenPollTick = tick;
     tick();
@@ -1394,7 +1587,7 @@
       const days = Math.floor((Date.now() - new Date(t.updated_at).getTime()) / 86400000);
       if (days >= 7) stats.push(`<span class="task-stalled" title="sem update há ${days} dias">${ICONS.clock} parado há ${days}d</span>`);
     }
-    return `<div class="task-card" draggable="true" data-id="${esc(t.id)}" data-type="${esc(t.type || '')}">
+    return `<div class="task-card" draggable="true" data-id="${esc(t.id)}" data-type="${esc(t.type || '')}" role="button" tabindex="0" aria-label="Abrir card ${esc(t.title)}">
       <div class="task-title">${esc(t.title)}</div>
       <div class="task-tags">${typeTag}${idTags}</div>
       ${stats.length ? `<div class="task-stats">${stats.join('')}</div>` : ''}
@@ -1524,8 +1717,19 @@
         headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
         body: JSON.stringify(patch),
       });
-      if (!res.ok) { console.error('patchTask falhou:', res.status); renderBoard(); }
-    } catch (e) { console.error('patchTask erro de rede:', e.message); renderBoard(); }
+      // [31/08/2026] `renderBoard()` desfaz o movimento otimista, mas fazia isso
+      // em silêncio: o card voltava sozinho para a coluna de origem e não havia
+      // como distinguir isso de um bug do board. Agora ele diz o que aconteceu.
+      if (!res.ok) {
+        console.error('patchTask falhou:', res.status);
+        toast('Não deu pra mover o card', `O hub respondeu ${res.status}. O board voltou como estava.`, 'err');
+        renderBoard();
+      }
+    } catch (e) {
+      console.error('patchTask erro de rede:', e.message);
+      toast('Não deu pra mover o card', 'O hub não respondeu. O board voltou como estava.', 'err');
+      renderBoard();
+    }
   }
   const moveTask = (id, col) => patchTask(id, { column: col, actor: 'você' });
   // Marcar como encalhada = volta pra "A fazer" e sinaliza como esquecida.
@@ -1536,7 +1740,7 @@
   // a faixa), nunca de destino — marcar um lote como encalhado não serve pra nada.
   const $moveAllModal = document.getElementById('moveAllModal');
   const $moveAllList = document.getElementById('moveAllList');
-  const closeMoveAll = () => { $moveAllModal.hidden = true; };
+  const closeMoveAll = () => { fecharModal($moveAllModal); };
   const cards = (n) => `${n} card${n === 1 ? '' : 's'}`;
 
   function askMoveAll(from) {
@@ -1552,7 +1756,7 @@
       .filter(([col]) => col !== from)
       .map(([col, label]) => `<button type="button" data-to="${col}">${ICONS.moveAll}${label}</button>`)
       .join('');
-    $moveAllModal.hidden = false;
+    abrirModal($moveAllModal);
   }
 
   $moveAllList.addEventListener('click', (e) => {
@@ -1648,7 +1852,7 @@
     const comments = t.comments || [];
     const colInfo = readOnly ? 'Arquivado' : (COL_LABEL[t.column] || esc(t.column));
     $cardModalBody.innerHTML = `
-      <h2>${esc(t.title)}</h2>
+      <h2 id="cardTitle">${esc(t.title)}</h2>
       <div class="m-tags" data-type="${esc(t.type || '')}">${tags.join('')}</div>
       <div style="font-size:12.5px;color:var(--muted)">${readOnly ? 'Status' : 'Coluna'}: <b>${colInfo}</b>${t.role ? ` · Quem: <b>${esc(t.role)}</b>` : ''}</div>
       <div class="m-desc ${t.description ? '' : 'empty'}">${t.description ? esc(t.description) : 'sem descrição'}</div>
@@ -1704,20 +1908,30 @@
     const ro = readOnly || !tasks.has(id);
     openCardId = id; openReadOnly = ro;
     renderCardModal(t, ro);
-    $cardModal.hidden = false;
+    abrirModal($cardModal);
   }
-  function closeCard() { openCardId = null; openReadOnly = false; $cardModal.hidden = true; }
+  function closeCard() { openCardId = null; openReadOnly = false; fecharModal($cardModal); }
   async function addComment(id, text) {
     try {
       const res = await fetch('/board/tasks/' + encodeURIComponent(id) + '/comments', {
         method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
         body: JSON.stringify({ author: 'você', text }),
       });
-      if (!res.ok) console.error('comment falhou:', res.status);
+      // O campo só é limpo quando o hub aceitou: perder o texto num 4xx é
+      // perder o comentário inteiro, sem cópia em lugar nenhum.
+      if (!res.ok) {
+        console.error('comment falhou:', res.status);
+        toast('Comentário não salvo', `O hub respondeu ${res.status}. O texto continua no campo.`, 'err');
+        return;
+      }
       const inp = document.getElementById('mAddInput'); if (inp) inp.value = '';
-    } catch (e) { console.error('comment erro:', e.message); }
+    } catch (e) {
+      console.error('comment erro:', e.message);
+      toast('Comentário não salvo', 'O hub não respondeu. O texto continua no campo.', 'err');
+    }
   }
   $boardCols.addEventListener('click', (e) => { const card = e.target.closest('.task-card'); if (card) openCard(card.dataset.id); });
+  ativarComTeclado($boardCols, '.task-card', (card) => openCard(card.dataset.id));
   document.getElementById('cardModalClose').addEventListener('click', closeCard);
   $cardModal.addEventListener('click', (e) => { if (e.target === $cardModal) closeCard(); });
 
@@ -1736,9 +1950,9 @@
     document.getElementById('confirmActions').classList.toggle('stack', !!altLabel);
     confirmCb = onConfirm;
     altCb = onAlt || null;
-    $confirmModal.hidden = false;
+    abrirModal($confirmModal);
   }
-  function closeConfirm() { confirmCb = null; altCb = null; $confirmModal.hidden = true; }
+  function closeConfirm() { confirmCb = null; altCb = null; fecharModal($confirmModal); }
   document.getElementById('confirmCancel').addEventListener('click', closeConfirm);
   document.getElementById('confirmOk').addEventListener('click', () => {
     const cb = confirmCb; closeConfirm(); if (cb) cb();
@@ -1763,11 +1977,61 @@
       const res = await fetch('/board/tasks/' + encodeURIComponent(id), {
         method: 'DELETE', headers: { Authorization: 'Bearer ' + TOKEN },
       });
-      if (!res.ok) { console.error('delete falhou:', res.status); return; }
+      if (!res.ok) {
+        console.error('delete falhou:', res.status);
+        toast('Não deu pra apagar', `O hub respondeu ${res.status}. O card continua no board.`, 'err');
+        return;
+      }
       tasks.delete(id); renderBoard();
       if (openCardId === id) closeCard();
-    } catch (e) { console.error('delete erro:', e.message); }
+    } catch (e) {
+      console.error('delete erro:', e.message);
+      toast('Não deu pra apagar', 'O hub não respondeu. O card continua no board.', 'err');
+    }
   }
+
+  // ---- Tamanho da fonte do chat e do terminal (31/08/2026) ----
+  // A mesma página é lida no celular (onde o que falta é contexto na tela) e
+  // no monitor (onde 12px de terminal é pequeno demais). Vive em `:root` como
+  // variável CSS e no localStorage — nada de reconstruir a tela pra mudar
+  // tamanho, e a escolha sobrevive ao F5.
+  const FONTES = {
+    chat: { chave: 'cutuque.fs.chat', varr: '--fs-chat', min: 11, max: 20, padrao: 13 },
+    term: { chave: 'cutuque.fs.term', varr: '--fs-term', min: 9, max: 20, padrao: 12 },
+  };
+  function fonteAtual(qual) {
+    const f = FONTES[qual];
+    // A LEITURA também vai em try/catch, não só a escrita: em navegador com
+    // dados de site bloqueados o próprio `localStorage.getItem` lança, e como
+    // isto roda no carregamento da página, uma exceção aqui derrubaria o script
+    // inteiro — o dashboard abriria morto por causa de um tamanho de fonte.
+    let salvo = NaN;
+    try { salvo = parseInt(localStorage.getItem(f.chave) || '', 10); } catch (e) { /* modo privado */ }
+    return Number.isFinite(salvo) ? Math.min(f.max, Math.max(f.min, salvo)) : f.padrao;
+  }
+  function aplicarFonte(qual) {
+    const f = FONTES[qual];
+    document.documentElement.style.setProperty(f.varr, fonteAtual(qual) + 'px');
+  }
+  function ajustarFonte(qual, delta) {
+    const f = FONTES[qual];
+    const novo = Math.min(f.max, Math.max(f.min, fonteAtual(qual) + delta));
+    try { localStorage.setItem(f.chave, String(novo)); } catch (e) { /* modo privado */ }
+    aplicarFonte(qual);
+    return novo;
+  }
+  aplicarFonte('chat'); aplicarFonte('term');
+
+  // ---- Rolagem que não rouba a tela de quem está lendo (31/08/2026) ----
+  // Mesma regra do app: só acompanha quem JÁ estava no fim. Antes toda chegada
+  // de chunk (e todo poll do terminal, de segundo em segundo) jogava a rolagem
+  // pro fim — subir pra reler durava até o próximo evento, que é a razão
+  // prática de "não dá pra ler aqui, tenho que voltar pro PC".
+  const FOLGA_FIM = 40;
+  function estaNoFim(el) {
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= FOLGA_FIM;
+  }
+  function rolarAteOFim(el) { el.scrollTop = el.scrollHeight; }
 
   // Aviso no rodapé. Some sozinho em 6s, ou no clique — nunca bloqueia a página
   // (o alert() do navegador travava tudo e ainda mostrava o host no título).
