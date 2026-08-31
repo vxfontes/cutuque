@@ -12,7 +12,7 @@ final class PTYSessionTests: XCTestCase {
     /// sem isso o shell abre 80x24 e desenha o prompt torto até o resize chegar.
     func testURLLevaTokenETamanhoNoHandshake() {
         let url = PTYSession.ptyURL(machine: "vps", cols: 120, rows: 45,
-                                    base: URL(string: "http://100.100.125.103:8787")!, token: "segredo")
+                                    base: URL(string: "http://192.0.2.10:8787")!, token: "segredo")
         let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
 
         XCTAssertEqual(comps.scheme, "ws")

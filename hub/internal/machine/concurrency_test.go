@@ -29,7 +29,7 @@ import (
 // identidades enquanto leituras derivam `dest` a partir dele.
 func TestCorridaEntreUseIdentitiesEList(t *testing.T) {
 	reg := NewRegistry([]Machine{
-		{Name: "macmini", Host: "100.100.125.103", Port: 22, Identity: "vanessa", Source: SourceApp},
+		{Name: "macmini", Host: "192.0.2.10", Port: 22, Identity: "vanessa", Source: SourceApp},
 		{Name: "macbook", Host: "100.64.0.2", Port: 22, Identity: "vanessa", Source: SourceApp},
 	})
 
@@ -96,7 +96,7 @@ func TestCorridaEntreEscritaNoStoreELeituraNoRegistro(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 	reg := NewRegistry([]Machine{
-		{Name: "macmini", Host: "100.100.125.103", Port: 22, Identity: "vanessa", Source: SourceApp},
+		{Name: "macmini", Host: "192.0.2.10", Port: 22, Identity: "vanessa", Source: SourceApp},
 	})
 	reg.UseIdentities(idents)
 
@@ -117,7 +117,7 @@ func TestCorridaEntreEscritaNoStoreELeituraNoRegistro(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for n := 0; n < 300; n++ {
-			if m, ok := reg.Get("macmini"); ok && m.Dest != "vx@100.100.125.103" {
+			if m, ok := reg.Get("macmini"); ok && m.Dest != "vx@192.0.2.10" {
 				t.Errorf("dest derivado errado: %q", m.Dest)
 				return
 			}
