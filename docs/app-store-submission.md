@@ -35,13 +35,21 @@ enviar o build pelo App Store Connect.
       temas** e `dvh` com `vh` de reserva.
       Suíte **675/675** nos simuladores de iPhone **e** de iPad, `go build`, `go vet` e
       `go test ./...` limpos.
-      ⚠️ **Depende de hub novo.** O diff por arquivo vem do `git diff HEAD` sem ANSI e o
-      teto de 2000 vem do registry — os dois estão só no `master` local. Sem deploy da
-      imagem, a 2.9.0 mostra diff no formato antigo e continua cortando em 500.
-      ⚠️ **O app do relógio continua sem compilar nesta máquina** (mesma causa de
-      sempre: SDK watchOS presente, runtime de watchsimulator ausente → o catálogo de
-      assets do `CutuqueWatch` não compila). O bump do relógio foi feito e conferido no
-      plist; a compilação dele fica pro archive, na máquina dela.
+      ✅ **Hub no ar desde 31/08/2026.** A leva foi commitada (`b32417c`..`956b91d`),
+      empurrada para o repositório público e a imagem foi reconstruída no macmini
+      (`docker compose up -d --build`, contêiner `ac64a543ce76`). Conferido depois de
+      subir: `/health` ok, dashboard servido já com o foco novo e as 29 sessões
+      preservadas. Esta é a primeira versão em muito tempo que **não** entra dependendo
+      de deploy futuro.
+      ✅ **Archive gerado e enviado por ela em 31/08/2026**, pelo Xcode.
+      📌 Sobre o alvo do relógio: o que falha aqui pela linha de comando é **construir o
+      `CutuqueWatch` com destino de iPhone** — nesse caminho o `actool` recusa o
+      `AppIcon` ("did not have any applicable content") porque os ícones do catálogo são
+      `idiom: watch` e o alvo estava sendo compilado para iOS. Não é catálogo quebrado:
+      os 11 PNGs estão lá e o archive pelo Xcode passa. A limitação real, quando
+      aparece, é outra e específica do **simulador** (rodar o scheme `CutuqueApp` exige
+      runtime de watchsimulator instalado) — e é para isso que existe o
+      `project.testes.yml`.
       **2.8.0 aberta em 2026-08-20**, no `master`: **minor** — três capacidades
       novas e visíveis, nenhum conserto de app no meio. (1) **Painel Diff** por
       máquina na aba Máquinas (`dc7c884`), nativo, iPhone e iPad. (2) **Painel
@@ -263,6 +271,38 @@ strings -a "$ARCH/Products/Applications/CutuqueApp.app/CutuqueApp" | grep -o -E 
 ```
 
 Foi assim que o build 14 (2.2.0) se confirmou com `windows` e **zero** `desktop-win`.
+
+## Novidades desta versão (colar em "O que há de novo" — 2.9.0, build 26)
+
+> pt-BR, voltado a quem usa. Escrito para a 2.9.0; trocar inteiro a cada versão.
+
+```
+Esta versão é sobre LER de longe. Até aqui o app servia para disparar, aprovar e
+ser avisada; agora ele serve para entender o que aconteceu sem voltar para o
+computador.
+
+• Muito mais contexto. O histórico de cada sessão passou de 500 para 2000
+  mensagens. Conversas longas aparecem inteiras, sem precisar pedir resumo.
+
+• A tela parou de fugir. O chat só rola sozinho quando você já está no fim.
+  Se subiu para reler, fica onde está e aparece um aviso de mensagens novas.
+
+• Diff de verdade. O painel Diff das máquinas foi reescrito: lista de arquivos
+  com quantas linhas entraram e saíram, numeração dos dois lados, um arquivo por
+  vez, busca dentro do diff e tamanho de fonte ajustável.
+
+• Buscar dentro do arquivo. O visualizador de código mostra "3 de 12", pula de
+  ocorrência em ocorrência, liga numeração de linha e quebra de linha.
+
+• Abas com atalho de teclado no iPad. ⌘⇧] e ⌘⇧[ andam entre abas, ⌘W fecha e
+  ⌘⌥T reabre a última fechada.
+
+• Texto do tamanho que você quiser, sem atropelar o ajuste de acessibilidade do
+  aparelho — e com memória separada para iPhone e para iPad.
+
+• VoiceOver e teclado: abas anunciadas corretamente e navegação por teclado no
+  painel do board.
+```
 
 ## Notas de revisão (colar em Revisão de apps → Notas)
 
