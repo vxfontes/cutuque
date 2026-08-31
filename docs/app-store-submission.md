@@ -5,10 +5,43 @@ enviar o build pelo App Store Connect.
 
 ## Estado atual (já pronto no repo)
 
-- [x] **Versão / build:** `CFBundleShortVersionString 2.8.0`, `CFBundleVersion 25`
+- [x] **Versão / build:** `CFBundleShortVersionString 2.9.0`, `CFBundleVersion 26`
       (iOS, watchOS e widget alinhados — ver `app/project.yml`). Lembrete: subir o
       `CFBundleVersion` a cada upload novo ao TestFlight — o número precisa ser
       único **dentro do trem daquela versão curta**, não globalmente.
+      **2.9.0 aberta em 2026-08-31**, no `master`: **minor** — uma leva inteira de
+      leitura, sem recurso novo de controle. O pedido que a originou foi "meu iPhone
+      consiga visualizar bastante contexto, ler e entender melhor sem precisar pedir
+      pra resumir" e "o iPad consiga substituir ter que voltar pro PC pra visualizar
+      melhor um trecho de código ou a resposta da IA". O que mudou:
+      (1) **Teto de contexto de 500 → 2000 chunks**, no hub e no app **no mesmo
+      número** (`registry.maxOutputChunks` e `SessionDetailViewModel.maxChunks`), mais
+      um teto novo de **8 MiB por sessão** (`maxOutputBytes`) — contagem sozinha não
+      limita memória, porque chunk de assistant não tem teto de tamanho.
+      (2) **Diff nativo reescrito** sobre um parser puro (`DiffUnificado`): lista de
+      arquivos com `+N/−M`, numeração dos dois lados, busca dentro do diff e fonte
+      ajustável. O hub passou a rodar `git diff HEAD` com `color.ui=never` — antes o
+      `git diff` seco escondia o que já estava staged.
+      (3) **Visualizador de código** com busca ("3 de 12"), numeração de linha opcional,
+      quebra de linha e tamanho de fonte por classe de aparelho.
+      (4) **Abas de navegador**: `⌘⇧]`/`⌘⇧[` para andar, `⌘W` para fechar, `⌘⌥T` para
+      reabrir a última fechada, menu de visão geral e `.isSelected` para o VoiceOver.
+      (5) **Chat que não rouba a tela**: rolagem automática só para quem já estava no
+      fim, com aviso de mensagens novas, e tamanho de texto relativo ao Dynamic Type.
+      (6) **Dashboard web**: mesma regra de rolagem no chat e no espelho tmux, `A−/A+`
+      no chat e no terminal, toast nas falhas que eram silenciosas, board navegável por
+      teclado, foco que entra no modal e volta para quem o abriu (fundo `inert`, sem
+      tabular por baixo do overlay), contraste do `--faint` acima do AA **nos dois
+      temas** e `dvh` com `vh` de reserva.
+      Suíte **675/675** nos simuladores de iPhone **e** de iPad, `go build`, `go vet` e
+      `go test ./...` limpos.
+      ⚠️ **Depende de hub novo.** O diff por arquivo vem do `git diff HEAD` sem ANSI e o
+      teto de 2000 vem do registry — os dois estão só no `master` local. Sem deploy da
+      imagem, a 2.9.0 mostra diff no formato antigo e continua cortando em 500.
+      ⚠️ **O app do relógio continua sem compilar nesta máquina** (mesma causa de
+      sempre: SDK watchOS presente, runtime de watchsimulator ausente → o catálogo de
+      assets do `CutuqueWatch` não compila). O bump do relógio foi feito e conferido no
+      plist; a compilação dele fica pro archive, na máquina dela.
       **2.8.0 aberta em 2026-08-20**, no `master`: **minor** — três capacidades
       novas e visíveis, nenhum conserto de app no meio. (1) **Painel Diff** por
       máquina na aba Máquinas (`dc7c884`), nativo, iPhone e iPad. (2) **Painel
@@ -45,7 +78,7 @@ enviar o build pelo App Store Connect.
       é recusado (`1bdc473`), espelho ao vivo reagindo ao movimento em vez de esperar
       o relógio (`e1f6706`) e navegador de arquivos subindo de pasta (`1fc0f48`),
       com suíte 587/587 na época. ⚠️ Não dá para afirmar daqui qual imagem de hub
-      está em produção — o `/health` do 100.100.125.103:8787 só responde
+      está em produção — o `/health` do 192.0.2.10:8787 só responde
       `{"service":"cutuque-hub","status":"ok"}`, sem versão. A leva da 2.7.4 mexeu no
       hub junto (`df10ced`, CAS no Resolve), então **se** aquela imagem não subiu, o
       aviso do swipe "Concluir" da 2.7.4 também está esperando deploy.

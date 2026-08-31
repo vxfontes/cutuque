@@ -60,7 +60,13 @@ sobre a sua rede privada, **sem nuvem de terceiros**.
 - 🔁 **Loop completo** — disparar → acompanhar output ao vivo → aprovar permissão → ser avisado, tudo do celular/Watch.
 - ⌚ **Cutucão confiável** — vibração _time-sensitive_ no pulso mesmo com o app fechado (fura Foco/DND quando importa).
 - 🏝️ **Live Activity** — sessões rodando aparecem na Dynamic Island e na tela de bloqueio.
-- 🪟 **iPad em split view** — barra lateral fixa e detalhe lado a lado, com o terminal ao vivo.
+- 🪟 **iPad em split view** — barra lateral fixa e detalhe lado a lado, com o terminal ao vivo, e
+  abas de navegador (`⌘⇧]` / `⌘⇧[` para andar, `⌘W` para fechar, `⌘⌥T` para reabrir a última).
+- 📜 **Contexto longo de verdade** — o transcrito guarda **2000 mensagens** por sessão (hub e app cortam
+  no mesmo ponto), o texto tem tamanho ajustável por aparelho e a tela **só rola sozinha para quem já
+  estava no fim** — subir para reler não é mais desfeito pelo próximo chunk.
+- 🔎 **Código para ler no tablet** — visualizador com busca (“3 de 12”), numeração de linha, quebra de
+  linha e fonte ajustável; **diff nativo** por arquivo, com os dois lados numerados e busca dentro do diff.
 - 🔒 **Privado por design** — o código-fonte nunca sai da sua rede (Tailscale); ao APNs vão só metadados (“sessão X concluiu”).
 - 🗂️ **Board Kanban** — Command Center web + CLI `cutuque` para acompanhar o que cada agente está fazendo.
 - 🎛️ **Deck físico** — plugin para o Ulanzi Stream Deck com atalhos e visão rápida das sessões.
@@ -132,8 +138,12 @@ cp config/hub.env.example config/hub.env
 ```bash
 cd app
 xcodegen generate             # gera o CutuqueApp.xcodeproj a partir do project.yml
-open CutuqueApp.xcodeproj      # build & run pelo Xcode
+open CutuqueApp.xcodeproj     # build & run pelo Xcode
 ```
+
+> ⌚ O esquema `CutuqueApp` **embute o app do Watch**, então buildar para simulador exige o
+> runtime de watchOS instalado. Numa máquina sem ele, use `project.testes.yml` (mesmo código,
+> sem o alvo do relógio) — é o caminho da suíte de testes, logo abaixo.
 
 ### 3. Board & Deck (Node)
 
@@ -143,7 +153,10 @@ cd deck  && npm install                 # plugin do Ulanzi
 ```
 
 O **Command Center** (kanban dos agentes) é servido pelo próprio hub em
-`http://<seu-hub>:8787/dashboard`. A CLI `cutuque` se instala a partir dele:
+`http://<seu-hub>:8787/dashboard`. Ele é navegável só por teclado: `Tab` percorre
+chips e cards, `Enter`/`Espaço` abrem, o foco entra no diálogo (o resto da página
+fica `inert`) e o `Esc` fecha devolvendo o foco a quem abriu. A CLI `cutuque` se
+instala a partir dele:
 
 ```bash
 curl -fsSL http://<seu-hub>:8787/install | sh
@@ -208,6 +221,21 @@ cd hub   && go test ./...              # suíte Go do hub
 cd deck  && npm install && npm test    # deck
 cd board && npm install && npm test    # board / CLI
 ```
+
+A suíte do app (675 testes) roda pelo projeto de testes, que é o `project.yml` **sem o alvo
+watchOS** — assim ela roda em máquina que não tenha o runtime do relógio instalado:
+
+```bash
+cd app
+xcodegen generate --spec project.testes.yml
+xcrun simctl list devices available          # pegue o UDID do simulador desejado
+xcodebuild test -project CutuqueAppTestes.xcodeproj -scheme CutuqueApp \
+  -destination 'id=<UDID>'
+```
+
+> 🧭 Endereçar o simulador por **UDID**, e não por `name=`, é de propósito: com mais de um
+> runtime instalado o `name=` pode não resolver. E vale rodar nos **dois** idiomas — há teste
+> cujo resultado esperado depende de ser iPhone ou iPad (o chrome da aba Máquinas, por exemplo).
 
 ## 📂 Estrutura
 

@@ -48,3 +48,44 @@ O Watch mostra **estado e decisão rápida**, não código.
 - **Lista de sessões** — todas as sessões com estado (cor/ícone) e máquina de origem.
 - **Detalhe da sessão** — output ao vivo; quando `needs_you`, mostra o prompt + Aprovar/Negar.
 - **Nova tarefa** — escolher máquina + agente + prompt e disparar.
+
+## Fluxo: ler no aparelho — 2026-08-31
+
+Seção nova, escrita depois da leva 2.9.0. Os fluxos acima descrevem **decidir** de longe;
+este descreve **entender** de longe, que é outra coisa e tinha ficado de fora: o pedido
+que a originou foi "meu iPhone consiga visualizar bastante contexto, ler e entender melhor
+sem precisar pedir pra resumir" e "o iPad consiga substituir ter que voltar pro PC pra
+visualizar melhor um trecho de código ou a resposta da IA".
+
+**Três regras valem em todas as superfícies de leitura** (chat do app, visualizador de
+arquivo, diff, e as mesmas telas no dashboard web):
+
+1. **A tela só rola sozinha para quem já estava no fim.** Quem subiu para reler fica onde
+   está e recebe um aviso de quantas mensagens novas chegaram. Antes o transcrito rolava a
+   cada item novo: numa sessão viva, subir para reler durava até o próximo chunk — era a
+   razão prática de "não dá pra ler no celular, tenho que pedir pra resumir". A folga de
+   "estar no fim" é generosa de propósito (40 pt), para rolagem elástica e arredondamento
+   não passarem por "a usuária subiu".
+2. **Tamanho de texto é ajustável e separado por classe de aparelho.** No iPhone o ajuste
+   costuma ser para baixo (caber mais contexto), no iPad para cima (ler à distância) — uma
+   chave de preferência para cada. No chat o valor guardado é um **deslocamento** sobre o
+   Dynamic Type do sistema, nunca um tamanho absoluto: quem configurou o aparelho inteiro
+   em texto grande continua recebendo texto grande.
+3. **Ler é achar.** Visualizador de arquivo e diff têm busca com contador ("3 de 12") e
+   navegação circular entre as ocorrências. Sem isso, achar uma função num arquivo de 2 mil
+   linhas continua sendo motivo para voltar ao computador — que é justamente o que a leva
+   queria eliminar.
+
+**Quanto contexto cabe:** 2000 mensagens por sessão, o mesmo número no hub e no app (ver
+[02 — Arquitetura](02-arquitetura.md), seção "Retenção de output por sessão").
+
+**Teclado no iPad**, para as abas se comportarem como as do navegador: `⌘⇧]` e `⌘⇧[`
+andam entre abas (circular), `⌘W` fecha e `⌘⌥T` reabre a última fechada. O `⌘⇧T` de
+costume **não** foi usado: ele já era "Próximo painel" desde a versão iPad, e trocar um
+atalho que já está no dedo custa mais do que ganhar o padrão. A pilha de reabertura vive só
+em memória — desfazer um fechamento é arrependimento imediato, não histórico.
+
+> **Exceção documentada:** o visualizador de arquivo renderiza o conteúdo num `Text` único
+> para preservar a seleção contínua. O **modo linha** (numeração ou busca ativa) quebra essa
+> regra porque não existe âncora de rolagem dentro de um `Text` só — por isso ele é sempre
+> **pedido**, e sai sozinho quando a busca é limpa.

@@ -20,6 +20,11 @@ Apple Watch, via Tailscale, sem nuvem de terceiros.
 | [08 — Decisões e pendências](08-decisoes-e-pendencias.md) | Log de decisões e questões em aberto |
 | [09 — Configurar hooks](09-configurar-hooks.md) | Hooks do Claude Code apontando para o hub |
 | [10 — Protocolo de controle](10-protocolo-controle-claude.md) | Aprovação nativa via control_request/response (verificado empiricamente) |
+| [11 — APNs](11-apns.md) | Credenciais, payloads e o que **nunca** vai no push |
+| [12 — Deploy no ZimaOS](12-deploy-zimaos.md) | O hub como container no macmini |
+| [13 — Alvo Windows/WSL2](13-alvo-windows-wsl2.md) | Máquina Windows como alvo idêntico ao Mac |
+| [Submissão à App Store](app-store-submission.md) | Checklist de publicação + **histórico de versões** |
+| [Protocolo do board](board-protocol.md) | Colunas, regras e CLI do Kanban dos agentes |
 
 ## Documento canônico
 
@@ -30,5 +35,12 @@ dia a dia. Em caso de divergência, alinhar ambos.
 
 ## Estado atual
 
-Design aprovado. Próximo passo: plano de implementação detalhado do **v0** (ver
-[07 — Fases de implementação](07-fases-implementacao.md)).
+**[31/08/2026]** v0 e v1 no ar; board e deck construídos; v2 parcial (Postgres). App na versão
+**2.9.0 (26)**. O parágrafo original desta seção ("design aprovado, próximo passo é o plano do v0")
+ficou verdadeiro por poucos dias em julho de 2026 e passou meses desatualizado aqui — fica o registro
+de que **este índice é doc de entrada, não diário**: para o que está pronto e o que falta, a fonte é
+o board (`cutuque task list`) e, no vault, `Geral — Estado Atual e Pendências`.
+
+Os docs numerados são **de design** e guardam a intenção original de cada tema, com notas inline
+datadas onde a realidade divergiu. Onde o número mudou (versão, tetos, contagem de testes), a fonte
+é o código; o doc explica o **porquê**.

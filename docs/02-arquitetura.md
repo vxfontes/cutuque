@@ -253,8 +253,42 @@ Estes dois não escrevem histórico da mesma forma que os três de cima (a trans
 DEPOIS de o Registry já ter decidido/apagado — a ordem é que é o bypass). Mesma postura
 do parágrafo acima: fora do escopo desta revisão resolver, só documentar.
 
+## Retenção de output por sessão — 2026-08-31
+
+Quanto de conversa o hub guarda por sessão é uma decisão de arquitetura, não um detalhe
+do `registry`: é ela que define quanto contexto o app consegue mostrar sem pedir resumo,
+e é ela que define o pior caso de memória do processo.
+
+São **dois tetos**, aplicados juntos em `registry.trimOutput` (`internal/registry/output.go`),
+sempre cortando pelos **mais antigos**:
+
+| Teto | Valor | Por quê |
+|---|---|---|
+| `maxOutputChunks` | **2000** (era 500) | Contexto que cabe na tela do iPhone/iPad sem pedir resumo. Vale tanto para o output ao vivo quanto para o histórico importado no `Launcher.Adopt` → `importTranscript`. |
+| `maxOutputBytes` | **8 MiB** | Contagem sozinha não limita memória: chunk de `assistant` **não tem teto de tamanho** (só `tool` e `tool_result` têm), então 2000 chunks gordos poderiam pesar muito mais do que o Mac mini quer segurar por sessão. Com os dois, o pior caso por sessão é conhecido. |
+
+Três consequências que valem registrar:
+
+- **O app corta no mesmo número.** `SessionDetailViewModel.maxChunks` também é 2000, de
+  propósito: app e hub cortando em pontos diferentes davam a impressão de mensagem sumida.
+- **O corte de bytes é varredura, não contador.** `outputs` é apagado em dois pontos do
+  registry (`Remove` e `Forget` — o reaper chega lá pelo próprio `Forget`, não apaga por
+  fora); um contador paralelo teria de ser zerado nos dois, e um esquecimento vazaria
+  orçamento para sempre. A varredura custa no máximo
+  `maxOutputChunks` leituras de `len(string)` por chunk recebido — ruído perto do custo de
+  já ter falado com o agente pela rede.
+- **O scrollback do tmux ficou em 500 de propósito.** O espelho é *poll*, não stream: cada
+  linha a mais é tráfego duas vezes por segundo e ANSI reparseado no aparelho. Chunk de
+  chat chega uma vez e fica; linha de espelho chega de novo a cada captura. São eixos
+  diferentes e o número não deve ser "alinhado" com o de cima.
+
+Os três `transcript.go` dos adapters (`claudecode`, `codex`, `opencode`) acompanham:
+o script Python que lê o transcript passou de `out[-500:]` para `out[-2000:]`, senão o
+teto novo do registry só valeria para output ao vivo e não para sessão adotada.
+
 ---
 
-**Última revisão:** 2026-08-16. Seções originais de 2026-07-02 mantidas como estavam,
-com notas inline datadas onde a realidade divergiu; seções novas acima cobrem o que não
-existia ainda quando o documento foi escrito.
+**Última revisão:** 2026-08-31 (seção de retenção de output). Revisão anterior em
+2026-08-16; seções originais de 2026-07-02 mantidas como estavam, com notas inline
+datadas onde a realidade divergiu; seções novas acima cobrem o que não existia ainda
+quando o documento foi escrito.
