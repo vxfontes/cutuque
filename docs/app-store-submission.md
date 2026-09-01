@@ -5,7 +5,7 @@ enviar o build pelo App Store Connect.
 
 ## Estado atual (já pronto no repo)
 
-- [x] **Versão / build:** `CFBundleShortVersionString 2.9.0`, `CFBundleVersion 26`
+- [x] **Versão / build:** `CFBundleShortVersionString 2.9.0`, `CFBundleVersion 27`
       (iOS, watchOS e widget alinhados — ver `app/project.yml`). Lembrete: subir o
       `CFBundleVersion` a cada upload novo ao TestFlight — o número precisa ser
       único **dentro do trem daquela versão curta**, não globalmente.
@@ -33,15 +33,34 @@ enviar o build pelo App Store Connect.
       teclado, foco que entra no modal e volta para quem o abriu (fundo `inert`, sem
       tabular por baixo do overlay), contraste do `--faint` acima do AA **nos dois
       temas** e `dvh` com `vh` de reserva.
-      Suíte **675/675** nos simuladores de iPhone **e** de iPad, `go build`, `go vet` e
-      `go test ./...` limpos.
+      (7) **Espelho ao vivo com 3x mais linhas** (build 27): a janela do tmux passa a
+      ser pedida com o triplo da altura que cabe na tela, teto de 200 linhas
+      (`TerminalGeometry.rowsPedidas`). Só a altura da janela muda o tamanho da captura —
+      pane de agente roda em tela alternada e não tem scrollback, então mexer no
+      `tmuxScrollback` do hub não daria linha nenhuma (medido). Junto vem a trava de
+      auto-scroll (`PortaoDeAutoScroll`): com o conteúdo passando da tela, o poll de
+      500ms jogaria a rolagem de volta ao fim duas vezes por segundo — agora o arrasto
+      solta e a pílula "ao vivo" prende de novo. **Mudança só de app; o hub não muda.**
+      (8) **Seleção de trecho e cópia de link** (build 27): a folha "Selecionar texto…"
+      deixou de ser um `Text` com `.textSelection` — a seleção do SwiftUI perdia a
+      disputa de gesto com o `ScrollView` e com o arrasto-pra-fechar do sheet, e sobrava
+      só o "copiar tudo". Virou `UITextView` (`isSelectable`, rolagem própria,
+      `dataDetectorTypes`), com lista de links no topo, um toque por link. `LinksNoTexto`
+      remonta a URL que a largura do terminal partiu no meio.
+      Suíte **697/697** nos simuladores de iPhone **e** de iPad (675 na abertura da
+      versão; 697 no build 27), `go build`, `go vet` e `go test ./...` limpos.
       ✅ **Hub no ar desde 31/08/2026.** A leva foi commitada (`b32417c`..`956b91d`),
       empurrada para o repositório público e a imagem foi reconstruída no macmini
       (`docker compose up -d --build`, contêiner `ac64a543ce76`). Conferido depois de
       subir: `/health` ok, dashboard servido já com o foco novo e as 29 sessões
       preservadas. Esta é a primeira versão em muito tempo que **não** entra dependendo
       de deploy futuro.
-      ✅ **Archive gerado e enviado por ela em 31/08/2026**, pelo Xcode.
+      ✅ **Archive gerado e enviado por ela em 31/08/2026**, pelo Xcode — esse foi o
+      **build 26**. O **build 27** acrescenta os itens (7) e (8) e ainda **não** foi
+      arquivado; como o 26 já subiu ao ASC, o número precisava mudar.
+      ✅ **Hub segue sendo o mesmo do build 26**: os dois itens do 27 são só de app, e
+      `hub/` não tem commit novo desde o deploy de 31/08 — nada para reconstruir no
+      macmini (`/health` conferido em 01/09).
       📌 Sobre o alvo do relógio: o que falha aqui pela linha de comando é **construir o
       `CutuqueWatch` com destino de iPhone** — nesse caminho o `actool` recusa o
       `AppIcon` ("did not have any applicable content") porque os ícones do catálogo são
@@ -272,7 +291,7 @@ strings -a "$ARCH/Products/Applications/CutuqueApp.app/CutuqueApp" | grep -o -E 
 
 Foi assim que o build 14 (2.2.0) se confirmou com `windows` e **zero** `desktop-win`.
 
-## Novidades desta versão (colar em "O que há de novo" — 2.9.0, build 26)
+## Novidades desta versão (colar em "O que há de novo" — 2.9.0, build 27)
 
 > pt-BR, voltado a quem usa. Escrito para a 2.9.0; trocar inteiro a cada versão.
 
@@ -302,6 +321,14 @@ computador.
 
 • VoiceOver e teclado: abas anunciadas corretamente e navegação por teclado no
   painel do board.
+
+• O espelho do terminal mostra três vezes mais linhas. Como agora passa da tela,
+  ele só te acompanha até o fim enquanto você está no fim: arrastou para reler,
+  ele para — e um botão "ao vivo" devolve para o final quando você quiser.
+
+• Copiar um trecho, não a tela toda. Dentro de "Selecionar texto…" dá para
+  selecionar de verdade, e os links da tela aparecem em cima em uma lista: um
+  toque copia o link, sem caçar no meio do texto.
 ```
 
 ## Notas de revisão (colar em Revisão de apps → Notas)
