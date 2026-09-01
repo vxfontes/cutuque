@@ -67,6 +67,40 @@ final class TerminalGeometryTests: XCTestCase {
         XCTAssertEqual(TerminalGeometry.rows(height: 130, metrics: Self.pad13), 20)
     }
 
+    // MARK: Linhas pedidas ao tmux (janela de contexto)
+
+    /// A janela do tmux é mais alta que a tela de propósito: em tela alternada
+    /// a captura devolve exatamente a janela, então a folga é a única fonte de
+    /// contexto rolável que existe (subir o `tmuxScrollback` do hub não devolve
+    /// linha nenhuma — `history_size=0` com `alternate_on=1`).
+    func testLinhasPedidasEsticamAsQueCabemPeloFator() {
+        let alturaUtil: CGFloat = 600 + TerminalGeometry.verticalTextPadding * 2
+        let cabem = TerminalGeometry.rows(height: alturaUtil, metrics: Self.phone10)
+        XCTAssertEqual(cabem, 50)
+        XCTAssertEqual(TerminalGeometry.rowsPedidas(height: alturaUtil, metrics: Self.phone10), 150)
+    }
+
+    /// O teto existe pro iPad em tela cheia, onde o fator sozinho pediria mais
+    /// de 200 linhas e a conta de banda do poll deixaria de fechar.
+    func testLinhasPedidasParamNoTeto() {
+        // 1300 pt úteis / 16 = 81 linhas que cabem; 81 × 3 = 243, acima do teto.
+        let alturaUtil: CGFloat = 1300 + TerminalGeometry.verticalTextPadding * 2
+        XCTAssertEqual(TerminalGeometry.rows(height: alturaUtil, metrics: Self.pad13), 81)
+        XCTAssertEqual(TerminalGeometry.rowsPedidas(height: alturaUtil, metrics: Self.pad13),
+                       TerminalGeometry.maxRows)
+    }
+
+    /// Barreira: `rows` continua sendo "o que cabe na tela". Se alguém mover a
+    /// esticada pra dentro dele, a régua do viewport passa a mentir e a conta
+    /// de colunas/linhas da view inteira sai errada junto.
+    func testLinhasQueCabemNaoLevamOFator() {
+        let alturaUtil: CGFloat = 600 + TerminalGeometry.verticalTextPadding * 2
+        let cabem = TerminalGeometry.rows(height: alturaUtil, metrics: Self.phone10)
+        let pedidas = TerminalGeometry.rowsPedidas(height: alturaUtil, metrics: Self.phone10)
+        XCTAssertGreaterThan(pedidas, cabem)
+        XCTAssertEqual(pedidas, cabem * TerminalGeometry.fatorDeContexto)
+    }
+
     // MARK: Métricas
 
     /// Sem medição válida não se inventa métrica — `init?` devolve `nil` e a

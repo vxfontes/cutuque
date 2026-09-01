@@ -101,6 +101,46 @@ enum TerminalGeometry {
         return max(minRows, Int(usable / metrics.lineHeight))
     }
 
+    /// Quantas vezes a janela do tmux é mais alta que a tela do aparelho.
+    ///
+    /// [01/09/2026] _"aumente a quantidade de linhas iniciais que vem"_. A
+    /// primeira tentativa foi subir o `tmuxScrollback` do hub de 500 para 2000,
+    /// e ela não entrega LINHA NENHUMA: o pane do agente roda em tela
+    /// alternada (`alternate_on=1`, `history_size=0` — medido em `claude`,
+    /// `codex` e `opencode`), e nesse modo o tmux não acumula histórico. Vale
+    /// para os três agentes, então `capture-pane -S -N` devolve byte a byte a
+    /// mesma coisa para qualquer `N`.
+    ///
+    /// O que sobra de alavanca é esta: em tela alternada a captura devolve
+    /// exatamente A JANELA, e quem define a janela é o app (`model.resize`,
+    /// `resize-window -y`). Pedir uma janela mais alta que a tela faz a TUI
+    /// redesenhar o transcript preenchendo a altura nova — aí a linha a mais
+    /// EXISTE, e a `ScrollView` do espelho rola dentro dela.
+    ///
+    /// O custo é o poll: a tela inteira é recapturada a cada 500 ms enquanto se
+    /// mexe (`PollPacer.piso`), então a janela mais alta é trafegada duas vezes
+    /// por segundo. Medido numa tela real de 69 linhas (`capture-pane -e -p |
+    /// wc -c` = 7530 bytes) dá ~109 bytes por linha com ANSI: as ~50 linhas de
+    /// hoje no iPhone custam ~5,5 KB por captura, e com fator 3 vão a ~16 KB.
+    /// É a mesma conta que manteve o `tmuxScrollback` em 500 — a diferença é
+    /// que lá o byte a mais comprava zero linha e aqui compra três.
+    static let fatorDeContexto = 3
+
+    /// Teto absoluto de linhas pedidas ao tmux, independente do fator.
+    ///
+    /// Sem ele o iPad em tela cheia (~70 linhas) pediria 210, e a conta de
+    /// banda acima deixa de fechar. O piso (`minRows`) protege a outra ponta.
+    static let maxRows = 200
+
+    /// Linhas PEDIDAS ao tmux — o que vai no `resize-window -y`.
+    ///
+    /// Não confundir com `rows(height:metrics:)`, que continua sendo "o que
+    /// cabe na tela". As duas são propositalmente diferentes: a janela é maior
+    /// que o viewport, e é essa diferença que vira contexto rolável.
+    static func rowsPedidas(height: CGFloat, metrics: TextMetrics) -> Int {
+        min(maxRows, rows(height: height, metrics: metrics) * fatorDeContexto)
+    }
+
     /// 10 pt foi calibrado pros 393 pt do iPhone; num painel de detalhe de iPad
     /// isso vira letra miúda demais pra ler de braço estendido.
     static func defaultFontPt(isPad: Bool) -> Double { isPad ? 13 : 10 }

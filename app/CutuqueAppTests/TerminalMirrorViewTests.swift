@@ -41,3 +41,68 @@ final class TerminalMirrorViewTests: XCTestCase {
         XCTAssertFalse(TerminalPaneState.devolveLargura(de: .ativo, para: view.paneState))
     }
 }
+
+/// O portão que decide se o espelho segue o fim sozinho.
+///
+/// [01/09/2026] Entrou junto com a janela três vezes mais alta que a tela
+/// (`TerminalGeometry.fatorDeContexto`). Antes dela a `ScrollView` do espelho
+/// não tinha o que rolar e o pulo pro fim a cada quadro era inofensivo; com a
+/// folga, o mesmo pulo arrancaria a leitura de volta até duas vezes por segundo.
+final class PortaoDeAutoScrollTests: XCTestCase {
+
+    /// Abrir o espelho é querer ver o agora.
+    func testNasceSeguindoOFimESemPilula() {
+        let portao = PortaoDeAutoScroll()
+        XCTAssertTrue(portao.deveSeguirOFim)
+        XCTAssertFalse(portao.mostraVoltarAoVivo)
+    }
+
+    func testArrastoVerticalSoltaEMostraAPilula() {
+        var portao = PortaoDeAutoScroll()
+        portao.arrastou(translation: CGSize(width: 2, height: -60))
+        XCTAssertFalse(portao.deveSeguirOFim)
+        XCTAssertTrue(portao.mostraVoltarAoVivo)
+    }
+
+    /// Gesto horizontal no espelho é seleção de texto, não leitura do passado.
+    /// Soltar o portão ali seria desligar o "ao vivo" por engano — e sem a
+    /// usuária ver o que fez.
+    func testArrastoHorizontalNaoSolta() {
+        var portao = PortaoDeAutoScroll()
+        portao.arrastou(translation: CGSize(width: -80, height: 6))
+        XCTAssertTrue(portao.deveSeguirOFim)
+    }
+
+    /// Toque parado que o `DragGesture` reporte com translação zerada não é
+    /// arrasto: `abs(0) > abs(0)` é falso.
+    func testTranslacaoZeradaNaoSolta() {
+        var portao = PortaoDeAutoScroll()
+        portao.arrastou(translation: .zero)
+        XCTAssertTrue(portao.deveSeguirOFim)
+    }
+
+    /// Diagonal conta pelo eixo dominante — o dedo raramente sobe reto.
+    func testDiagonalPredominantementeVerticalSolta() {
+        var portao = PortaoDeAutoScroll()
+        portao.arrastou(translation: CGSize(width: 30, height: -50))
+        XCTAssertFalse(portao.deveSeguirOFim)
+    }
+
+    func testVoltarAoVivoPrendeDeNovoEEscondeAPilula() {
+        var portao = PortaoDeAutoScroll()
+        portao.arrastou(translation: CGSize(width: 0, height: 120))
+        portao.voltarAoVivo()
+        XCTAssertTrue(portao.deveSeguirOFim)
+        XCTAssertFalse(portao.mostraVoltarAoVivo)
+    }
+
+    /// Sem isso a pílula viraria um botão que não faz nada quando o espelho já
+    /// está no fim — pior que botão nenhum.
+    func testPilulaEOInversoDeSeguirOFim() {
+        var portao = PortaoDeAutoScroll()
+        XCTAssertNotEqual(portao.deveSeguirOFim, portao.mostraVoltarAoVivo)
+        portao.arrastou(translation: CGSize(width: 0, height: -20))
+        XCTAssertNotEqual(portao.deveSeguirOFim, portao.mostraVoltarAoVivo)
+    }
+}
+

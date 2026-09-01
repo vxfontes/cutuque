@@ -261,12 +261,24 @@ struct TerminalMirrorView: View {
     /// tirar (ver `TerminalGeometry`).
     @State private var metrics: TerminalGeometry.TextMetrics?
 
-    /// Colunas e linhas que cabem AGORA, ou `nil` enquanto falta medição.
+    /// A grade PEDIDA ao tmux, ou `nil` enquanto falta medição.
+    ///
+    /// As colunas são as que cabem; as linhas, não. Desde 01/09/2026 a janela
+    /// é `TerminalGeometry.fatorDeContexto` vezes mais alta que a tela, e é
+    /// dessa folga que sai o contexto rolável — ver `rowsPedidas`. Largura não
+    /// ganha fator nenhum: coluna a mais não vira contexto, vira quebra de
+    /// linha no lugar errado.
+    ///
+    /// O `rows` daqui é o que VAI no resize: os únicos consumidores dele são
+    /// as duas chamadas de `model.resize` e o `resizeKey` que as dispara. Por
+    /// isso a esticada mora neste ponto e não em cada chamada — espalhada, uma
+    /// delas ficaria pra trás e a chave passaria a discordar do que foi
+    /// enviado.
     private var grid: (cols: Int, rows: Int)? {
         guard let metrics, metrics.isUsable, viewport.width > 0, viewport.height > 0
         else { return nil }
         return (TerminalGeometry.columns(width: viewport.width, metrics: metrics),
-                TerminalGeometry.rows(height: viewport.height, metrics: metrics))
+                TerminalGeometry.rowsPedidas(height: viewport.height, metrics: metrics))
     }
 
     /// Identidade do `.task` que dispara o resize. O caso sem medição precisa
@@ -294,6 +306,9 @@ struct TerminalMirrorView: View {
     /// `model.screen` republica sem parar, o `.sheet(item:)` acharia que o item
     /// mudou a cada quadro e ficaria reapresentando a folha em laço.
     @State private var folhaDaTela: TextoIdentificavel?
+
+    /// Se o espelho ainda segue o fim sozinho. Ver `PortaoDeAutoScroll`.
+    @State private var portao = PortaoDeAutoScroll()
 
     init(machine: String, target: String, title: String, paneState: TerminalPaneState = .ativo,
          ownsNavigationTitle: Bool = true) {
@@ -476,10 +491,27 @@ struct TerminalMirrorView: View {
                     .padding(.vertical, TerminalGeometry.verticalTextPadding)
                 Color.clear.frame(height: 1).id("bottom")
             }
+            // Arrastar pra ler o que passou solta o auto-scroll. `simultaneous`
+            // e não `gesture`: exclusivo roubaria a rolagem da própria
+            // `ScrollView` e a seleção de texto do conteúdo. O
+            // `minimumDistance` tira o toque de dedo trêmulo — quem só encosta
+            // (ou toca num chevron) continua ao vivo.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 12).onChanged { valor in
+                    portao.arrastou(translation: valor.translation)
+                }
+            )
             .onChange(of: model.screen) { _, _ in
+                // A janela é mais alta que a tela desde 01/09/2026, então este
+                // pulo deixou de ser inofensivo: sem o portão ele arrancaria a
+                // leitura de volta pro fim a cada captura.
+                guard portao.deveSeguirOFim else { return }
                 withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             .task { // primeira rolagem ao abrir
+                // Reabrir o espelho é querer ver o agora: o portão volta a
+                // seguir o fim mesmo que a montagem anterior o tenha soltado.
+                portao.voltarAoVivo()
                 try? await Task.sleep(for: .milliseconds(300))
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
@@ -500,6 +532,29 @@ struct TerminalMirrorView: View {
                 }
                 .padding(.trailing, 10)
             }
+            // A volta pro fim. Só aparece com o portão solto — preso, ela não
+            // teria o que fazer, e um botão que não faz nada é pior que botão
+            // nenhum. Fica embaixo e centralizada pra não disputar espaço com
+            // os chevrons, que moram na borda direita.
+            .overlay(alignment: .bottom) {
+                if portao.mostraVoltarAoVivo {
+                    Button {
+                        portao.voltarAoVivo()
+                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                    } label: {
+                        Label("ao vivo", systemImage: "arrow.down.to.line")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(.thinMaterial, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 10)
+                    .transition(.opacity)
+                    .accessibilityLabel("Voltar ao vivo")
+                }
+            }
+            .animation(.easeOut(duration: 0.15), value: portao.mostraVoltarAoVivo)
         }
     }
 
