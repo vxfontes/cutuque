@@ -470,7 +470,13 @@ struct TerminalMirrorView: View {
         } label: {
             Image(systemName: "doc.on.doc")
         }
-        .disabled(telaColavel.isEmpty)
+        // `model.screen` e não `telaColavel`: o `.disabled` é reavaliado a cada
+        // body, e `telaColavel` roda `Ansi.plain` na tela inteira (6,9 ms na
+        // tela real de 145 linhas) só pra decidir se o menu está apagado. Os
+        // dois botões continuam lendo `telaColavel` — mas dentro da ação, ou
+        // seja, uma vez por toque. O caso que interessa (ainda conectando, tela
+        // vazia) os dois enxergam igual.
+        .disabled(model.screen.isEmpty)
         .accessibilityLabel("Copiar conteúdo da tela")
     }
 
@@ -614,7 +620,33 @@ struct TerminalMirrorView: View {
                 .font(.system(size: fontPt, design: .monospaced))
                 .foregroundStyle(theme.fg.opacity(0.5))
         } else {
-            Text(Ansi.attributed(model.screen, size: fontPt, defaultColor: theme.fg))
+            // UM `Text` POR LINHA, e não um `Text` com a tela inteira.
+            //
+            // A tela inteira num `AttributedString` só é o que fazia o app
+            // congelar: o iOS re-tipografa o bloco todo a cada quadro e o custo
+            // é ~quadrático na altura da janela. Medido na tela real de 145
+            // linhas: bloco único 172 ms, linha a linha 1,9 ms. No app vivo isso
+            // era 350-390 ms de interface parada POR QUADRO — com a janela 3x
+            // da build 27, e o espelho pede até 9 quadros/s numa rajada.
+            // Ver `Ansi.attributedLines` e o card `531eb461b9425a72`.
+            //
+            // `VStack` e não `LazyVStack`: 1,9 ms para as 145 linhas já é nada,
+            // e a pilha preguiçosa estima altura de linha ainda não construída —
+            // o que faria o `scrollTo("bottom")` do auto-scroll pular. Barato o
+            // suficiente para não precisar pagar esse risco.
+            VStack(alignment: .leading, spacing: 0) {
+                let linhas = Ansi.attributedLines(model.screen, size: fontPt, defaultColor: theme.fg)
+                ForEach(Array(linhas.enumerated()), id: \.offset) { _, linha in
+                    // Linha em branco vira um espaço: um `Text` vazio tem altura
+                    // zero, e aí as linhas em branco da tela do terminal (que são
+                    // conteúdo — é o espaçamento do TUI) sumiriam e o desenho
+                    // inteiro subiria.
+                    Text(linha.characters.isEmpty ? AttributedString(" ") : linha)
+                }
+            }
+            // Só pega a linha-espaço acima, que é a única sem fonte própria:
+            // todo trecho que veio do ANSI já traz a sua.
+            .font(.system(size: fontPt, design: .monospaced))
         }
     }
 

@@ -5,9 +5,28 @@ import SwiftUI
 /// Suporta: reset, negrito, cores 16 (normais/bright), 256 e truecolor (24-bit),
 /// fg e bg. Sequências não-SGR (mover cursor, limpar) são descartadas.
 enum Ansi {
-    static func attributed(_ input: String, size: CGFloat, defaultColor: Color) -> AttributedString {
+
+    /// A tela QUEBRADA EM LINHAS, cada uma já com os atributos que valem nela.
+    ///
+    /// É o varredor de verdade — `attributed` e `plain` são construídos em cima
+    /// deste. Existe porque desenhar a tela como um `AttributedString` só custa
+    /// ~quadrático na altura: o iOS re-tipografa o bloco inteiro a cada quadro e,
+    /// por fragmento de linha, percorre a lista de trechos toda. Medido na tela
+    /// real de 145 linhas: bloco único 172 ms, linha a linha 1,9 ms (93x).
+    /// Ver `memory/cutuque/app/App — Travamento do Espelho: a Tipografia
+    /// Quadrática do Text Único.md` (card `531eb461b9425a72`).
+    ///
+    /// O estado de SGR ATRAVESSA a quebra de linha de propósito: uma cor aberta
+    /// numa linha continua valendo na seguinte até um reset. Quebrar a tela em
+    /// pedaços e varrer cada um do zero pintaria errado toda linha que herda cor
+    /// — que no TUI do claude é quase toda linha de bloco.
+    ///
+    /// Devolve a mesma contagem que `components(separatedBy: "\n")`: texto sem
+    /// `\n` dá uma linha, e um `\n` final dá uma linha vazia no fim.
+    static func attributedLines(_ input: String, size: CGFloat, defaultColor: Color) -> [AttributedString] {
         let baseFont = Font.system(size: size, design: .monospaced)
-        var result = AttributedString()
+        var linhas: [AttributedString] = []
+        var atual = AttributedString()
         var fg: Color?
         var bg: Color?
         var bold = false
@@ -19,8 +38,14 @@ enum Ansi {
             run.font = bold ? baseFont.bold() : baseFont
             run.foregroundColor = fg ?? defaultColor
             if let bg { run.backgroundColor = bg }
-            result += run
+            atual += run
             buffer = ""
+        }
+
+        func quebrar() {
+            flush()
+            linhas.append(atual)
+            atual = AttributedString()
         }
 
         let scalars = Array(input.unicodeScalars)
@@ -44,10 +69,30 @@ enum Ansi {
                 }
                 continue
             }
+            if c == "\n" {
+                quebrar()
+                i += 1
+                continue
+            }
             buffer.unicodeScalars.append(c)
             i += 1
         }
-        flush()
+        quebrar()
+        return linhas
+    }
+
+    /// A tela inteira num `AttributedString` só. Continua existindo para quem
+    /// precisa do texto como um bloco (`plain`, e daí a área de transferência);
+    /// **não** é o que o espelho desenha — ver `attributedLines`.
+    ///
+    /// A quebra de linha entra sem atributo nenhum (o `\n` não tem tinta), o que
+    /// é a única diferença observável em relação ao varredor de antes.
+    static func attributed(_ input: String, size: CGFloat, defaultColor: Color) -> AttributedString {
+        var result = AttributedString()
+        for (i, linha) in attributedLines(input, size: size, defaultColor: defaultColor).enumerated() {
+            if i > 0 { result += AttributedString("\n") }
+            result += linha
+        }
         return result
     }
 

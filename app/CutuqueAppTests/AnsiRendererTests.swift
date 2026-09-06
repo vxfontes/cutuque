@@ -41,4 +41,72 @@ final class AnsiRendererTests: XCTestCase {
         let mostrado = String(Ansi.attributed(entrada, size: 12, defaultColor: .primary).characters)
         XCTAssertEqual(Ansi.plain(entrada), mostrado)
     }
+
+    // MARK: attributedLines — a tela quebrada em linhas
+
+    /// O varredor por linhas é o de verdade desde o conserto do travamento; se
+    /// ele contar linha errado, a tela desenha deslocada.
+    func testUmaLinhaPorQuebra() {
+        let casos = ["", "sozinha", "a\nb", "a\nb\n", "\n", "a\n\nb"]
+        for entrada in casos {
+            let esperado = entrada.components(separatedBy: "\n").count
+            let linhas = Ansi.attributedLines(entrada, size: 12, defaultColor: .primary)
+            XCTAssertEqual(linhas.count, esperado, "contagem errada para \(entrada.debugDescription)")
+        }
+    }
+
+    func testTextoDeCadaLinhaEODaEntrada() {
+        let linhas = Ansi.attributedLines("\u{1B}[32mum\u{1B}[0m\ndois  \n", size: 12, defaultColor: .primary)
+        XCTAssertEqual(linhas.map { String($0.characters) }, ["um", "dois  ", ""])
+    }
+
+    /// O motivo de o varredor por linhas existir em vez de um `split` seguido de
+    /// uma varredura por pedaço: no TUI do claude a cor é aberta numa linha e
+    /// vale nas seguintes. Varrer cada linha do zero pintaria de padrão tudo que
+    /// herda cor — quase toda linha de bloco.
+    func testCorAtravessaAQuebraDeLinha() {
+        let vermelho = Color(.sRGB, red: 0.80, green: 0.24, blue: 0.24)
+        let linhas = Ansi.attributedLines("\u{1B}[31mum\ndois\u{1B}[0m\ntres",
+                                          size: 12, defaultColor: .primary)
+        XCTAssertEqual(linhas.count, 3)
+        XCTAssertEqual(linhas[0].runs.first?.foregroundColor, vermelho)
+        XCTAssertEqual(linhas[1].runs.first?.foregroundColor, vermelho, "a cor tem que herdar da linha de cima")
+        XCTAssertEqual(linhas[2].runs.first?.foregroundColor, Color.primary, "o reset da linha 2 tem que valer na 3")
+    }
+
+    func testNegritoTambemAtravessa() {
+        let linhas = Ansi.attributedLines("\u{1B}[1mum\ndois", size: 12, defaultColor: .primary)
+        XCTAssertEqual(linhas[0].runs.first?.font, Font.system(size: 12, design: .monospaced).bold())
+        XCTAssertEqual(linhas[1].runs.first?.font, Font.system(size: 12, design: .monospaced).bold())
+    }
+
+    /// A barreira contra divergência, igual à que já existe entre `plain` e
+    /// `attributed`: a tela desenhada linha a linha tem que ser o MESMO texto do
+    /// bloco inteiro. Sem isto, os dois caminhos passam a mostrar coisas
+    /// diferentes em silêncio.
+    func testLinhasJuntasSaoOMesmoQueOBlocoInteiro() {
+        let entrada = "\u{1B}[1;31merro\u{1B}[0m: \u{1B}[38;5;42mdetalhe\u{1B}[0m\nsegunda \u{1B}[34mlinha\nterceira\n"
+        let porLinha = Ansi.attributedLines(entrada, size: 12, defaultColor: .primary)
+            .map { String($0.characters) }
+            .joined(separator: "\n")
+        XCTAssertEqual(porLinha, Ansi.plain(entrada))
+    }
+
+    /// Linha em branco vem como `AttributedString` VAZIO — a view troca por um
+    /// espaço porque `Text` vazio tem altura zero. Se um dia isto passar a vir
+    /// com um espaço embutido, a troca da view viraria espaço dobrado.
+    func testLinhaEmBrancoVemVazia() {
+        let linhas = Ansi.attributedLines("a\n\nb", size: 12, defaultColor: .primary)
+        XCTAssertTrue(linhas[1].characters.isEmpty)
+    }
+
+    /// Sequência ANSI grudada na quebra não pode comer a linha nem vazar cor
+    /// para o lado errado.
+    func testSgrColadoNaQuebra() {
+        let linhas = Ansi.attributedLines("um\u{1B}[32m\nverde", size: 12, defaultColor: .primary)
+        XCTAssertEqual(linhas.map { String($0.characters) }, ["um", "verde"])
+        XCTAssertEqual(linhas[0].runs.first?.foregroundColor, Color.primary)
+        XCTAssertEqual(linhas[1].runs.first?.foregroundColor,
+                       Color(.sRGB, red: 0.30, green: 0.74, blue: 0.36))
+    }
 }
