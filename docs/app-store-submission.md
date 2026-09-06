@@ -5,10 +5,32 @@ enviar o build pelo App Store Connect.
 
 ## Estado atual (já pronto no repo)
 
-- [x] **Versão / build:** `CFBundleShortVersionString 2.9.0`, `CFBundleVersion 27`
+- [x] **Versão / build:** `CFBundleShortVersionString 2.9.1`, `CFBundleVersion 28`
       (iOS, watchOS e widget alinhados — ver `app/project.yml`). Lembrete: subir o
       `CFBundleVersion` a cada upload novo ao TestFlight — o número precisa ser
       único **dentro do trem daquela versão curta**, não globalmente.
+      **2.9.1 aberta em 2026-09-06**, no `master`: **patch** — um conserto só, e no
+      que ela mais usa. O espelho ao vivo desenhava a tela inteira como **um único
+      `Text`** (~26 KB, ~1.000 trechos SGR): a cada quadro o iOS re-tipografava o bloco
+      inteiro, e esse custo é quase **quadrático na altura da janela**, porque por
+      fragmento de linha o CoreText percorre a lista de trechos toda. Foi o
+      `fatorDeContexto = 3` do build 27 que transformou lentidão em travamento.
+      `Ansi.attributedLines` virou o **único** scanner ANSI (o estado SGR atravessa a
+      quebra de linha) e o `content` passou a desenhar **um `Text` por linha** num
+      `VStack` — não `Lazy`, porque a estimativa de altura faria o `scrollTo("bottom")`
+      pular. Medido no app vivo com `CADisplayLink`, mesma janela de 144 linhas e mesma
+      rajada: pior travada **350–390 → 34–99 ms**, UI congelada **535–654 → 0 ms/s**,
+      tipografia **176 → 8–21 ms/s**. Preço aceito: o `.textSelection` agora seleciona
+      dentro de uma linha, não através de várias. Conferido também no iPad Pro 13" (M5).
+      Suíte **704/704**.
+      ✅ **Hub atualizado em 05/09/2026** (`2cde34e`): `ControlMaster=auto` + `ControlPath`
+      + `ControlPersist=60` nas chamadas curtas do espelho, e **não** em `sshOptsComunsCom`
+      (que alimenta os fluxos longos, onde não há handshake a economizar). Medido em
+      produção, mesma rota e mesmo pane: `GET /tmux/screen` **1,34–1,84 → 0,39–0,55 s**,
+      a perna ssh **~1,16–1,66 → ~0,25–0,37 s**. É mudança **só de hub**: o app não
+      depende dela para subir, mas quem não reconstruir o hub não vê o ganho.
+      ⚠️ **O build 27 nunca foi arquivado** — o que subiu ao ASC foi o **26**. Então esta
+      versão leva junto os itens (7) e (8) da 2.9.0, que ainda não chegaram a ninguém.
       **2.9.0 aberta em 2026-08-31**, no `master`: **minor** — uma leva inteira de
       leitura, sem recurso novo de controle. O pedido que a originou foi "meu iPhone
       consiga visualizar bastante contexto, ler e entender melhor sem precisar pedir
@@ -291,36 +313,16 @@ strings -a "$ARCH/Products/Applications/CutuqueApp.app/CutuqueApp" | grep -o -E 
 
 Foi assim que o build 14 (2.2.0) se confirmou com `windows` e **zero** `desktop-win`.
 
-## Novidades desta versão (colar em "O que há de novo" — 2.9.0, build 27)
+## Novidades desta versão (colar em "O que há de novo" — 2.9.1, build 28)
 
-> pt-BR, voltado a quem usa. Escrito para a 2.9.0; trocar inteiro a cada versão.
+> pt-BR, voltado a quem usa. Escrito para a 2.9.1; trocar inteiro a cada versão.
+> Cobre também os itens do build 27, que nunca foi arquivado — o último build a
+> chegar em alguém foi o 26.
 
 ```
-Esta versão é sobre LER de longe. Até aqui o app servia para disparar, aprovar e
-ser avisada; agora ele serve para entender o que aconteceu sem voltar para o
-computador.
-
-• Muito mais contexto. O histórico de cada sessão passou de 500 para 2000
-  mensagens. Conversas longas aparecem inteiras, sem precisar pedir resumo.
-
-• A tela parou de fugir. O chat só rola sozinho quando você já está no fim.
-  Se subiu para reler, fica onde está e aparece um aviso de mensagens novas.
-
-• Diff de verdade. O painel Diff das máquinas foi reescrito: lista de arquivos
-  com quantas linhas entraram e saíram, numeração dos dois lados, um arquivo por
-  vez, busca dentro do diff e tamanho de fonte ajustável.
-
-• Buscar dentro do arquivo. O visualizador de código mostra "3 de 12", pula de
-  ocorrência em ocorrência, liga numeração de linha e quebra de linha.
-
-• Abas com atalho de teclado no iPad. ⌘⇧] e ⌘⇧[ andam entre abas, ⌘W fecha e
-  ⌘⌥T reabre a última fechada.
-
-• Texto do tamanho que você quiser, sem atropelar o ajuste de acessibilidade do
-  aparelho — e com memória separada para iPhone e para iPad.
-
-• VoiceOver e teclado: abas anunciadas corretamente e navegação por teclado no
-  painel do board.
+• O terminal ao vivo parou de travar. Ele redesenhava a tela inteira a cada
+  atualização; agora redesenha linha por linha. Na prática: o app não congela
+  mais enquanto o agente escreve rápido.
 
 • O espelho do terminal mostra três vezes mais linhas. Como agora passa da tela,
   ele só te acompanha até o fim enquanto você está no fim: arrastou para reler,
@@ -329,6 +331,10 @@ computador.
 • Copiar um trecho, não a tela toda. Dentro de "Selecionar texto…" dá para
   selecionar de verdade, e os links da tela aparecem em cima em uma lista: um
   toque copia o link, sem caçar no meio do texto.
+
+Se você mantém o seu hub atualizado, o terminal ao vivo também ficou bem mais
+rápido nesta leva: as consultas curtas passaram a reaproveitar a conexão SSH em
+vez de abrir uma nova a cada atualização.
 ```
 
 ## Notas de revisão (colar em Revisão de apps → Notas)
