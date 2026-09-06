@@ -4,8 +4,10 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/vxfontes/cutuque/hub/internal/adapter/agent"
 	"github.com/vxfontes/cutuque/hub/internal/session"
@@ -260,16 +262,17 @@ func (t *SSHTarget) SetIdentity(keyPath, knownHosts string, port int) {
 }
 
 // sshOpts são as opções de ssh deste alvo: identidade da máquina (se houver)
-// antes das compartilhadas — a ordem importa, ver agent.IdentityOpts.
+// antes das compartilhadas — a ordem importa, ver agent.IdentityOpts. No fim
+// vêm as de multiplexação, que não conflitam com nenhuma das duas.
 func (t *SSHTarget) sshOpts() []string {
-	return agent.WithIdentity(t.identity, sshBaseOpts())
+	return append(agent.WithIdentity(t.identity, sshBaseOpts()), t.opcoesDeMultiplexacao()...)
 }
 
 // sshOptsDeConsulta são as opções deste alvo para uma LEITURA repetida (a
 // listagem de panes, e agora a sondagem de alcance da aba Máquinas): iguais
 // às normais, com ConnectTimeout curto.
 func (t *SSHTarget) sshOptsDeConsulta() []string {
-	return agent.WithIdentity(t.identity, sshBaseOptsConsulta())
+	return append(agent.WithIdentity(t.identity, sshBaseOptsConsulta()), t.opcoesDeMultiplexacao()...)
 }
 
 // Prober é implementado pelo alvo que sabe confirmar alcance de VERDADE via
@@ -436,6 +439,91 @@ func sshBaseOpts() []string {
 // leitura repetida de fundo — nunca para abrir ou pilotar sessão.
 func sshBaseOptsConsulta() []string {
 	return append(sshOptsComunsCom(connectTimeoutConsulta), "-T")
+}
+
+// --- multiplexação ssh (ControlMaster) ---------------------------------------
+//
+// [05/09/2026] Toda chamada curta do alvo — capturar a tela do espelho a cada
+// poll, listar panes, ler arquivo, mandar tecla — abria uma conexão ssh nova e
+// pagava o handshake inteiro (TCP + troca de chaves + autenticação) antes de
+// rodar um comando que dura milissegundos. Sobre Tailscale isso é a maior
+// parte do tempo de cada poll, e é o que a usuária sente como "demora a
+// responder o que eu digito" no terminal ao vivo. Com ControlMaster=auto +
+// ControlPersist, a PRIMEIRA chamada paga o handshake e as seguintes viajam
+// pela conexão que ficou aberta.
+//
+// Fica SÓ nas chamadas curtas e repetidas (sshOpts/sshOptsDeConsulta).
+// Deliberadamente FORA dos dois fluxos longos — a sessão do claude
+// (sshClaudeArgs) e o terminal livre (ShellCommand): ali a conexão já é uma só
+// e dura a sessão inteira, não há handshake repetido a economizar, e
+// compartilhar o mesmo TCP com os polls só criaria bloqueio de cabeça de fila
+// entre eles.
+//
+// PREÇO CONHECIDO: enquanto um master está quente, o comando que o reutiliza
+// não passa por connect() e portanto NÃO respeita o ConnectTimeout. Se a
+// máquina cair com o master aberto, os polls ficam pendurados até o keepalive
+// derrubar o master (ServerAliveInterval=15 × CountMax=3 = ~45s) — depois
+// disso tudo volta a conectar direto e a falhar no timeout curto de sempre.
+// Máquina que já estava desligada não muda nada: sem socket, o ssh conecta
+// normalmente e o ConnectTimeout vale como antes.
+
+// sshControlPersist é quanto tempo o master fica de pé depois da última
+// sessão. O app faz poll a cada 15s, então 60s cobre com folga a janela em que
+// vale a pena manter a conexão — e uma máquina que ninguém está usando devolve
+// o socket em um minuto em vez de segurar conexão para sempre.
+const sshControlPersist = "60"
+
+var (
+	sshControlDirUmaVez sync.Once
+	sshControlDir       string
+)
+
+// diretorioDeControleSSH cria (uma única vez) a pasta dos sockets de
+// multiplexação e devolve o caminho — ou "" se não der para criar, e aí a
+// multiplexação simplesmente não entra: melhor um handshake por chamada, como
+// era antes, do que um ssh que não sobe.
+//
+// Fica em TempDir e NÃO em ~/.ssh de propósito: no deploy o ~/.ssh do
+// container é montado read-only (docker-compose.yml), um ControlPath lá dentro
+// nunca conseguiria bindar o socket.
+func diretorioDeControleSSH() string {
+	sshControlDirUmaVez.Do(func() {
+		dir := filepath.Join(os.TempDir(), "cutuque-ssh")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return
+		}
+		sshControlDir = dir
+	})
+	return sshControlDir
+}
+
+// opcoesDeMultiplexacao devolve as opções de ControlMaster deste alvo.
+//
+// O nome do socket separa alvo COM identidade de alvo SEM identidade, e não é
+// detalhe: quem cria o master define a política de host key de todas as
+// sessões que o reutilizarem. Um master aberto por uma máquina do hub.env
+// (StrictHostKeyChecking=accept-new) sendo reaproveitado por uma máquina
+// cadastrada (StrictHostKeyChecking=yes) desligaria a checagem estrita em
+// silêncio — exatamente a falha que o comentário de agent.IdentityOpts existe
+// para evitar. Com dois baldes isso não acontece.
+//
+// O %C é o hash de (host local, host remoto, porta, usuário remoto): um socket
+// por destino, e curto o bastante para caber no limite de caminho de socket
+// Unix.
+func (t *SSHTarget) opcoesDeMultiplexacao() []string {
+	dir := diretorioDeControleSSH()
+	if dir == "" {
+		return nil
+	}
+	balde := "aberto"
+	if len(t.identity) > 0 {
+		balde = "identidade"
+	}
+	return []string{
+		"-o", "ControlMaster=auto",
+		"-o", "ControlPath=" + filepath.Join(dir, balde+"-%C"),
+		"-o", "ControlPersist=" + sshControlPersist,
+	}
 }
 
 // sshClaudeArgs monta os args do `ssh` local para rodar o claude remoto. As

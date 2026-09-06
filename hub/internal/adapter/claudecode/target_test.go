@@ -695,3 +695,127 @@ func TestCaminhosDeAcaoMantemConnectTimeoutDeAcao(t *testing.T) {
 		}
 	}
 }
+
+// MARK: multiplexação ssh (ControlMaster)
+
+// valorDaOpcao devolve o valor da primeira ocorrência de uma opção `-o k=v` —
+// a primeira é a que o ssh honra.
+func valorDaOpcao(args []string, chave string) string {
+	for _, a := range args {
+		if v, ok := strings.CutPrefix(a, chave+"="); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+// O motivo do fix: as chamadas curtas e repetidas (captura do espelho, listagem
+// de panes, leitura de arquivo) pagavam um handshake ssh inteiro cada uma.
+func TestChamadasCurtasReusamAConexao(t *testing.T) {
+	tgt := NewSSHTarget("macbook", "vx@100.100.125.103")
+
+	casos := map[string][]string{
+		"comandos do alvo": tgt.sshOpts(),
+		"listagem de pane": tgt.sshOptsDeConsulta(),
+		"captura do tmux":  append(tgt.sshOpts(), "--", tgt.dest, "tmux capture-pane"),
+	}
+	for nome, args := range casos {
+		if valorDaOpcao(args, "ControlMaster") != "auto" {
+			t.Errorf("%s: sem ControlMaster=auto — volta a abrir conexão por chamada: %v", nome, args)
+		}
+		if valorDaOpcao(args, "ControlPersist") != sshControlPersist {
+			t.Errorf("%s: ControlPersist = %q, quero %q — sem ele o master morre junto com a chamada e não sobra nada para reusar",
+				nome, valorDaOpcao(args, "ControlPersist"), sshControlPersist)
+		}
+		if p := valorDaOpcao(args, "ControlPath"); !strings.HasSuffix(p, "-%C") {
+			t.Errorf("%s: ControlPath = %q, quero terminar em -%%C (um socket por destino)", nome, p)
+		}
+	}
+}
+
+// O outro lado: os dois fluxos LONGOS ficam de fora. Ali a conexão já é única e
+// dura a sessão inteira — não há handshake repetido a economizar, e dividir o
+// mesmo TCP com os polls só criaria bloqueio de cabeça de fila.
+func TestFluxosLongosNaoMultiplexam(t *testing.T) {
+	tgt := NewSSHTarget("macbook", "vx@100.100.125.103")
+
+	casos := map[string][]string{
+		"sessão do claude": sshClaudeArgs(tgt.dest, defaultRemoteClaudeCmd, "", ""),
+		"terminal livre":   tgt.ShellCommand(context.Background()).Args[1:],
+	}
+	for nome, args := range casos {
+		if valorDaOpcao(args, "ControlMaster") != "" {
+			t.Errorf("%s: não deveria multiplexar: %v", nome, args)
+		}
+	}
+}
+
+// Quem cria o master define a política de host key de TODAS as sessões que o
+// reusarem. Se uma máquina do hub.env (accept-new) e uma máquina cadastrada
+// (StrictHostKeyChecking=yes) dividissem o mesmo socket, a checagem estrita
+// sumiria em silêncio — a pior forma de falhar, porque tudo continuaria
+// funcionando. Sockets separados é o que impede isso.
+func TestSocketSeparaMaquinaCadastradaDaMaquinaDoEnv(t *testing.T) {
+	doEnv := NewSSHTarget("macmini", "macmini")
+
+	cadastrada := NewSSHTarget("vps", "vx@192.0.2.50")
+	cadastrada.SetIdentity("/data/machines/keys/vps", "/data/machines/known_hosts", 22)
+
+	a := valorDaOpcao(doEnv.sshOpts(), "ControlPath")
+	b := valorDaOpcao(cadastrada.sshOpts(), "ControlPath")
+	if a == "" || b == "" {
+		t.Fatalf("ControlPath vazio: env=%q cadastrada=%q", a, b)
+	}
+	if a == b {
+		t.Errorf("os dois usam o mesmo socket (%q): o accept-new poderia abrir o master que a máquina estrita reusaria", a)
+	}
+}
+
+// A multiplexação entra DEPOIS de tudo; a ordem que importa (identidade antes
+// da base, para o StrictHostKeyChecking=yes vencer o accept-new) fica de pé.
+func TestMultiplexacaoNaoDesarrumaAOrdemDaIdentidade(t *testing.T) {
+	tgt := NewSSHTarget("vps", "vx@192.0.2.50")
+	tgt.SetIdentity("/data/machines/keys/vps", "/data/machines/known_hosts", 22)
+
+	if got := primeiroStrict(tgt.sshOpts()); got != "StrictHostKeyChecking=yes" {
+		t.Errorf("primeiro StrictHostKeyChecking = %q: a máquina cadastrada aceitaria chave nova em silêncio", got)
+	}
+}
+
+// O ConnectTimeout curto da consulta continua na linha. Ele deixa de valer
+// quando há master quente (não há connect() para expirar) — mas máquina que já
+// estava desligada nunca tem master, e aí ele é exatamente o que era antes.
+func TestConsultaMantemTimeoutCurtoComMultiplexacao(t *testing.T) {
+	tgt := NewSSHTarget("windows", "vx@100.100.125.99")
+	args := tgt.tmuxListArgs()
+
+	if valorDaOpcao(args, "ConnectTimeout") != connectTimeoutConsulta {
+		t.Errorf("ConnectTimeout = %q, quero %q: %v", valorDaOpcao(args, "ConnectTimeout"), connectTimeoutConsulta, args)
+	}
+	if valorDaOpcao(args, "ControlMaster") != "auto" {
+		t.Errorf("a listagem perdeu a multiplexação: %v", args)
+	}
+}
+
+// Sem lugar para o socket, a multiplexação não entra e o ssh segue subindo como
+// antes — um handshake por chamada é ruim, um ssh que não sobe é pior.
+func TestSemDiretorioDeSocketNaoMultiplexa(t *testing.T) {
+	tgt := NewSSHTarget("macbook", "vx@100.100.125.103")
+
+	// Inicializa de verdade ANTES de mexer: assim o Once já rodou e o valor
+	// restaurado no Cleanup é o real, mesmo que este seja o primeiro teste da
+	// rodada a tocar no diretório.
+	original := diretorioDeControleSSH()
+	sshControlDir = ""
+	t.Cleanup(func() { sshControlDir = original })
+
+	args := tgt.sshOpts()
+	if valorDaOpcao(args, "ControlMaster") != "" {
+		t.Errorf("multiplexou sem diretório de socket: %v", args)
+	}
+	for _, quero := range []string{"BatchMode=yes", "ServerAliveInterval=15", "-T"} {
+		if !slices.Contains(args, quero) {
+			t.Errorf("o resto das opções sumiu junto: faltou %q em %v", quero, args)
+		}
+	}
+}
