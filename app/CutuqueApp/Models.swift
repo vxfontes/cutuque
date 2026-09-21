@@ -308,16 +308,27 @@ struct HistoryEvent: Decodable, Identifiable, Hashable {
 struct DirEntry: Decodable, Identifiable, Hashable {
     let name: String
     let path: String
+    /// A pasta contém `.git`. **Opcional de propósito**: hub anterior a 20/09/2026
+    /// não emite o campo, e aí o seletor simplesmente não marca ninguém — em vez
+    /// de marcar tudo como "não é repositório", que seria mentira com cara de
+    /// informação.
+    let isRepo: Bool?
     var id: String { path }
     /// Pasta oculta (começa com ".") — escondida por padrão no seletor.
     var isHidden: Bool { name.hasPrefix(".") }
+    /// Só é verdade quando o hub afirmou que é repositório.
+    var ehRepositorio: Bool { isRepo == true }
 }
 
 /// Conteúdo navegável de um diretório no Mac: caminho atual, pai (subir), subpastas.
 struct DirListing: Decodable {
     let path: String
     let parent: String
+    /// A pasta ATUAL é um repositório — a que o "Usar esta" devolve. Opcional
+    /// pelo mesmo motivo de `DirEntry.isRepo`.
+    let isRepo: Bool?
     let dirs: [DirEntry]
+    var ehRepositorio: Bool { isRepo == true }
 }
 
 // MARK: - Aba Máquinas

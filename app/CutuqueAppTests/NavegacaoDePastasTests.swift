@@ -80,3 +80,67 @@ final class NavegacaoDePastasTests: XCTestCase {
         XCTAssertTrue(NavegacaoDePastas.podeSubir(caminhoAtual: "/DATA/vazia", parent: "/DATA"))
     }
 }
+
+/// A marca de repositório Git no seletor de pastas (`is_repo`, 20/09/2026).
+///
+/// Nasceu quando o painel Diff deixou de aceitar caminho digitado e passou a
+/// escolher a pasta pelo `FolderPickerView`: sem marca, achar o repositório é
+/// descer às cegas. O campo é OPCIONAL no app de propósito — o hub que está no
+/// ar antes do deploy desta leva não emite `is_repo`, e "ausente" não pode ser
+/// lido como "não é repositório", que seria mentira com cara de informação.
+final class MarcaDeRepositorioTests: XCTestCase {
+
+    private func decodificar(_ json: String) throws -> DirListing {
+        try JSONDecoder.cutuque.decode(DirListing.self, from: Data(json.utf8))
+    }
+
+    /// Caminho feliz: hub novo marca a pasta atual e cada subpasta.
+    /// `is_repo` chega em snake_case e tem que cair em `isRepo` pela
+    /// estratégia do decoder da casa.
+    func testHubNovoMarcaPastaAtualESubpastas() throws {
+        let listing = try decodificar("""
+        {"path":"/Users/example/code","parent":"/Users/example","is_repo":true,
+         "dirs":[{"name":"cutuque","path":"/Users/example/code/cutuque","is_repo":true},
+                 {"name":"rascunhos","path":"/Users/example/code/rascunhos","is_repo":false}]}
+        """)
+        XCTAssertTrue(listing.ehRepositorio)
+        XCTAssertTrue(listing.dirs[0].ehRepositorio)
+        XCTAssertFalse(listing.dirs[1].ehRepositorio)
+    }
+
+    /// Hub antigo (sem o campo): decodifica sem erro e NÃO marca ninguém.
+    /// É o caso que roda no aparelho dela entre o build do app e o deploy do
+    /// hub no macmini — se isto lançasse, o seletor pararia de listar pasta.
+    func testHubAntigoSemCampoNaoMarcaNemQuebra() throws {
+        let listing = try decodificar("""
+        {"path":"/Users/example","parent":"/Users",
+         "dirs":[{"name":"Desktop","path":"/Users/example/Desktop"}]}
+        """)
+        XCTAssertNil(listing.isRepo)
+        XCTAssertFalse(listing.ehRepositorio)
+        XCTAssertNil(listing.dirs[0].isRepo)
+        XCTAssertFalse(listing.dirs[0].ehRepositorio)
+    }
+
+    /// `ehRepositorio` só é verdade com afirmação explícita — nem `false` nem
+    /// ausente podem virar marca.
+    func testMarcaExigeAfirmacaoExplicita() throws {
+        let listing = try decodificar("""
+        {"path":"/tmp","parent":"/","is_repo":false,
+         "dirs":[{"name":"vazia","path":"/tmp/vazia","is_repo":false}]}
+        """)
+        XCTAssertFalse(listing.ehRepositorio)
+        XCTAssertFalse(listing.dirs[0].ehRepositorio)
+    }
+
+    /// Pasta oculta continua oculta por padrão mesmo sendo repositório: a
+    /// marca nova não pode virar exceção ao toggle de ocultas do seletor.
+    func testPastaOcultaRepositorioContinuaOculta() throws {
+        let listing = try decodificar("""
+        {"path":"/Users/example","parent":"/Users","is_repo":false,
+         "dirs":[{"name":".dotfiles","path":"/Users/example/.dotfiles","is_repo":true}]}
+        """)
+        XCTAssertTrue(listing.dirs[0].isHidden)
+        XCTAssertTrue(listing.dirs[0].ehRepositorio)
+    }
+}

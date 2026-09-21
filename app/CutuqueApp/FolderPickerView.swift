@@ -3,9 +3,16 @@ import SwiftUI
 /// Navegador de pastas do Mac: entra em subpastas (tap), sobe de nível (".."), e
 /// "Usar esta" devolve o caminho atual. Pastas ocultas (`.algo`) ficam escondidas
 /// por padrão, com um toggle para mostrar (para alcançar `.maestri` etc.).
-/// Alimenta a escolha do cwd ao criar uma sessão nova.
+/// Alimenta a escolha do cwd ao criar uma sessão nova e a pasta do painel Diff.
 struct FolderPickerView: View {
     let machine: String
+    /// Onde a navegação começa. Vazio = home da máquina.
+    ///
+    /// [20/09/2026] Existe porque o painel Diff reabre o seletor para trocar de
+    /// repositório: começar no HOME toda vez obrigaria a refazer a descida
+    /// inteira só para ir na pasta vizinha. Ao criar sessão continua vazio, que
+    /// é o comportamento de sempre.
+    var startPath: String = ""
     /// Chamado com o caminho escolhido ("" = home da máquina).
     var onSelect: (String) -> Void
 
@@ -54,6 +61,12 @@ struct FolderPickerView: View {
                                     Text(dir.name)
                                         .foregroundStyle(.primary)
                                         .lineLimit(1)
+                                    if dir.ehRepositorio {
+                                        Image(systemName: "arrow.triangle.branch")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .accessibilityLabel("Repositório Git")
+                                    }
                                     Spacer(minLength: 8)
                                     Image(systemName: "chevron.right")
                                         .font(.caption)
@@ -64,11 +77,21 @@ struct FolderPickerView: View {
                             .buttonStyle(.plain)
                         }
                     } header: {
-                        Text(listing.path)
-                            .font(.footnote)
-                            .textCase(nil)
-                            .lineLimit(1)
-                            .truncationMode(.head)
+                        HStack(spacing: 6) {
+                            Text(listing.path)
+                                .lineLimit(1)
+                                .truncationMode(.head)
+                            // A marca da pasta ATUAL importa porque é ela que o
+                            // "Usar esta" devolve: sem isto, para saber se a
+                            // pasta em que já se entrou é repositório seria
+                            // preciso subir um nível só para ver o marcador.
+                            if listing.ehRepositorio {
+                                Image(systemName: "arrow.triangle.branch")
+                                Text("repositório Git")
+                            }
+                        }
+                        .font(.footnote)
+                        .textCase(nil)
                     }
                 }
             }
@@ -100,7 +123,7 @@ struct FolderPickerView: View {
                     .font(.footnote)
                 }
             }
-            .task { if listing == nil { load("") } } // "" = home da máquina
+            .task { if listing == nil { load(startPath) } } // "" = home da máquina
         }
     }
 

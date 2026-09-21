@@ -38,7 +38,7 @@ struct GitDiffView: View {
     @AppStorage("cutuque.diffQuebraLinha.pad") private var quebraNoTablet = false
 
     @State private var directory: String
-    @State private var draftDirectory: String
+    @State private var mostrandoSeletor = false
     @State private var reloadID = 0
     @State private var snapshot: GitDiff?
     @State private var arquivos: [DiffUnificado.Arquivo] = []
@@ -69,7 +69,6 @@ struct GitDiffView: View {
         let stored = UserDefaults.standard.string(forKey: key) ?? ""
         _savedDirectory = AppStorage(wrappedValue: stored, key)
         _directory = State(initialValue: stored)
-        _draftDirectory = State(initialValue: stored)
     }
 
     private var isPadLayout: Bool { horizontalSizeClass == .regular }
@@ -81,8 +80,8 @@ struct GitDiffView: View {
     private var quebraLinha: Bool { isPadLayout ? quebraNoTablet : quebraNoTelefone }
 
     /// Uma nova ativação do painel muda o id da task e atualiza o retrato.
-    /// Digitar no campo não muda `directory` até confirmar, evitando um
-    /// request a cada caractere.
+    /// `directory` só muda quando o seletor devolve uma pasta, então nunca há
+    /// request de caminho pela metade.
     private var loadID: String {
         "\(isActive)-\(directory)-\(reloadID)"
     }
@@ -115,29 +114,46 @@ struct GitDiffView: View {
             indiceDaOcorrencia = 0
             recalcularBusca()
         }
+        .sheet(isPresented: $mostrandoSeletor) {
+            FolderPickerView(machine: machine, startPath: directory) { escolhida in
+                selecionarPasta(escolhida)
+            }
+        }
     }
 
     // MARK: - Barra da pasta
 
+    /// [20/09/2026] Aqui existia um `TextField` com o caminho absoluto: para ver
+    /// o diff era preciso digitar `/Users/.../projeto` inteiro no teclado do
+    /// iPhone, a cada máquina e a cada troca de repositório. O seletor de pastas
+    /// (`FolderPickerView`) já navegava a máquina desde a criação de sessão —
+    /// só nunca tinha sido ligado neste painel. Agora a barra é o botão que o
+    /// abre, e não há mais caminho digitado à mão.
     private var directoryBar: some View {
         HStack(spacing: 8) {
-            Image(systemName: "folder")
-                .foregroundStyle(.secondary)
-
-            TextField("Pasta do repositório", text: $draftDirectory)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: isPadLayout ? 15 : 14, design: .monospaced))
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.go)
-                .onSubmit(submitDirectory)
-
-            Button(action: submitDirectory) {
-                Image(systemName: "arrow.right.circle.fill")
+            Button {
+                mostrandoSeletor = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "folder")
+                        .foregroundStyle(directory.isEmpty ? Color.secondary : corDeDestaque)
+                    Text(directory.isEmpty ? "Escolher pasta" : directory)
+                        .font(.system(size: isPadLayout ? 15 : 14, design: .monospaced))
+                        .foregroundStyle(directory.isEmpty ? .secondary : .primary)
+                        .lineLimit(1)
+                        // O fim do caminho é o que identifica o repositório; a
+                        // raiz longa é que pode sumir.
+                        .truncationMode(.head)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
             }
-            .buttonStyle(.borderless)
-            .disabled(!isActive || draftDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .accessibilityLabel("Carregar diff")
+            .buttonStyle(.plain)
+            .disabled(!isActive)
+            .accessibilityLabel(directory.isEmpty ? "Escolher pasta do repositório" : "Trocar de pasta (atual: \(directory))")
 
             Button {
                 reloadID += 1
@@ -162,7 +178,7 @@ struct GitDiffView: View {
                 .foregroundStyle(.secondary)
             Text("Escolha uma pasta Git")
                 .font(.headline)
-            Text("Digite o caminho da pasta na máquina para ver as alterações.")
+            Text("Toque na barra acima e navegue até a pasta do repositório na máquina.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -800,8 +816,12 @@ struct GitDiffView: View {
 
     // MARK: - Carga
 
-    private func submitDirectory() {
-        let value = draftDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Guarda a pasta escolhida no seletor e joga fora o retrato da anterior —
+    /// senão o diff antigo fica na tela enquanto o novo carrega, que é o jeito
+    /// mais silencioso de mostrar o repositório errado.
+    private func selecionarPasta(_ escolhida: String) {
+        let value = escolhida.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value != directory else { return }
         directory = value
         savedDirectory = value
         snapshot = nil

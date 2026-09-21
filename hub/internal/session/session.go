@@ -145,14 +145,22 @@ func IsEphemeralCwd(cwd string) bool {
 type DirEntry struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
+	// IsRepo diz se a pasta contém `.git` — o seletor marca essas para a
+	// usuária não descer às cegas atrás do repositório do painel Diff.
+	// Vale também para worktree e submódulo, onde `.git` é arquivo.
+	IsRepo bool `json:"is_repo"`
 }
 
 // DirListing é o conteúdo navegável de um diretório: o caminho atual, o pai
 // (para "subir um nível") e as subpastas. Alimenta o seletor de pastas ao criar
 // uma sessão nova, para a usuária navegar as pastas do Mac em vez de digitar o cwd.
 type DirListing struct {
-	Path   string     `json:"path"`
-	Parent string     `json:"parent"`
+	Path   string `json:"path"`
+	Parent string `json:"parent"`
+	// IsRepo diz se a pasta ATUAL é um repositório — é ela que o botão
+	// "Usar esta" devolve, então é a única marca que responde "escolher aqui
+	// vai dar diff?" sem obrigar a subir um nível para ver o marcador.
+	IsRepo bool       `json:"is_repo"`
 	Dirs   []DirEntry `json:"dirs"`
 }
 

@@ -11,25 +11,37 @@ import (
 
 // dirsScript lista as SUBPASTAS imediatas de um caminho na máquina, para o
 // seletor de pastas do app (criar sessão numa pasta escolhida em vez de digitar
-// o cwd). Recebe o caminho como argv[1] (vazio → home da máquina). Emite JSON:
+// o cwd; escolher o repositório do painel Diff). Recebe o caminho como argv[1]
+// (vazio → home da máquina). Emite JSON:
 //
-//	{"path":"<abs>", "parent":"<abs do pai>", "dirs":[{"name","path"},...]}
+//	{"path":"<abs>", "parent":"<abs do pai>", "is_repo":<bool>,
+//	 "dirs":[{"name","path","is_repo"},...]}
 //
 // Inclui pastas ocultas (as que começam com "."): o app decide esconder/mostrar
 // com um toggle. Ordena case-insensitive. python3 do sistema (macOS e ZimaOS).
 // O caminho chega como argv (nunca interpolado no shell) — sem risco de injeção.
+//
+// [20/09/2026] `is_repo` nasceu com o painel Diff passando a escolher a pasta
+// pelo seletor: sem marca, achar o repositório é descer às cegas. O teste é
+// `os.path.exists` no `.git` — e é exists, não isdir, de propósito: em worktree
+// e em submódulo o `.git` é um ARQUIVO apontando para o repositório de verdade,
+// e esses continuam sendo pastas onde `git diff` responde. Custo: um stat a
+// mais por entrada, no mesmo processo remoto que já roda.
 const dirsScript = `import os,json,sys
 base=sys.argv[1] if len(sys.argv)>1 and sys.argv[1] else os.path.expanduser('~')
 base=os.path.abspath(base)
+def is_repo(d):
+    try: return os.path.exists(os.path.join(d,'.git'))
+    except Exception: return False
 out=[]
 try:
     for name in sorted(os.listdir(base),key=str.lower):
         p=os.path.join(base,name)
         try:
-            if os.path.isdir(p): out.append({'name':name,'path':p})
+            if os.path.isdir(p): out.append({'name':name,'path':p,'is_repo':is_repo(p)})
         except Exception: pass
 except Exception: pass
-print(json.dumps({'path':base,'parent':os.path.dirname(base),'dirs':out}))
+print(json.dumps({'path':base,'parent':os.path.dirname(base),'is_repo':is_repo(base),'dirs':out}))
 `
 
 // runDirs executa o comando (python3 lendo o dirsScript pelo stdin, caminho como
