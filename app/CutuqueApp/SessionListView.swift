@@ -454,6 +454,11 @@ struct SessionListView: View {
     @State private var confirmingClearSubagents = false
     @State private var concludedExpanded = false
     @State private var subagentsExpanded = false
+    // Filtro por máquina da faixa de chips. Em `@AppStorage` porque quem tem
+    // três máquinas quase sempre está olhando uma só — perder a escolha ao
+    // fechar o app faria a faixa custar um toque toda vez que abre.
+    // Vazio = "Todas" (ver `FiltroDeMaquinas.todas`).
+    @AppStorage("sessoes.filtroDeMaquina") private var maquinaFiltrada = FiltroDeMaquinas.todas
     // [13/08/2026] Cor de destaque como valor de AMBIENTE, não `@AppStorage`
     // lido à mão: `Color.accentColor` ignorava o `.tint()` da raiz (o app
     // resolvia a cor de destaque por dois caminhos diferentes, e este arquivo
@@ -466,7 +471,30 @@ struct SessionListView: View {
     // Alvos tmux (compostos socket\tpane) que estão vivos agora. É `paneTarget`,
     // não `id`: o que casa com o `tmuxTarget` do registry é o alvo do pane, sem
     // a máquina que o `id` carrega.
-    private var livePaneIDs: Set<String> { Set(model.liveSessions.map(\.paneTarget)) }
+    private var livePaneIDs: Set<String> { Set(vivasFiltradas.map(\.paneTarget)) }
+
+    // MARK: Filtro por máquina
+    // As seções todas leem daqui, não de `model` — assim o filtro entra em UM
+    // lugar só (e "Ao vivo", "Precisa de você", "Sessões", "Concluídas" e
+    // "Subagentes" não podem discordar entre si sobre o que está filtrado).
+    private var sessoesFiltradas: [Session] { FiltroDeMaquinas.sessoes(model.sessions, maquina: maquinaFiltrada) }
+    private var vivasFiltradas: [LiveEntry] { FiltroDeMaquinas.vivas(model.liveSessions, maquina: maquinaFiltrada) }
+    /// Chips da faixa. Máquinas do hub primeiro (ordem do poll), depois as que
+    /// só aparecem nas sessões.
+    private var maquinasDisponiveis: [String] {
+        FiltroDeMaquinas.maquinas(conhecidas: model.machineNames, sessoes: model.sessions, vivas: model.liveSessions)
+    }
+    /// Contagem SEM filtro (é o que o chip promete: quantas linhas eu vejo se
+    /// tocar nele) — por isso lê `model`, não as listas já filtradas.
+    private var contagemPorMaquina: [String: Int] {
+        FiltroDeMaquinas.contagemPorMaquina(sessoes: model.sessions, vivas: model.liveSessions)
+    }
+    /// Nada para mostrar DENTRO do filtro, mas o hub tem sessões: é o vazio do
+    /// filtro (sai com um toque em "Todas"), não o vazio de app novo.
+    private var vazioPeloFiltro: Bool {
+        !maquinaFiltrada.isEmpty && needsYou.isEmpty && liveNotTracked.isEmpty
+            && activeOthers.isEmpty && concludedOthers.isEmpty && subagents.isEmpty
+    }
     // Panes das sessões que precisam de você (pra não duplicar em "Ao vivo").
     private var needsYouPaneIDs: Set<String> { Set(needsYou.compactMap(\.tmuxTarget)) }
 
@@ -475,20 +503,20 @@ struct SessionListView: View {
     // maestri e afins; ficam arquivados na seção "Subagentes" (recap sob demanda),
     // fora das seções principais, para não inundar a home com títulos repetidos.
     private func isSubagent(_ s: Session) -> Bool { s.isExternal && s.tmuxTarget == nil }
-    private var subagents: [Session] { model.sessions.filter { isSubagent($0) } }
+    private var subagents: [Session] { sessoesFiltradas.filter { isSubagent($0) } }
 
     // "Precisa de você": needs_you acionável (tem pane de tmux OU foi lançada pelo
     // app). Subagentes sem pane não entram aqui (vão pra "Subagentes").
-    private var needsYou: [Session] { model.sessions.filter { $0.state == .needsYou && !isSubagent($0) } }
+    private var needsYou: [Session] { sessoesFiltradas.filter { $0.state == .needsYou && !isSubagent($0) } }
     // "Ao vivo no Mac": panes do tmux vivos que NÃO estão em needs_you (esses já
     // aparecem em "Precisa de você" e abrem o terminal ao tocar).
     private var liveNotTracked: [LiveEntry] {
-        model.liveSessions.filter { !needsYouPaneIDs.contains($0.paneTarget) }
+        vivasFiltradas.filter { !needsYouPaneIDs.contains($0.paneTarget) }
     }
     // "Sessões": registry que não é needs_you, não é subagente e NÃO é uma sessão
     // viva do tmux (dedup: a viva aparece em "Ao vivo"/"Precisa de você").
     private var others: [Session] {
-        model.sessions.filter { s in
+        sessoesFiltradas.filter { s in
             s.state != .needsYou && !isSubagent(s) && !(s.tmuxTarget.map { livePaneIDs.contains($0) } ?? false)
         }
     }
@@ -830,21 +858,31 @@ struct SessionListView: View {
     /// A lista em si, com título e toolbar. Nos dois modos é a mesma coisa; o
     /// que muda é ter ou não uma NavigationStack em volta.
     @ViewBuilder private var listCore: some View {
-        List(selection: selecaoDaLista) {
-            liveServerSections
-            carregandoAoVivoSection
-            needsYouSection
-            activeSection
-            concludedSection
-            subagentsSection
-        }
-        .listStyle(.insetGrouped)
-        .overlay {
-            if !model.didInitialLoad {
-                ProgressView().controlSize(.large)
-            } else if model.sessions.isEmpty && liveNotTracked.isEmpty {
-                emptyState
+        VStack(spacing: 0) {
+            faixaDeMaquinas
+            List(selection: selecaoDaLista) {
+                liveServerSections
+                carregandoAoVivoSection
+                needsYouSection
+                activeSection
+                concludedSection
+                subagentsSection
             }
+            .listStyle(.insetGrouped)
+            .overlay {
+                if !model.didInitialLoad {
+                    ProgressView().controlSize(.large)
+                } else if model.sessions.isEmpty && model.liveSessions.isEmpty {
+                    emptyState
+                } else if vazioPeloFiltro {
+                    vazioDoFiltro
+                }
+            }
+        }
+        // Máquina que saiu do hub não pode deixar a lista vazia para sempre —
+        // e o `@AppStorage` guardaria isso até entre aberturas do app.
+        .onChange(of: maquinasDisponiveis) { _, novas in
+            maquinaFiltrada = FiltroDeMaquinas.escolhaValida(maquinaFiltrada, entre: novas)
         }
         .navigationTitle("Sessões")
         .toolbar {
@@ -1213,6 +1251,70 @@ struct SessionListView: View {
     }
 
     // Empty state convidativo: ícone + texto + atalho para nova tarefa.
+    /// Faixa "Todas · macmini · macbook · windows" acima da lista.
+    ///
+    /// Só aparece com 2+ máquinas: com uma máquina só, um filtro de uma opção
+    /// não filtra nada e ainda come altura de lista no iPhone.
+    @ViewBuilder private var faixaDeMaquinas: some View {
+        let maquinas = maquinasDisponiveis
+        if maquinas.count > 1 {
+            let contagem = contagemPorMaquina
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    chipDeMaquina(rotulo: "Todas",
+                                  valor: FiltroDeMaquinas.todas,
+                                  quantidade: FiltroDeMaquinas.total(contagem))
+                    ForEach(maquinas, id: \.self) { nome in
+                        chipDeMaquina(rotulo: nome, valor: nome, quantidade: contagem[nome] ?? 0)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+            }
+            .background(Color(.systemGroupedBackground))
+        }
+    }
+
+    /// Um chip da faixa. Mesmo desenho do `FilterMenu` do board (cápsula com
+    /// traço, destaque quando ativo) para os dois filtros do app não parecerem
+    /// controles diferentes.
+    private func chipDeMaquina(rotulo: String, valor: String, quantidade: Int) -> some View {
+        let ativo = maquinaFiltrada == valor
+        return Button {
+            maquinaFiltrada = valor
+        } label: {
+            HStack(spacing: 5) {
+                Text(rotulo).font(.caption).fontWeight(.medium).lineLimit(1)
+                Text("\(quantidade)").font(.caption2).fontWeight(.semibold).monospacedDigit()
+            }
+            .padding(.horizontal, 11).padding(.vertical, 6)
+            .foregroundStyle(ativo ? destaque : Color.secondary)
+            .background(Capsule().fill(ativo ? destaque.opacity(0.14) : Color(.secondarySystemBackground)))
+            .overlay(Capsule().stroke(ativo ? destaque.opacity(0.5) : Color(.separator).opacity(0.5), lineWidth: 1))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(valor.isEmpty ? "Todas as máquinas, \(quantidade) sessões"
+                                          : "\(rotulo), \(quantidade) sessões")
+        .accessibilityAddTraits(ativo ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// Vazio DENTRO do filtro — com a saída junto: sem ela a tela vira beco sem
+    /// saída para quem não lembra que deixou uma máquina escolhida.
+    private var vazioDoFiltro: some View {
+        ContentUnavailableView {
+            Label("Nada em \(maquinaFiltrada)", systemImage: "line.3.horizontal.decrease.circle")
+        } description: {
+            Text("Nenhuma sessão nesta máquina agora.")
+        } actions: {
+            Button {
+                maquinaFiltrada = FiltroDeMaquinas.todas
+            } label: {
+                Label("Ver todas as máquinas", systemImage: "square.grid.2x2")
+            }
+        }
+    }
+
     private var emptyState: some View {
         ContentUnavailableView {
             Label("Nenhuma sessão", systemImage: "terminal")

@@ -80,6 +80,12 @@
   .chip:hover { color: var(--text); border-color: var(--faint); }
   .chip.active { background: var(--panel2); color: var(--text); border-color: var(--faint); }
   .chip .dot { display: inline-block; vertical-align: middle; margin-right: 6px; }
+  /* Segunda faixa: filtro por máquina. Mesmo chip do filtro de estado — são
+     dois filtros independentes (E), não dois controles diferentes. O rótulo
+     existe porque "macmini" sozinho, embaixo de "Rodando/Concluída", pareceria
+     mais um estado. */
+  .filters-machine { padding-top: 8px; }
+  .filters-label { align-self: center; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
 
   main { padding: 18px 24px 60px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
@@ -516,6 +522,7 @@
   </header>
   <div id="sessionsView">
     <div class="filters" id="filters"></div>
+    <div class="filters filters-machine" id="filtersMachine" role="radiogroup" aria-label="Filtrar por máquina"></div>
     <main><div class="grid" id="grid"></div></main>
   </div>
   <section id="boardView">
@@ -695,6 +702,15 @@
 
   const sessions = new Map();
   let filter = 'all';
+  // Filtro por máquina, independente do de estado (os dois valem juntos, E).
+  // Guardado porque quem tem três máquinas quase sempre está olhando uma só —
+  // perder a escolha a cada visita faria a faixa custar um clique toda vez.
+  let machineFilter = 'all';
+  try { machineFilter = localStorage.getItem('cutuque-filtro-maquina') || 'all'; } catch (e) { /* modo privado */ }
+  function guardarMachineFilter(v) {
+    machineFilter = v;
+    try { localStorage.setItem('cutuque-filtro-maquina', v); } catch (e) { /* modo privado */ }
+  }
 
   // Cor da tag de ambiente (grupo): paleta sortida, determinística por nome.
   // Evita azul/verde/roxo (reservados p/ tipo claude/codex/opencode).
@@ -825,6 +841,7 @@
   const $grid = document.getElementById('grid');
   const $counts = document.getElementById('counts');
   const $filters = document.getElementById('filters');
+  const $filtersMachine = document.getElementById('filtersMachine');
   const $conn = document.getElementById('conn');
   const $connText = document.getElementById('connText');
   const $tabs = document.getElementById('tabs');
@@ -869,15 +886,40 @@
       `<span class="pill"><span class="dot" style="background:${STATES[s].color}"></span>${STATES[s].label} <b>${by[s]}</b></span>`
     ).join('');
 
-    // filters
-    const chips = [['all', 'Tudo', all.length], ...ORDER.map((s) => [s, STATES[s].label, by[s]])];
+    // Máquinas conhecidas, em ordem estável (o chip não pode pular de lugar a
+    // cada atualização do WS).
+    const machines = [...new Set(all.map((s) => s.machine).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    // Máquina que saiu do hub deixaria a aba vazia para sempre — e o
+    // localStorage guardaria isso entre visitas. Lista vazia não invalida nada:
+    // é o estado normal antes do primeiro /sessions chegar.
+    if (machineFilter !== 'all' && machines.length && !machines.includes(machineFilter)) guardarMachineFilter('all');
+
+    // filters — a contagem de cada faixa é calculada com o OUTRO filtro já
+    // aplicado (facetas): sem isso o chip promete 7 e a tela mostra 2.
+    const porMaquina = machineFilter === 'all' ? all : all.filter((s) => s.machine === machineFilter);
+    const porEstado = filter === 'all' ? all : all.filter((s) => s.state === filter);
+    const byVisivel = Object.fromEntries(ORDER.map((s) => [s, 0]));
+    porMaquina.forEach((s) => { if (byVisivel[s.state] != null) byVisivel[s.state]++; });
+    const chips = [['all', 'Tudo', porMaquina.length], ...ORDER.map((s) => [s, STATES[s].label, byVisivel[s]])];
     $filters.innerHTML = chips.map(([key, lbl, n]) =>
       `<span class="chip ${filter === key ? 'active' : ''}" data-f="${key}" role="radio" tabindex="0" aria-checked="${filter === key}">${key !== 'all' ? `<span class="dot" style="background:${STATES[key].color}"></span>` : ''}${lbl} · ${n}</span>`
     ).join('');
 
+    // Faixa de máquina: só com 2+ máquinas — com uma só, um filtro de uma
+    // opção não filtra nada e ainda ocupa uma faixa da tela.
+    const byMachine = {};
+    porEstado.forEach((s) => { if (s.machine) byMachine[s.machine] = (byMachine[s.machine] || 0) + 1; });
+    $filtersMachine.hidden = machines.length < 2;
+    $filtersMachine.innerHTML = machines.length < 2 ? '' :
+      `<span class="filters-label">máquina</span>` +
+      [['all', 'Todas', porEstado.length], ...machines.map((m) => [m, m, byMachine[m] || 0])].map(([key, lbl, n]) =>
+        `<span class="chip ${machineFilter === key ? 'active' : ''}" data-m="${esc(key)}" role="radio" tabindex="0" aria-checked="${machineFilter === key}">${esc(lbl)} · ${n}</span>`
+      ).join('');
+
     // cards
     let list = sortSessions(all);
     if (filter !== 'all') list = list.filter((s) => s.state === filter);
+    if (machineFilter !== 'all') list = list.filter((s) => s.machine === machineFilter);
     if (!list.length) {
       $grid.innerHTML = `<div class="empty" style="grid-column:1/-1"><div class="big">◌</div>${all.length ? 'Nenhuma sessão neste filtro.' : 'Aguardando sessões do hub…'}</div>`;
       return;
@@ -909,6 +951,10 @@
     const chip = e.target.closest('.chip'); if (!chip) return;
     filter = chip.dataset.f; render();
   });
+  $filtersMachine.addEventListener('click', (e) => {
+    const chip = e.target.closest('.chip'); if (!chip) return;
+    guardarMachineFilter(chip.dataset.m); render();
+  });
   $grid.addEventListener('click', (e) => {
     const card = e.target.closest('.card'); if (!card) return;
     openSessionCard(card.dataset.id);
@@ -929,6 +975,7 @@
     });
   }
   ativarComTeclado($filters, '.chip', (chip) => { filter = chip.dataset.f; render(); });
+  ativarComTeclado($filtersMachine, '.chip', (chip) => { guardarMachineFilter(chip.dataset.m); render(); });
   ativarComTeclado($grid, '.card', (card) => openSessionCard(card.dataset.id));
 
   // ---- Painel de sessão (clique no card) ----
