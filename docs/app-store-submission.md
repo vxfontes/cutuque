@@ -5,10 +5,23 @@ enviar o build pelo App Store Connect.
 
 ## Estado atual (já pronto no repo)
 
-- [x] **Versão / build:** `CFBundleShortVersionString 2.9.1`, `CFBundleVersion 28`
+- [x] **Versão / build:** `CFBundleShortVersionString 2.10.0`, `CFBundleVersion 29`
       (iOS, watchOS e widget alinhados — ver `app/project.yml`). Lembrete: subir o
       `CFBundleVersion` a cada upload novo ao TestFlight — o número precisa ser
       único **dentro do trem daquela versão curta**, não globalmente.
+      **2.10.0 aberta em 2026-09-20**, no `master`: **minor** — duas coisas que a
+      lista e o Diff ganharam. (1) O painel Diff parou de pedir o caminho da pasta
+      digitado: a barra abre o mesmo navegador de pastas que o "nova tarefa" já
+      usava (`FolderPickerView`), e o hub passou a marcar quais pastas são
+      repositório Git (`is_repo` em `GET /machines/{m}/dirs`, `.git` como arquivo
+      OU diretório, para worktree e submódulo contarem). Campo opcional no app:
+      hub antigo simplesmente não marca nada. (2) A tela inicial ganhou filtro por
+      máquina — faixa de chips "Todas · macmini · macbook · windows" com contagem,
+      escolha guardada entre aberturas, aplicada nas cinco seções. A contagem do
+      chip é a de LINHAS visíveis, não a do registry cru: a sessão espelhada em
+      "Ao vivo" contaria duas vezes. Mesmo filtro entrou na aba Sessões do
+      dashboard web (é mudança de hub, exige deploy). Suíte **721/721** no iPhone
+      16 Pro e no iPad Pro 13" (M4).
       **2.9.1 aberta em 2026-09-06**, no `master`: **patch** — um conserto só, e no
       que ela mais usa. O espelho ao vivo desenhava a tela inteira como **um único
       `Text`** (~26 KB, ~1.000 trechos SGR): a cada quadro o iOS re-tipografava o bloco
@@ -313,11 +326,23 @@ strings -a "$ARCH/Products/Applications/CutuqueApp.app/CutuqueApp" | grep -o -E 
 
 Foi assim que o build 14 (2.2.0) se confirmou com `windows` e **zero** `desktop-win`.
 
-## Novidades desta versão (colar em "O que há de novo" — 2.9.1, build 28)
+## Novidades desta versão (colar em "O que há de novo" — 2.10.0, build 29)
 
-> pt-BR, voltado a quem usa. Escrito para a 2.9.1; trocar inteiro a cada versão.
-> Cobre também os itens do build 27, que nunca foi arquivado — o último build a
-> chegar em alguém foi o 26.
+> pt-BR, voltado a quem usa. Escrito para a 2.10.0; trocar inteiro a cada versão.
+
+```
+• A tela inicial filtra por máquina. Uma faixa em cima da lista mostra quantas
+  sessões cada máquina tem — um toque e você vê só o macmini, só o macbook, só
+  o windows. A escolha fica guardada para a próxima vez que abrir.
+
+• O Diff parou de pedir o caminho digitado. Agora você navega até a pasta, como
+  em "nova tarefa", e as pastas que são repositório Git aparecem marcadas.
+```
+
+> As novidades da 2.9.1 (build 28), abaixo, seguem valendo para quem pulou aquele
+> build.
+
+### 2.9.1, build 28
 
 ```
 • O terminal ao vivo parou de travar. Ele redesenhava a tela inteira a cada
