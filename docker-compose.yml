@@ -19,6 +19,15 @@ services:
     # (docs/03) e o único canal de notificação (APNs); ninguém deve precisar
     # entrar por ssh para religar manualmente.
     restart: always
+    # init true: põe o docker-init (tini) como PID 1 e o hub como filho dele.
+    # Sem isso quem é PID 1 é o próprio hub, que nunca chama wait() em filho
+    # órfão — e os masters de multiplexação do ssh (ControlMaster=auto +
+    # ControlPersist, internal/adapter/claudecode/target.go) forkam para o
+    # background, são reparentados para o PID 1 e viram ZUMBI ao expirar.
+    # Medido em 20/09/2026: 2653 processos [ssh] em STAT Z contra 2 vivos no
+    # contêiner, ~1/min de acúmulo; o rebuild zerava e o vazamento recomeçava.
+    # Conferir com: docker exec cutuque-hub sh -c 'ps -eo stat= | grep -c Z'
+    init: true
     env_file:
       - ./config/hub.env
     environment:
